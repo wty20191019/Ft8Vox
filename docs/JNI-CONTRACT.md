@@ -42,21 +42,25 @@
 | Kotlin 方法 | 职责 |
 | --- | --- |
 | `processAudio(samples, length)` | 接收任意长度的 12 kHz PCM；native 内部按 monitor 块大小累积，余数留待下次（支持流式分块喂入） |
-| `decode(): List<String>` | 时隙结束时调用，执行候选查找 + 解码，返回本周期报文**明文**列表 |
+| `decodeDetailed(): List<DecodeResult>` | 时隙结束时调用，执行候选查找 + 解码，返回带指标的报文列表 |
+| `decode(): List<String>` | 便捷方法，等价于 `decodeDetailed().map { it.text }` |
 
-> 说明：阶段 2 先返回报文明文（`List<String>`）。
-> 带指标（SNR、DT、DF、score、协议）的 `DecodeResult` 将在后续阶段（瀑布/列表 UI）补充。
+`DecodeResult` 字段（对应 native `ftx_decode_result_t`）：
 
-`DecodeResult` 规划字段：
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `text` | `String` | 解码出的报文明文 |
+| `snr` | `Int` | 近似 SNR（dB，换算到 2500 Hz 参考带宽） |
+| `dt` | `Float` | 相对时隙起点的**名义**时间偏移（秒），已减去 0.5 s 起始延迟 |
+| `df` | `Int` | 音频频率偏移（Hz） |
+| `score` | `Int` | 候选 Costas 同步得分 |
+| `slotUtcMs` | `Long` | 所属时隙的 UTC 起点（毫秒）；离线解码为 0 |
 
-| 字段 | 说明 |
-| --- | --- |
-| `text` | 解码出的报文明文 |
-| `snr` | 信噪比（dB，近似） |
-| `dt` | 时间偏移（秒） |
-| `df` | 频率偏移（Hz） |
-| `score` | 候选同步得分 |
-| `protocol` | `FT8` / `FT4` |
+> `DecodeResult` 由 native 直接 `NewObject` 构造，构造签名固定在 `jni_common.h`：
+> `(Ljava/lang/String;IFIIJ)V`。**修改 Kotlin 字段顺序/类型时必须同步更新该签名。**
+
+SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音调区间（`freq_offset-2 .. freq_offset+9`）后取其余 bin 的平均功率作为噪声底，
+再按 `10·log10(signal/noise) + 10·log10(binHz/2500)` 换算到 2500 Hz 参考带宽。
 
 说明：呼号哈希表由 **native 侧管理**（去重、老化），不通过 JNI 回调，避免频繁跨语言调用。
 
@@ -80,11 +84,13 @@
 | `release()` | 停止采集/播放并释放 |
 | `startCapture(preferredRate = 48000): Int` | 打开 AAudio 采集流并启动 DSP 线程；返回**设备实际采样率**，负数为错误码 |
 | `stopCapture()` | 停止采集并释放采集侧资源 |
-| `pollDecoded(): List<String>` | 取走并清空自上次调用以来解出的报文（**拉取模型**，无 native 回调） |
+| `pollDecoded(): List<DecodeResult>` | 取走并清空自上次调用以来解出的报文（**拉取模型**，无 native 回调） |
+| `waterfallInfo(): WaterfallInfo?` | waterfall 频率轴：`bins`、`binHz`（FT8/FT4 为 6.25 Hz）、`fMinHz` |
+| `pollWaterfall(maxRows = 64): ByteArray` | 取走新产生的 waterfall 行；每行 `bins` 字节（uint8 幅度，`2·dB+240`），行按时间先后排列 |
 | `startPlayback(preferredRate = 48000): Int` | 以阻塞写模式打开 AAudio 播放流；返回设备实际采样率，负数为错误码 |
 | `stopPlayback()` | 关闭播放流 |
 | `play(pcm: FloatArray): Int` | 播放一个时隙的 12 kHz PCM（内部重采样到输出采样率），返回写入帧数 |
-| `state(): AudioState?` | 状态快照（capturing / slotActive / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间） |
+| `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
 `startCapture` 错误码：`-1` 未初始化、`-2` 无法创建 stream builder、`-3` 打开输入流失败、`-4` DSP 线程创建失败、`-5` 启动输入流失败。
@@ -97,6 +103,8 @@
 - **时隙调度**：按 UTC 对齐（FT8 = 15 s，FT4 = 7.5 s）。仅在时隙起点后 200 ms 内开始采集，累积满 `slot_samples` 后解码；若跨入下个时隙则先解码已采集部分并重新对齐。
 - **线程**：AAudio 回调只写入无锁 SPSC 环形缓冲（不分配、不加锁）；DSP 线程负责重采样与解码。
 - **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。
+- **waterfall 行流**：每处理完一个 monitor block，将 `time_osr` 行（取 `freq_sub=0`）写入 native 环形缓冲；
+  FT8 下约每 80 ms 一行。Kotlin 侧用 `pollWaterfall()` 拉取，若落后太多则自动丢弃被覆盖的旧行。
 
 ## 7. 调试接口
 

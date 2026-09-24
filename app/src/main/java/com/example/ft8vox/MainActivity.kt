@@ -8,39 +8,51 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.ft8vox.engine.AudioEngine
-import com.example.ft8vox.engine.AudioState
-import com.example.ft8vox.engine.Ft8Config
-import com.example.ft8vox.engine.Ft8Engine
+import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.ui.ReceiverStatus
+import com.example.ft8vox.ui.SessionViewModel
+import com.example.ft8vox.ui.WaterfallView
 import com.example.ft8vox.ui.theme.Ft8VoxTheme
-import kotlinx.coroutines.delay
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: SessionViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,154 +60,197 @@ class MainActivity : ComponentActivity() {
         setContent {
             Ft8VoxTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    ReceiverScreen(modifier = Modifier.padding(innerPadding))
+                    ReceiverScreen(
+                        viewModel = viewModel,
+                        modifier = Modifier.padding(innerPadding),
+                    )
                 }
             }
         }
     }
 
-    override fun onDestroy() {
-        // 后台不留驻：离开界面即释放音频引擎
-        AudioEngine.release()
-        super.onDestroy()
+    override fun onStop() {
+        // 后台不留驻采音（Android 14 起后台麦克风需前台服务）
+        viewModel.stop()
+        super.onStop()
     }
 }
 
 @Composable
-private fun ReceiverScreen(modifier: Modifier = Modifier) {
+private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
-    var protocol by remember { mutableStateOf(Protocol.FT8) }
-    var running by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("就绪") }
-    var messages by remember { mutableStateOf<List<String>>(emptyList()) }
-    var audioState by remember { mutableStateOf<AudioState?>(null) }
+    val status by viewModel.status.collectAsState()
+    val messages by viewModel.messages.collectAsState()
+    val waterfall by viewModel.waterfall.collectAsState()
+
     var permissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
+                PackageManager.PERMISSION_GRANTED,
         )
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
-        if (!granted) status = "缺少 RECORD_AUDIO 权限"
+        if (granted) viewModel.start()
     }
 
-    // 运行期间轮询解码结果与音频状态（拉取模型，无 native 回调）
-    LaunchedEffect(running) {
-        while (running) {
-            val newMessages = AudioEngine.pollDecoded()
-            if (newMessages.isNotEmpty()) {
-                messages = (newMessages.map { it.text } + messages).take(50)
-            }
-            audioState = AudioEngine.state()
-            delay(200)
-        }
-    }
-
-    fun startReceiving() {
-        if (!permissionGranted) {
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            return
-        }
-        try {
-            AudioEngine.initialize(Ft8Config(protocol = protocol))
-        } catch (e: Exception) {
-            status = "初始化失败: ${e.message}"
-            return
-        }
-        val rate = AudioEngine.startCapture(48000)
-        if (rate > 0) {
-            running = true
-            status = "接收中（设备采样率 $rate Hz）"
+    fun onStartStopClicked() {
+        if (status.running) {
+            viewModel.stop()
+        } else if (permissionGranted) {
+            viewModel.start()
         } else {
-            status = "采集启动失败（错误码 $rate）"
-            AudioEngine.release()
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    fun stopReceiving() {
-        AudioEngine.stopCapture()
-        AudioEngine.release()
-        running = false
-        audioState = null
-        status = "已停止"
-    }
-
-    fun transmitTest() {
-        try {
-            if (!running) AudioEngine.initialize(Ft8Config(protocol = protocol))
-            val pcm = Ft8Engine.encode("CQ F4FSY JN25", 1000f, protocol, 12000)
-            val rate = AudioEngine.startPlayback(48000)
-            if (rate <= 0) {
-                status = "播放启动失败（错误码 $rate）"
-                return
-            }
-            val written = AudioEngine.play(pcm)
-            status = "已发射测试 CQ（$written 帧 @ $rate Hz）"
-        } catch (e: Exception) {
-            status = "发射失败: ${e.message}"
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
         Text("Ft8Vox", style = MaterialTheme.typography.headlineSmall)
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             for (p in Protocol.entries) {
                 FilterChip(
-                    selected = protocol == p,
-                    enabled = !running,
-                    onClick = { protocol = p },
+                    selected = status.protocol == p,
+                    enabled = !status.running,
+                    onClick = { viewModel.selectProtocol(p) },
                     label = { Text(p.name) },
                 )
             }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { if (running) stopReceiving() else startReceiving() }) {
-                Text(if (running) "停止接收" else "开始接收")
-            }
-            Button(onClick = { transmitTest() }) {
-                Text("发射测试")
-            }
-        }
-
-        Text("状态：$status", style = MaterialTheme.typography.bodyMedium)
-
-        audioState?.let { s ->
             Text(
-                "时隙 ${s.slotMs} ms｜下一个时隙 ${s.msToNextSlot} ms｜" +
-                    "进度 ${(s.slotProgress * 100).toInt()}%｜丢帧 ${s.droppedSamples}｜已解码 ${s.slotsDecoded} 个时隙",
+                "选中 ${status.selectedFreqHz} Hz",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
 
-        HorizontalDivider()
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = { onStartStopClicked() }) {
+                Text(if (status.running) "停止接收" else "开始接收")
+            }
+            Button(onClick = { viewModel.transmitTest() }) {
+                Text("发射测试")
+            }
+            TextButton(onClick = { viewModel.clearMessages() }) {
+                Text("清空列表")
+            }
+        }
+
+        StatusBar(status)
+
+        // 瀑布
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .background(Color.Black),
+        ) {
+            WaterfallView(
+                frame = waterfall,
+                selectedFreqHz = status.selectedFreqHz,
+                onSelectFrequency = { viewModel.selectFrequency(it) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        FrequencyAxis(waterfall?.fMinHz, waterfall?.maxHz)
+
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
 
         Text("解码结果（${messages.size}）", style = MaterialTheme.typography.titleSmall)
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            if (messages.isEmpty()) {
-                Text("（暂无）", style = MaterialTheme.typography.bodySmall)
-            }
-            for (message in messages) {
-                Text(message, style = MaterialTheme.typography.bodyMedium)
+            items(messages) { message ->
+                DecodeRow(message = message, onClick = { viewModel.selectFrequency(message.df) })
             }
         }
     }
+}
+
+@Composable
+private fun StatusBar(status: ReceiverStatus) {
+    val parity = if (status.slotParity == 0) "偶数周期" else "奇数周期"
+    Column {
+        Text("状态：${status.status}", style = MaterialTheme.typography.bodySmall)
+        if (status.running) {
+            Text(
+                String.format(
+                    Locale.US,
+                    "时隙 %d ms｜%s｜下一时隙 %.1f s｜已解码时隙 %d｜丢帧 %d",
+                    status.slotMs,
+                    parity,
+                    status.msToNextSlot / 1000.0,
+                    status.slotsDecoded,
+                    status.droppedSamples,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LinearProgressIndicator(
+                progress = { status.slotProgress },
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        val a = fMinHz ?: 0f
+        val b = maxHz ?: 0f
+        val mid = (a + b) / 2f
+        for (v in listOf(a, mid, b)) {
+            Text(
+                "${v.toInt()} Hz",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DecodeRow(message: DecodeResult, onClick: () -> Unit) {
+    val time = if (message.slotUtcMs > 0) {
+        val secs = message.slotUtcMs / 1000
+        String.format(
+            Locale.US,
+            "%02d:%02d:%02d",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60,
+        )
+    } else {
+        "--:--:--"
+    }
+    Text(
+        String.format(
+            Locale.US,
+            "%s  %+3d dB  DT %+.1f  DF %4d  %s",
+            time,
+            message.snr,
+            message.dt,
+            message.df,
+            message.text,
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 3.dp),
+    )
 }
