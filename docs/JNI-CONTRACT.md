@@ -37,9 +37,12 @@
 | Kotlin 方法 | 职责 |
 | --- | --- |
 | `processAudio(samples, length)` | 接收一块 12 kHz PCM，内部调用 `monitor_process` 累积 waterfall |
-| `decode(): List<DecodeResult>` | 时隙结束时调用，执行候选查找 + 解码，返回本周期结果 |
+| `decode(): List<String>` | 时隙结束时调用，执行候选查找 + 解码，返回本周期报文**明文**列表 |
 
-`DecodeResult` 字段：
+> 说明：阶段 2 先返回报文明文（`List<String>`）。
+> 带指标（SNR、DT、DF、score、协议）的 `DecodeResult` 将在后续阶段（瀑布/列表 UI）补充。
+
+`DecodeResult` 规划字段：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -84,6 +87,6 @@
 
 ## 9. 待定
 
-- 大块 PCM 用 `FloatArray` 还是 Direct `ByteBuffer`（阶段 2 定稿）。
+- ~~大块 PCM 用 `FloatArray` 还是 Direct `ByteBuffer`~~ → **已定稿：`FloatArray`**（阶段 2 采用，`GetFloatArrayElements` 读取，块间无拷贝）。若后续实测发现拷贝开销明显，再评估 Direct `ByteBuffer`。
 - 重采样算法（native 自写 vs 轻量库）。
 - 是否提供 native → Kotlin 的增量解码回调（当前不需要）。

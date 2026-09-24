@@ -1,11 +1,28 @@
 package com.example.ft8vox.engine
 
+/** 协议类型。ordinal 会传给 native，务必保持顺序（0=FT8, 1=FT4）。 */
+enum class Protocol { FT8, FT4 }
+
+/** 解码器配置，对应 native 的 monitor_config_t。 */
+data class Ft8Config(
+    val protocol: Protocol = Protocol.FT8,
+    /** 分析采样率，FT8/FT4 标准为 12000 Hz。 */
+    val sampleRate: Int = 12000,
+    /** 分析频率下限（Hz）。 */
+    val fMin: Float = 200f,
+    /** 分析频率上限（Hz）。 */
+    val fMax: Float = 3000f,
+    /** 时间过采样率。 */
+    val timeOsr: Int = 2,
+    /** 频率过采样率。 */
+    val freqOsr: Int = 2,
+)
+
 /**
  * FT8 / FT4 引擎的 Kotlin 入口。
  *
  * 负责加载 native 库 libft8.so，并向上层暴露解码、编码等接口。
- * 当前仅有占位接口 [test]，用于验证 JNI 加载链路；
- * 真正的接口见 docs/JNI-CONTRACT.md。
+ * 接口契约见 docs/JNI-CONTRACT.md。
  *
  * 注意：类名与包名决定 native 函数符号（Java_<包>_<类>_<方法>），
  * 重命名此类或包时必须同步修改 app/src/main/cpp/jni_bridge.c。
@@ -15,6 +32,66 @@ object Ft8Engine {
     init {
         System.loadLibrary("ft8")
     }
+
+    /** native 引擎句柄（指向 native ft8_engine_t），0 表示未初始化。 */
+    private var handle: Long = 0L
+
+    /**
+     * 初始化解码引擎。重复调用会先释放旧引擎。
+     * @throws IllegalStateException 当 native 初始化失败时抛出。
+     */
+    fun initialize(config: Ft8Config = Ft8Config()) {
+        release()
+        handle = nativeInit(
+            config.protocol.ordinal,
+            config.sampleRate,
+            config.fMin,
+            config.fMax,
+            config.timeOsr,
+            config.freqOsr,
+        )
+        check(handle != 0L) { "Failed to initialize Ft8Engine (native init returned 0)" }
+    }
+
+    /** 清空当前时隙的 waterfall，准备下一个周期。 */
+    fun reset() {
+        if (handle != 0L) nativeReset(handle)
+    }
+
+    /**
+     * 喂入一块 12 kHz 单声道 PCM（float，[-1,1]）。
+     * 内部会按 monitor 的块大小累积到 waterfall。
+     */
+    fun processAudio(samples: FloatArray, length: Int = samples.size) {
+        if (handle != 0L) nativeProcess(handle, samples, length)
+    }
+
+    /** 对当前累积的 waterfall 解码，返回报文明文列表。 */
+    fun decode(): List<String> =
+        if (handle != 0L) nativeDecode(handle).toList() else emptyList()
+
+    /** 释放 native 资源。可重复调用。 */
+    fun release() {
+        if (handle != 0L) {
+            nativeRelease(handle)
+            handle = 0L
+        }
+    }
+
+    // ---- native 接口 ----
+    private external fun nativeInit(
+        protocol: Int,
+        sampleRate: Int,
+        fMin: Float,
+        fMax: Float,
+        timeOsr: Int,
+        freqOsr: Int,
+    ): Long
+
+    private external fun nativeReset(handle: Long)
+    private external fun nativeProcess(handle: Long, samples: FloatArray, length: Int)
+    private external fun nativeDecode(handle: Long): Array<String>
+    private external fun nativeRelease(handle: Long)
 
     /** 占位接口：返回 native 侧的握手字符串。 */
     external fun test(): String
