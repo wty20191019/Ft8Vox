@@ -23,6 +23,7 @@
 | 项 | 结论 |
 | --- | --- |
 | 项目定位 | **开源发布**（需许可证合规、文档、多语言、CI） |
+| 开源许可证 | **GPL-3.0**（内嵌 ft8_lib 为 MIT、kissfft 为 BSD-3-Clause，均与 GPL-3.0 兼容） |
 | 协议范围 | **FT8 + FT4** |
 | 音频 API | **AAudio**（minSdk 26） |
 | 电台控制 | **不做 CAT**；发射依赖电台 VOX 或手动 PTT |
@@ -56,7 +57,7 @@
 | D7 | 日志 | MVP 含 ADIF | 引入 Room 与 ADIF 读写 |
 | D8 | 调试 | 模拟器为主 | 必须补 `x86_64` ABI，并提供“文件注入 / WAV 导出”调试通道 |
 | D9 | 接入方式 | 声学耦合 + USB 声卡 | 音频路由需可切换；USB 相关只能真机验证 |
-| D10 | 定位 | 开源发布 | 许可证、NOTICE、README、多语言、CI 与发布流程 |
+| D10 | 定位 | 开源发布，GPL-3.0 | 许可证、NOTICE、README、多语言、CI 与发布流程 |
 
 ---
 
@@ -250,7 +251,7 @@ com/example/ft8vox/
 任务：
 - 文档：`README`（中/英）、构建与使用说明、`docs/`（本 ROADMAP、接口契约）。
 - 多语言：中/英起步，字符串外置。
-- 许可证合规：保留 ft8_lib 的 LICENSE 与归属；核对自身许可证（建议 MIT）；生成 `NOTICE`。
+- 许可证合规：保留 ft8_lib 的 LICENSE 与归属；项目自身采用 **GPL-3.0**；生成 `NOTICE`。
 - R8/混淆：JNI 类与方法 keep（`keepRules/rules.keep`），否则 release 崩溃。
 - 发布：签名配置、版本号、GitHub Release / tag；CI 产出 APK。
 - 免责声明与合规提示（发射相关）。

@@ -1,0 +1,58 @@
+Ft8Vox
+Copyright (C) 2026 Ft8Vox contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+--------------------------------------------------------------------------
+第三方组件归属（Third-Party Notices）
+
+本产品包含以下第三方开源软件：
+
+1) ft8_lib
+   位置：app/src/main/cpp/ft8_lib/
+   许可证：MIT License
+   Copyright (c) 2018 Kārlis Goba
+   许可证全文见：app/src/main/cpp/ft8_lib/LICENSE
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+2) kissfft
+   位置：app/src/main/cpp/ft8_lib/fft/
+   许可证：BSD-3-Clause
+   Copyright (c) 2003-2010, Mark Borgerding. All rights reserved.
+   许可证标识（SPDX）：BSD-3-Clause
+
+   该项目以 BSD-3-Clause 许可证发布，保留其版权声明与许可证条款。
+
+--------------------------------------------------------------------------
+参考项目（Reference）
+
+FT8CN (https://github.com/N0BOY/FT8CN)，作者 BG7YOZ / N0BOY，MIT License。
+Ft8Vox 在功能设计与交互上参考了该项目，但未直接复制其源代码。
