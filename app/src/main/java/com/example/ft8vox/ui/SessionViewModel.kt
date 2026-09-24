@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 /** 接收会话的非瀑布状态（供状态栏/控制区使用）。 */
 data class ReceiverStatus(
     val running: Boolean = false,
+    /** 是否正处于某个时隙的采集窗口内（false 表示正在等待时隙对齐）。 */
+    val inSlot: Boolean = false,
     val status: String = "就绪",
     val protocol: Protocol = Protocol.FT8,
     val inputRate: Int = 0,
@@ -157,6 +159,7 @@ class SessionViewModel : ViewModel() {
                     AudioEngine.state()?.let { s ->
                         _status.update {
                             it.copy(
+                                inSlot = s.inSlot,
                                 inputRate = s.inputRate,
                                 slotMs = s.slotMs.toInt(),
                                 msToNextSlot = s.msToNextSlot,

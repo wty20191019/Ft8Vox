@@ -156,6 +156,7 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
             WaterfallView(
                 frame = waterfall,
                 selectedFreqHz = status.selectedFreqHz,
+                slotParity = status.slotParity,
                 onSelectFrequency = { viewModel.selectFrequency(it) },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -171,7 +172,11 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             items(messages) { message ->
-                DecodeRow(message = message, onClick = { viewModel.selectFrequency(message.df) })
+                DecodeRow(
+                    message = message,
+                    slotMs = status.slotMs.toLong(),
+                    onClick = { viewModel.selectFrequency(message.df) },
+                )
             }
         }
     }
@@ -180,8 +185,9 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
 @Composable
 private fun StatusBar(status: ReceiverStatus) {
     val parity = if (status.slotParity == 0) "偶数周期" else "奇数周期"
+    val alignHint = if (status.running && !status.inSlot) "（等待时隙对齐…）" else ""
     Column {
-        Text("状态：${status.status}", style = MaterialTheme.typography.bodySmall)
+        Text("状态：${status.status}$alignHint", style = MaterialTheme.typography.bodySmall)
         if (status.running) {
             Text(
                 String.format(
@@ -223,7 +229,7 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
 }
 
 @Composable
-private fun DecodeRow(message: DecodeResult, onClick: () -> Unit) {
+private fun DecodeRow(message: DecodeResult, slotMs: Long, onClick: () -> Unit) {
     val time = if (message.slotUtcMs > 0) {
         val secs = message.slotUtcMs / 1000
         String.format(
@@ -235,6 +241,13 @@ private fun DecodeRow(message: DecodeResult, onClick: () -> Unit) {
         )
     } else {
         "--:--:--"
+    }
+    // 偶/奇周期背景分色（按该条报文所属时隙判定）
+    val tint = if (message.slotUtcMs > 0 && slotMs > 0) {
+        val even = ((message.slotUtcMs / slotMs) % 2L) == 0L
+        if (even) Color(0x142962FF) else Color(0x14FF6D00)
+    } else {
+        Color.Transparent
     }
     Text(
         String.format(
@@ -250,7 +263,8 @@ private fun DecodeRow(message: DecodeResult, onClick: () -> Unit) {
         fontFamily = FontFamily.Monospace,
         modifier = Modifier
             .fillMaxWidth()
+            .background(tint)
             .clickable(onClick = onClick)
-            .padding(vertical = 3.dp),
+            .padding(vertical = 3.dp, horizontal = 4.dp),
     )
 }

@@ -7,11 +7,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 
 /** 瀑布可见行数（约 300 * 0.08 s ≈ 24 s 的滚动窗口）。 */
 const val WF_ROWS = 300
@@ -73,11 +75,14 @@ object WaterfallColors {
 
 /**
  * 瀑布视图：把 [frame] 画到 Canvas 上，点击可按 X 轴选频。
+ *
+ * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
  */
 @Composable
 fun WaterfallView(
     frame: WaterfallFrame?,
     selectedFreqHz: Int,
+    slotParity: Int,
     onSelectFrequency: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -109,6 +114,12 @@ fun WaterfallView(
                 dstSize = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1)),
             )
         }
+
+        // 偶/奇周期色条（顶部）
+        drawRect(
+            color = if (slotParity == 0) Color(0xFF2962FF) else Color(0xFFFF6D00),
+            size = Size(size.width, 4.dp.toPx()),
+        )
 
         // 选中频率竖线
         if (f != null && f.bins > 0 && size.width > 0f) {
