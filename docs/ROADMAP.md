@@ -253,17 +253,48 @@ com/example/ft8vox/
 > - 模拟器实测：确认对话框、按时隙发射（`最近发射「CQ F4FSY JN25」`）、无回复时重试计数、紧急停止后回到空闲，均正常。
 > 待办：ADIF 落库（阶段 7）、真机与 WSJT-X/FT8CN 完成一次真实通联、标准序列之外的变体（如 `TU;`、DXpedition）暂不支持。
 
-### 阶段 7：ADIF 日志与配置持久化
+### 阶段 7：多页 UI、解码参数、日志与网格（原「ADIF 日志与配置持久化」扩展）
 
-**目标**：通联可持久化、可查询、可导出。
+**目标**：通联可持久化、可查询、可导出；解码参数可调；具备 JTDX 风格的操作能力与 GridTracker 风格的网格视图。
+
+> 详细 UI 规格见 **`docs/UI-DESIGN.md`**（阶段 7 UI 设计 v1.0）。
 
 任务：
-- DataStore：呼号、网格、协议、音频路由、目标频段等。
-- Room：通联记录实体/DAO；新增/编辑/删除/查询。
-- ADIF 导入导出（含字段映射与常见字段校验）。
-- 日志页 UI 与手动新增/补录。
+- **多页导航**：底部 4 Tab —— 操作 / 日志 / 网格 / 设置；切页不打断接收与 QSO。
+- **解码参数可设置**：三档预设（快/标准/深）+ 高级参数（分析频段、时间/频率过采样、最低同步分、LDPC 迭代次数、最大候选数、最大解码条数）；
+  `monitor_config_t` 类参数重建引擎生效，解码类参数热生效。
+- **JTDX 风格 QSO 能力**：Hold Tx Freq、Call 1st 自动应答、过滤与排除（CQ only / 排除已通联 / 呼号前缀）、
+  颜色高亮（发给我的 / 新网格 / 新前缀 / 已通联 / 当前对手）、逐条手动发送（应答、报告、R 报告、RR73、73、自由文本）。
+- **DataStore**：呼号、网格、协议、音频路由、解码参数、发射策略等。
+- **Room**：通联记录实体/DAO；新增/编辑/删除/查询；QSO 完成自动落库。
+- **ADIF 导入导出**：字段映射与容错解析，走系统文件选择器（SAF）。
+- **日志页**：筛选（呼号/日期/波段/模式）、手动补录、统计仪表盘（总数/唯一呼号/网格/确认数/波段分布/近 30 天）。
+- **网格页**：离线 Canvas 自绘 Maidenhead 网格图，按 未通联/已通联/已确认 着色，支持缩放平移与点击查看该网格通联。
 
-验收：完成通联自动落库；导出 ADIF 可被常见日志软件导入。
+验收：完成通联自动落库；导出 ADIF 可被常见日志软件导入；解码参数改动可回读且生效；
+过滤与 Call 1st 行为符合预期；已通联网格在网格页正确点亮。
+
+> 进展：
+> - **2026-09-24 UI 设计定稿**（`docs/UI-DESIGN.md`），拆为 7a 数据底座 / 7b 解码参数 / 7c 操作页强化 / 7d 网格页与仪表盘 / 7e 收尾。
+> - **2026-09-24 7a 数据底座完成**：
+>   - 依赖：DataStore Preferences `1.2.1`、Room `2.8.5`（KSP `2.2.10-2.0.2`，与 Kotlin 版本严格配对）、`material-icons-core`（图标只用内置 core 集）。
+>   - **构建注意（重要）**：AGP 9 使用**内置 Kotlin 编译**，KSP 仍通过 `kotlin.sourceSets` 注册生成目录会被拒，需在 `gradle.properties` 设 `android.disallowKotlinSourceSets=false`（AGP 有「实验性」警告，属预期）。
+>   - 新增数据层：`data/settings/`（`AppSettings` + `SettingsRepository`，DataStore 为设置唯一事实来源）、
+>     `data/log/`（`QsoEntity`/`QsoDao`/`AppDatabase`/`QsoRepository`）、`data/adif/`（`AdifCodec` 字节级解析 + `AdifMapper`）、
+>     `data/BandPlan.kt`、`data/QsoTime.kt`、`grid/Maidenhead.kt`。
+>   - 新增 UI：`MainShell`（底部 4 Tab）、`OperateScreen`（原单页拆出 + 波段选择 + 瀑布高度档位）、
+>     `LogScreen`（统计卡 + 筛选 + 列表 + 补录/编辑 + ADIF 导入导出）、`GridScreen`（7a 先做统计列表，地图留 7d）、
+>     `SettingsScreen`（台站 / 日志与 ADIF / 关于）；`AppContainer` + `Ft8VoxApplication` 做手工依赖注入。
+>   - 呼号/网格/波段**下沉到设置页**并 DataStore 持久化；QSO 完成自动写入 Room；操作页「最近通联」改读 Room。
+>   - 即时生效：`start()` 会用设置里的 `fMin/fMax/timeOsr/freqOsr` 初始化引擎（7b 的设置界面待补）。
+>   - **ADIF 细节**：长度按 **UTF-8 字节数**（ADIF 3.x 规定）解析/生成；导入判重口径为「呼号 + 完成时间 + 波段 + 模式」；
+>     导出用 `CreateDocument("application/octet-stream")`——用 `text/plain` 会被 DocumentsUI 强制追加 `.txt`，把 `.adi` 变成 `.adi.txt`。
+>   - **已知取舍**：打开 SAF 文件选择器会让 Activity 进入后台，`onStop` 会停止接收（阶段 9 上前台服务后消除）。
+>   - **验证**：`assembleDebug` 通过；JVM 单测 62 项全过（新增 ADIF/Maidenhead/QsoTime/BandPlan/日志筛选统计）；
+>     instrumented 20 项全过（新增 6 项 Room 仓库集成测试：增删改查、导入去重、导出往返、已通联索引）；
+>     模拟器实测：四 Tab 切换不打断接收（切页时「已解码时隙」持续增长）、设置持久化（杀进程重启后呼号/网格仍在）、
+>     导入同一 ADIF 两次为「新增 2 / 跳过 2」、导出文件名与内容正确。
+> - 本阶段**明确不做**：Hound/Fox（DXpedition）、在线地图瓦片、精确 DXCC 实体表、云日志上传。
 
 ### 阶段 8：开源就绪与首个 MVP 发布
 
