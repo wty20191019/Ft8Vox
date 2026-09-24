@@ -107,7 +107,7 @@ private fun Preferences.toAppSettings(): AppSettings {
             maxDecoded = this[Keys.decodeMaxDecoded] ?: defaults.decode.maxDecoded,
             fMinHz = this[Keys.decodeFMin] ?: defaults.decode.fMinHz,
             fMaxHz = this[Keys.decodeFMax] ?: defaults.decode.fMaxHz,
-        ),
+        ).clamped(),
     )
 }
 

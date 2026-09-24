@@ -10,6 +10,7 @@ import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.SettingsRepository
 import com.example.ft8vox.engine.AudioEngine
+import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
@@ -136,6 +137,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
 
+    /** 最近一次下发给 native 的解码参数，避免设置流每次发射都重复下发。 */
+    private var lastDecodeParams = DecodeParams()
+
     init {
         viewModelScope.launch {
             settingsRepo.settings.collect { s ->
@@ -172,6 +176,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
+        applyDecodeParams(s)
+    }
+
+    /** 运行中把「热生效」的解码参数下发给 native（频率范围/OSR 需重启，见 [start]）。 */
+    private fun applyDecodeParams(s: AppSettings) {
+        val p = s.decodeParams
+        if (p == lastDecodeParams) return
+        lastDecodeParams = p
+        if (_status.value.running) AudioEngine.setDecodeParams(p)
     }
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
@@ -272,6 +285,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     timeOsr = decode.timeOsr,
                     freqOsr = decode.freqOsr,
                 ),
+                decodeParams = latestSettings.decodeParams,
             )
         } catch (e: Exception) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }

@@ -26,7 +26,8 @@
 #define GFSK_CONST_K   5.336446f   ///< == pi * sqrt(2 / log(2))
 
 // 一次性返回的最大解码条数（Kotlin 侧 nativeDecode 的结果数组上限）
-#define K_MAX_DECODED_MESSAGES 50
+// 需 ≥ DecodeSettings.MAX_DECODED_RANGE 的上界，否则「深」预设会被静默截断。
+#define K_MAX_DECODED_MESSAGES 128
 
 // =============================================================================
 // 离线解码引擎
@@ -61,6 +62,24 @@ JNIEXPORT void JNICALL
 Java_com_example_ft8vox_engine_Ft8Engine_nativeRelease(JNIEnv* env, jobject thiz, jlong handle)
 {
     ftx_session_free((ftx_session_t*)(intptr_t)handle);
+}
+
+// 热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限）。
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_Ft8Engine_nativeSetDecodeParams(
+    JNIEnv* env, jobject thiz, jlong handle,
+    jint min_score, jint max_candidates, jint ldpc_iterations, jint max_decoded)
+{
+    ftx_session_t* session = (ftx_session_t*)(intptr_t)handle;
+    if (session == NULL)
+        return;
+    ftx_decode_params_t p = {
+        .min_score = min_score,
+        .max_candidates = max_candidates,
+        .ldpc_iterations = ldpc_iterations,
+        .max_decoded = max_decoded,
+    };
+    ftx_session_set_decode_params(session, &p);
 }
 
 // 喂入 12 kHz 单声道 PCM（float，[-1,1]）；内部按 monitor 块大小累积。

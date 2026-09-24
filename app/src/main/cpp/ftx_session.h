@@ -22,12 +22,30 @@ typedef struct
     int score;                         ///< Costas 同步得分
 } ftx_decode_result_t;
 
+/// 可调解码参数（**热生效**：每次 ftx_session_decode 读取，无需重建会话）。
+///
+/// 与 monitor 配置（f_min/f_max/time_osr/freq_osr）不同，这些参数只影响解码搜索与
+/// LDPC 迭代，不改变 STFT 结构，因此可在接收过程中随时调整。
+typedef struct
+{
+    int min_score;       ///< Costas 同步最低得分，越高候选越少越快
+    int max_candidates;  ///< 单时隙候选上限
+    int ldpc_iterations; ///< LDPC 最大迭代次数，越高越慢但弱信号更有机会
+    int max_decoded;     ///< 单时隙最多解出的报文条数
+} ftx_decode_params_t;
+
+/// 默认解码参数（与 ft8_lib 官方示例 decode_ft8.c 一致）。
+ftx_decode_params_t ftx_decode_params_default(void);
+
 /// 解码会话：封装 monitor（STFT/瀑布）、分块缓冲、waterfall 行流与呼号哈希表，
 /// 供离线整段解码与实时流式解码共用。
 ///
 /// 注意：呼号哈希表当前为进程级全局（ftx_message_decode 的回调没有上下文参数），
 /// 因此同一进程内不应并发使用多个会话。
 typedef struct ftx_session ftx_session_t;
+
+/// 设置解码参数；各字段会被钳制到安全范围（防止越界导致栈溢出或死循环）。
+void ftx_session_set_decode_params(ftx_session_t* session, const ftx_decode_params_t* params);
 
 /// 创建会话并按 cfg 初始化 monitor。失败返回 NULL。
 ftx_session_t* ftx_session_create(const monitor_config_t* cfg);

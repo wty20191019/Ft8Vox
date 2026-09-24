@@ -31,11 +31,13 @@
 
 | Kotlin 方法 | 职责 | 线程 |
 | --- | --- | --- |
-| `initialize(config: Ft8Config)` | 创建并初始化 monitor/waterfall（协议、采样率、频率范围、过采样率） | 初始化线程 |
+| `initialize(config: Ft8Config, decodeParams: DecodeParams = DecodeParams())` | 创建并初始化 monitor/waterfall（协议、采样率、频率范围、过采样率），并下发解码参数 | 初始化线程 |
+| `setDecodeParams(params: DecodeParams)` | 更新**热生效**的解码参数（见 4.1），无需重建引擎 | 任意（内部无锁读写单字） |
 | `reset()` | 清空当前时隙的 waterfall 与分块缓冲，准备下一周期 | 解码线程 |
 | `release()` | 释放 native 资源 | 与 initialize 同线程 |
 
 `Ft8Config` 字段（对应 `monitor_config_t`）：`protocol`、`sampleRate`、`fMin`、`fMax`、`timeOsr`、`freqOsr`。
+**改动 `Ft8Config` 需重建引擎**；`DecodeParams` 则可在运行中调整。
 
 ## 4. 解码接口
 
@@ -64,6 +66,20 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 
 说明：呼号哈希表由 **native 侧管理**（去重、老化），不通过 JNI 回调，避免频繁跨语言调用。
 
+### 4.1 可调解码参数（`DecodeParams` ↔ `ftx_decode_params_t`）
+
+| 字段 | 默认 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| `minScore` | 10 | 4..40 | Costas 同步最低得分，越高候选越少越快 |
+| `maxCandidates` | 140 | 20..500 | 单时隙候选上限 |
+| `ldpcIterations` | 25 | 5..60 | LDPC 最大迭代次数，越高越慢、弱信号解码率越高 |
+| `maxDecoded` | 50 | 5..100 | 单时隙最多解出的报文条数 |
+
+- 这些参数**只影响搜索与 LDPC 迭代，不改变 STFT 结构**，因此可在接收过程中热更新（`setDecodeParams`）。
+- native 侧 `sanitize_decode_params()` 会再次钳制；候选/结果数组按上限（512 / 128）静态分配，调参不会改变内存占用。
+- 与 `monitor_config_t`（`fMin`/`fMax`/`timeOsr`/`freqOsr`）不同：后者改动需重建引擎（重启接收）。
+- 设置页的预设（快 / 标准 / 深）即这三组值的组合；手动改任一项会标记为「自定义」。
+
 ## 5. 编码接口
 
 | Kotlin 方法 | 职责 |
@@ -80,7 +96,8 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 
 | Kotlin 方法 | 职责 |
 | --- | --- |
-| `initialize(config: Ft8Config)` | 创建实时引擎（内部建 monitor 会话）；重复调用先释放 |
+| `initialize(config: Ft8Config, decodeParams: DecodeParams = DecodeParams())` | 创建实时引擎（内部建 monitor 会话并下发解码参数）；重复调用先释放 |
+| `setDecodeParams(params: DecodeParams)` | 运行中热更新解码参数（见 4.1） |
 | `release()` | 停止采集/播放并释放 |
 | `startCapture(preferredRate = 48000): Int` | 打开 AAudio 采集流并启动 DSP 线程；返回**设备实际采样率**，负数为错误码 |
 | `stopCapture()` | 停止采集并释放采集侧资源 |

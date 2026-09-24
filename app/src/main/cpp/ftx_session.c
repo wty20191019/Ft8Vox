@@ -9,12 +9,20 @@
 #include <ft8/constants.h>
 
 // -----------------------------------------------------------------------------
-// 解码参数（与 ft8_lib 官方示例 demo/decode_ft8.c 保持一致）
+// 解码参数
+//
+// 默认值与 ft8_lib 官方示例 demo/decode_ft8.c 保持一致；运行期可经
+// ftx_session_set_decode_params() 调整。数组按「上限」静态分配，实际使用的
+// 条数由 ftx_decode_params_t 控制，因此调参不会改变内存占用或引起分配失败。
 // -----------------------------------------------------------------------------
-#define K_MIN_SCORE            10
-#define K_MAX_CANDIDATES       140
-#define K_LDPC_ITERATIONS      25
-#define K_MAX_DECODED_MESSAGES 50
+#define K_DEFAULT_MIN_SCORE      10
+#define K_DEFAULT_MAX_CANDIDATES 140
+#define K_DEFAULT_LDPC_ITERATIONS 25
+#define K_DEFAULT_MAX_DECODED    50
+
+/// 候选/解码结果数组的静态上限，必须 ≥ 允许设置的最大值（见 Kotlin 侧 RANGE）。
+#define K_MAX_CANDIDATES_LIMIT 512
+#define K_MAX_DECODED_LIMIT    128
 
 // waterfall 行流环形缓冲行数（约 600 * 0.08 s ≈ 48 s 的滚动窗口）
 #define K_WF_RING_ROWS 600
@@ -140,7 +148,49 @@ struct ftx_session
     int64_t wf_total;     ///< 累计产生的行数
     int64_t wf_read;      ///< 已读走的行数
     int wf_last_block;    ///< 已发射的最后 block 索引（跨 reset 用 -1 复位）
+
+    ftx_decode_params_t decode; ///< 热生效的解码参数（每次 decode 读取）
 };
+
+static int clamp_int(int v, int lo, int hi)
+{
+    if (v < lo)
+        return lo;
+    if (v > hi)
+        return hi;
+    return v;
+}
+
+ftx_decode_params_t ftx_decode_params_default(void)
+{
+    ftx_decode_params_t p = {
+        .min_score = K_DEFAULT_MIN_SCORE,
+        .max_candidates = K_DEFAULT_MAX_CANDIDATES,
+        .ldpc_iterations = K_DEFAULT_LDPC_ITERATIONS,
+        .max_decoded = K_DEFAULT_MAX_DECODED,
+    };
+    return p;
+}
+
+/// 与 Kotlin `DecodeSettings` 的 RANGE 对应；越界值在此钳制，native 侧始终安全。
+static ftx_decode_params_t sanitize_decode_params(const ftx_decode_params_t* in)
+{
+    ftx_decode_params_t p = ftx_decode_params_default();
+    if (in == NULL)
+        return p;
+    p.min_score = clamp_int(in->min_score, 4, 40);
+    p.max_candidates = clamp_int(in->max_candidates, 20, K_MAX_CANDIDATES_LIMIT);
+    p.ldpc_iterations = clamp_int(in->ldpc_iterations, 5, 60);
+    p.max_decoded = clamp_int(in->max_decoded, 5, K_MAX_DECODED_LIMIT);
+    return p;
+}
+
+void ftx_session_set_decode_params(ftx_session_t* session, const ftx_decode_params_t* params)
+{
+    if (session == NULL)
+        return;
+    session->decode = sanitize_decode_params(params);
+}
 
 /// 把最新一次 monitor_process 产生的 block 转成 time_osr 行写入环形缓冲。
 static void session_emit_waterfall(ftx_session_t* s)
@@ -194,6 +244,7 @@ ftx_session_t* ftx_session_create(const monitor_config_t* cfg)
     }
 
     hashtable_init();
+    s->decode = ftx_decode_params_default();
     return s;
 }
 
@@ -370,15 +421,21 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
 
     const ftx_waterfall_t* wf = &session->mon.wf;
 
-    // 按 Costas 同步得分定位候选
-    ftx_candidate_t candidates[K_MAX_CANDIDATES];
-    int num_candidates = ftx_find_candidates(wf, K_MAX_CANDIDATES, candidates, K_MIN_SCORE);
+    const ftx_decode_params_t p = session->decode;
+
+    // 按 Costas 同步得分定位候选（候选数与最低得分可调）
+    ftx_candidate_t candidates[K_MAX_CANDIDATES_LIMIT];
+    int num_candidates = ftx_find_candidates(wf, p.max_candidates, candidates, p.min_score);
 
     // 本时隙已解码消息的哈希表，用于去重
-    ftx_message_t decoded[K_MAX_DECODED_MESSAGES];
-    ftx_message_t* decoded_hashtable[K_MAX_DECODED_MESSAGES];
-    for (int i = 0; i < K_MAX_DECODED_MESSAGES; ++i)
+    ftx_message_t decoded[K_MAX_DECODED_LIMIT];
+    ftx_message_t* decoded_hashtable[K_MAX_DECODED_LIMIT];
+    const int hash_size = p.max_decoded;
+    for (int i = 0; i < hash_size; ++i)
         decoded_hashtable[i] = NULL;
+
+    // 输出同时受调用方缓冲（max_results）与设置（max_decoded）限制
+    const int out_cap = (p.max_decoded < max_results) ? p.max_decoded : max_results;
 
     int num_decoded = 0;
     for (int idx = 0; idx < num_candidates; ++idx)
@@ -387,11 +444,11 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
 
         ftx_message_t message;
         ftx_decode_status_t status;
-        if (!ftx_decode_candidate(wf, cand, K_LDPC_ITERATIONS, &message, &status))
+        if (!ftx_decode_candidate(wf, cand, p.ldpc_iterations, &message, &status))
             continue;
 
         // 去重
-        int idx_hash = message.hash % K_MAX_DECODED_MESSAGES;
+        int idx_hash = message.hash % hash_size;
         bool found_empty = false;
         bool found_duplicate = false;
         do
@@ -408,7 +465,7 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
             }
             else
             {
-                idx_hash = (idx_hash + 1) % K_MAX_DECODED_MESSAGES;
+                idx_hash = (idx_hash + 1) % hash_size;
             }
         } while (!found_empty && !found_duplicate);
 
@@ -423,7 +480,7 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
         if (ftx_message_decode(&message, &hash_if, text, &offsets) != FTX_MESSAGE_RC_OK)
             continue;
 
-        if (num_decoded >= max_results)
+        if (num_decoded >= out_cap)
             continue;
 
         ftx_decode_result_t* out = &results[num_decoded];

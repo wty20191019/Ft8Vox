@@ -1,6 +1,7 @@
 package com.example.ft8vox.data.settings
 
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.Protocol
 
 /** Call 1st 自动应答策略。 */
@@ -24,11 +25,12 @@ enum class WaterfallHeight(val label: String, val heightDp: Int) {
     TALL("高", 260),
 }
 
-/** 解码预设档位。 */
+/** 解码预设档位。[CUSTOM] 表示用户手动改过高级参数，不再是任何预设。 */
 enum class DecodePreset(val label: String) {
     FAST("快"),
     STANDARD("标准"),
     DEEP("深"),
+    CUSTOM("自定义"),
 }
 
 /**
@@ -47,7 +49,7 @@ data class DecodeSettings(
     val fMinHz: Int = 200,
     val fMaxHz: Int = 3000,
 ) {
-    /** 把预设应用到当前高级参数（频率范围不随预设变化）。 */
+    /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {
         DecodePreset.FAST -> copy(
             timeOsr = 1, freqOsr = 1, minScore = 12,
@@ -61,7 +63,25 @@ data class DecodeSettings(
             timeOsr = 4, freqOsr = 4, minScore = 8,
             ldpcIterations = 50, maxCandidates = 250, maxDecoded = 80,
         )
+        DecodePreset.CUSTOM -> this
     }
+
+    /**
+     * 把各字段钳制到允许范围。
+     *
+     * 用于两处：从 DataStore 读出的旧数据、以及用户在设置页手动输入的值，
+     * 避免越界值传到 native。
+     */
+    fun clamped(): DecodeSettings = copy(
+        timeOsr = timeOsr.coerceIn(TIME_OSR_RANGE),
+        freqOsr = freqOsr.coerceIn(FREQ_OSR_RANGE),
+        minScore = minScore.coerceIn(MIN_SCORE_RANGE),
+        ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
+        maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
+        maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
+        fMinHz = fMinHz.coerceIn(F_MIN_RANGE),
+        fMaxHz = fMaxHz.coerceIn(F_MAX_RANGE),
+    ).let { if (it.fMaxHz < it.fMinHz + 100) it.copy(fMaxHz = it.fMinHz + 100) else it }
 
     companion object {
         /** 各字段的允许范围，供设置页做钳制与提示。 */
@@ -120,4 +140,13 @@ data class AppSettings(
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
+
+    /** 可热更新的解码参数（映射到 native `DecodeParams`）。 */
+    val decodeParams: DecodeParams
+        get() = DecodeParams.of(
+            minScore = decode.minScore,
+            maxCandidates = decode.maxCandidates,
+            ldpcIterations = decode.ldpcIterations,
+            maxDecoded = decode.maxDecoded,
+        )
 }

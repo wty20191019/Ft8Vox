@@ -318,6 +318,17 @@ com/example/ft8vox/
 >   - **验证**：JVM 单测 107 项全过（新增投影/网格索引/实时台站 21 项）；模拟器实测地图渲染、点击选取与详情面板、
 >     粒度切换、图例与当前接收列表。
 >   - **已知限制**：模拟器无信号，「实时 N 台」恒为 0，实时点绘制与命中交由单测覆盖，真机回归放 7e。
+> - **2026-09-25 7b 解码参数可设置完成**：
+>   - native：`ftx_session` 新增 `ftx_decode_params_t`（`min_score`/`max_candidates`/`ldpc_iterations`/`max_decoded`）与
+>     `ftx_session_set_decode_params()`；原先写死的宏改为运行期可配，**热生效**（每次 `ftx_session_decode` 读取，不重建会话）。
+>     候选/结果数组按上限（512 / 128）静态分配，越界值在 native `sanitize_decode_params()` 再钳制。
+>   - JNI：离线 `Ft8Engine.nativeSetDecodeParams` 与实时 `AudioEngine.nativeSetDecodeParams`；实时结果队列上限 64→128，解码批 16→128。
+>   - Kotlin：新增 `engine/DecodeParams`（含范围与 `of()`/`clamped()`）；`Ft8Engine`/`AudioEngine.initialize(config, decodeParams)` + `setDecodeParams()`；
+>     `AppSettings.decodeParams` 映射；`SessionViewModel.applyDecodeParams()` 在设置变化时热下发；`DecodeSettings.clamped()` 与新增 `DecodePreset.CUSTOM`。
+>   - 设置页新增「解码」区块：快/标准/深预设 + 8 项「−/值/+」高级参数（时间/频率 OSR、最低得分、LDPC 迭代、候选上限、单时隙上限、频率上下限）。
+>   - **验证**：JVM 单测 118 项全过（新增 `DecodeSettingsTest`/`DecodeParamsTest` 共 11 项）；
+>     instrumented 24 项全过（新增 `DecodeParamsInstrumentedTest` 4 项：快/深预设解码、运行中热更新后仍解码、`maxDecoded` 生效）；
+>     模拟器实测：预设切换正确写入各项、手动改参数切到「自定义」、接收中热更新参数不崩溃（进程存活、状态仍「接收中」）。
 > - 本阶段**明确不做**：Hound/Fox（DXpedition）、在线地图瓦片、精确 DXCC 实体表、云日志上传。
 
 ### 阶段 8：开源就绪与首个 MVP 发布

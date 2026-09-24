@@ -33,6 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.settings.CallFirstMode
+import com.example.ft8vox.data.settings.DecodePreset
+import com.example.ft8vox.data.settings.DecodeSettings
 
 /** 设置页：台站信息、日志与 ADIF、关于。 */
 @Composable
@@ -163,6 +165,69 @@ fun SettingsScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
+        // ---- 解码 ----
+        Text("解码", style = MaterialTheme.typography.titleSmall)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (p in listOf(DecodePreset.FAST, DecodePreset.STANDARD, DecodePreset.DEEP)) {
+                FilterChip(
+                    selected = app.decodePreset == p,
+                    onClick = {
+                        settings.update { s ->
+                            s.copy(decode = s.decode.applyPreset(p), decodePreset = p)
+                        }
+                    },
+                    label = { Text(p.label) },
+                )
+            }
+            if (app.decodePreset == DecodePreset.CUSTOM) {
+                FilterChip(
+                    selected = true,
+                    onClick = {},
+                    label = { Text(DecodePreset.CUSTOM.label) },
+                )
+            }
+        }
+        Text(
+            "「快」省电、候选更少；「深」更慢但弱信号解码率更高。时间/频率 OSR 与频率范围需重启接收生效，其余参数即时生效。",
+            style = MaterialTheme.typography.labelSmall,
+        )
+
+        StepperRow("时间 OSR", app.decode.timeOsr, DecodeSettings.TIME_OSR_RANGE) { v ->
+            settings.updateDecode { it.copy(timeOsr = v) }
+        }
+        StepperRow("频率 OSR", app.decode.freqOsr, DecodeSettings.FREQ_OSR_RANGE) { v ->
+            settings.updateDecode { it.copy(freqOsr = v) }
+        }
+        StepperRow("最低得分", app.decode.minScore, DecodeSettings.MIN_SCORE_RANGE) { v ->
+            settings.updateDecode { it.copy(minScore = v) }
+        }
+        StepperRow("LDPC 迭代", app.decode.ldpcIterations, DecodeSettings.LDPC_RANGE, step = 5) { v ->
+            settings.updateDecode { it.copy(ldpcIterations = v) }
+        }
+        StepperRow(
+            "候选上限",
+            app.decode.maxCandidates,
+            DecodeSettings.MAX_CANDIDATES_RANGE,
+            step = 20,
+        ) { v -> settings.updateDecode { it.copy(maxCandidates = v) } }
+        StepperRow(
+            "单时隙上限",
+            app.decode.maxDecoded,
+            DecodeSettings.MAX_DECODED_RANGE,
+            step = 5,
+        ) { v -> settings.updateDecode { it.copy(maxDecoded = v) } }
+        StepperRow("频率下限 Hz", app.decode.fMinHz, DecodeSettings.F_MIN_RANGE, step = 50) { v ->
+            settings.updateDecode { it.copy(fMinHz = v) }
+        }
+        StepperRow("频率上限 Hz", app.decode.fMaxHz, DecodeSettings.F_MAX_RANGE, step = 50) { v ->
+            settings.updateDecode { it.copy(fMaxHz = v) }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
         // ---- 日志与 ADIF ----
         Text("日志与 ADIF", style = MaterialTheme.typography.titleSmall)
         Text(
@@ -208,6 +273,40 @@ fun SettingsScreen(
                 TextButton(onClick = { confirmClear = false }) { Text("取消") }
             },
         )
+    }
+}
+
+/** 设置页的「−/值/+」步进行。 */
+@Composable
+private fun StepperRow(
+    label: String,
+    value: Int,
+    range: IntRange,
+    step: Int = 1,
+    onChange: (Int) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(
+            onClick = { onChange((value - step).coerceAtLeast(range.first)) },
+            enabled = value > range.first,
+        ) { Text("−") }
+        Text("  $value  ", style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(
+            onClick = { onChange((value + step).coerceAtMost(range.last)) },
+            enabled = value < range.last,
+        ) { Text("+") }
+    }
+}
+
+/** 改一项高级解码参数：自动钳制并标记为「自定义」预设。 */
+private fun SettingsViewModel.updateDecode(transform: (DecodeSettings) -> DecodeSettings) {
+    update { s ->
+        s.copy(decode = transform(s.decode).clamped(), decodePreset = DecodePreset.CUSTOM)
     }
 }
 

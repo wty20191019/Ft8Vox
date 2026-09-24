@@ -41,7 +41,10 @@ object AudioEngine {
     private var handle: Long = 0L
 
     /** 创建引擎（按配置初始化 monitor 会话）。重复调用会先释放旧引擎。 */
-    fun initialize(config: Ft8Config = Ft8Config()) {
+    fun initialize(
+        config: Ft8Config = Ft8Config(),
+        decodeParams: DecodeParams = DecodeParams(),
+    ) {
         release()
         handle = nativeCreate(
             config.protocol.ordinal,
@@ -51,6 +54,24 @@ object AudioEngine {
             config.freqOsr,
         )
         check(handle != 0L) { "Failed to initialize AudioEngine (native create returned 0)" }
+        setDecodeParams(decodeParams)
+    }
+
+    /**
+     * 更新热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限）。
+     * 需先 [initialize]；未初始化时静默忽略。
+     */
+    fun setDecodeParams(params: DecodeParams) {
+        val p = params.clamped()
+        if (handle != 0L) {
+            nativeSetDecodeParams(
+                handle,
+                p.minScore,
+                p.maxCandidates,
+                p.ldpcIterations,
+                p.maxDecoded,
+            )
+        }
     }
 
     /** 释放引擎（会先停止采集与播放）。 */
@@ -139,6 +160,14 @@ object AudioEngine {
         timeOsr: Int,
         freqOsr: Int,
     ): Long
+
+    private external fun nativeSetDecodeParams(
+        handle: Long,
+        minScore: Int,
+        maxCandidates: Int,
+        ldpcIterations: Int,
+        maxDecoded: Int,
+    )
 
     private external fun nativeDestroy(handle: Long)
     private external fun nativeStartCapture(handle: Long, preferredRate: Int): Int

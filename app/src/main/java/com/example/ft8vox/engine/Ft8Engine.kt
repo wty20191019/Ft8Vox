@@ -39,11 +39,18 @@ object Ft8Engine {
     /** 最近一次 initialize 使用的配置，供 encode 默认复用。 */
     private var config: Ft8Config = Ft8Config()
 
+    /** 最近一次下发的解码参数（便于调试/回读）。 */
+    var decodeParams: DecodeParams = DecodeParams()
+        private set
+
     /**
      * 初始化解码引擎。重复调用会先释放旧引擎。
      * @throws IllegalStateException 当 native 初始化失败时抛出。
      */
-    fun initialize(config: Ft8Config = Ft8Config()) {
+    fun initialize(
+        config: Ft8Config = Ft8Config(),
+        decodeParams: DecodeParams = DecodeParams(),
+    ) {
         release()
         this.config = config
         handle = nativeInit(
@@ -55,6 +62,24 @@ object Ft8Engine {
             config.freqOsr,
         )
         check(handle != 0L) { "Failed to initialize Ft8Engine (native init returned 0)" }
+        setDecodeParams(decodeParams)
+    }
+
+    /**
+     * 更新热生效的解码参数；需先 [initialize]，未初始化时静默忽略。
+     */
+    fun setDecodeParams(params: DecodeParams) {
+        this.decodeParams = params.clamped()
+        if (handle != 0L) {
+            val p = decodeParams
+            nativeSetDecodeParams(
+                handle,
+                p.minScore,
+                p.maxCandidates,
+                p.ldpcIterations,
+                p.maxDecoded,
+            )
+        }
     }
 
     /** 清空当前时隙的 waterfall，准备下一个周期。 */
@@ -127,6 +152,13 @@ object Ft8Engine {
     private external fun nativeReset(handle: Long)
     private external fun nativeProcess(handle: Long, samples: FloatArray, length: Int)
     private external fun nativeDecode(handle: Long): Array<DecodeResult>
+    private external fun nativeSetDecodeParams(
+        handle: Long,
+        minScore: Int,
+        maxCandidates: Int,
+        ldpcIterations: Int,
+        maxDecoded: Int,
+    )
     private external fun nativeWaterfallInfo(handle: Long): IntArray
     private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
     private external fun nativeEncode(

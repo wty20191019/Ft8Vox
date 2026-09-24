@@ -36,9 +36,9 @@
 #define DSP_CHUNK 1024
 // 重采样输出缓冲（应 >= DSP_CHUNK * 最大降采样倍率）
 #define RS_CHUNK 8192
-// 每时隙最多缓存的解码结果条数
-#define RESULT_CAP 64
-#define DECODE_BATCH 16
+// 每时隙最多缓存的解码结果条数（≥ DecodeSettings.MAX_DECODED_RANGE 上界）
+#define RESULT_CAP 128
+#define DECODE_BATCH 128
 
 // 允许在时隙起点后多久开始采集（毫秒）；超过则丢弃等下一个时隙
 #define ALIGN_TOLERANCE_MS 200
@@ -391,6 +391,23 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     e->slot_samples = ftx_session_slot_samples(e->session);
     pthread_mutex_init(&e->res_mutex, NULL);
     return (jlong)(intptr_t)e;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetDecodeParams(
+    JNIEnv* env, jobject thiz, jlong handle,
+    jint min_score, jint max_candidates, jint ldpc_iterations, jint max_decoded)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL || e->session == NULL)
+        return;
+    ftx_decode_params_t p = {
+        .min_score = min_score,
+        .max_candidates = max_candidates,
+        .ldpc_iterations = ldpc_iterations,
+        .max_decoded = max_decoded,
+    };
+    ftx_session_set_decode_params(e->session, &p);
 }
 
 JNIEXPORT void JNICALL
