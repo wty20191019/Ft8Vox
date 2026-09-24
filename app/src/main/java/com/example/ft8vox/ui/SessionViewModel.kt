@@ -8,6 +8,10 @@ import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.WaterfallInfo
+import com.example.ft8vox.qso.QsoEngine
+import com.example.ft8vox.qso.QsoLogEntry
+import com.example.ft8vox.qso.QsoProgress
+import com.example.ft8vox.qso.QsoState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -35,16 +39,44 @@ data class ReceiverStatus(
     val slotsDecoded: Long = 0,
     val droppedSamples: Long = 0,
     val selectedFreqHz: Int = 1000,
+    // ---- 发射/QSO ----
+    val myCall: String = "",
+    val myGrid: String = "",
+    /** 我方发射所在的周期：0=偶数，1=奇数。 */
+    val txParity: Int = 0,
+    /** 已确认发射（防误发闸门）。 */
+    val txArmed: Boolean = false,
+    /** 距离下一个我方发射时隙的毫秒数。 */
+    val txCountdownMs: Long = 0,
+    /** 正在播放发射音频。 */
+    val txing: Boolean = false,
+    val qso: QsoProgress = QsoProgress(),
+    /** 最近一次发射的报文与所属时隙起点。 */
+    val lastTxText: String? = null,
+    val lastTxSlotMs: Long = 0,
+    /** 对方最近一次被解出的音频频率（用于瀑布标记）。 */
+    val theirFreqHz: Int? = null,
+)
+
+/** 一次已完成的通联（阶段 7 将写入 ADIF）。 */
+data class QsoRecord(
+    val theirCall: String,
+    val theirGrid: String?,
+    val reportSent: Int?,
+    val reportReceived: Int?,
+    val utcMs: Long,
 )
 
 /**
- * 会话状态管理：把实时引擎的轮询结果整理为不可变 UI 状态。
+ * 会话状态管理：把实时引擎的轮询结果整理为不可变 UI 状态，并驱动 QSO 自动序列。
  *
  * - [messages]：解码列表（新→旧）
  * - [waterfall]：瀑布帧（滚动缓冲）
- * - [status]：状态栏与控制区
+ * - [status]：状态栏、控制区与当前 QSO 进度
+ * - [qsoLog]：已完成的通联记录（内存态）
  *
- * 采用三个独立 StateFlow，避免瀑布/倒计时高频刷新带动解码列表重组。
+ * 发射调度：每个时隙检查一次，仅在我方周期（[ReceiverStatus.txParity]）且处于时隙起始窗口内
+ * 调用 native 阻塞写播放；其余时间保持静音。
  */
 class SessionViewModel : ViewModel() {
 
@@ -57,23 +89,56 @@ class SessionViewModel : ViewModel() {
     private val _status = MutableStateFlow(ReceiverStatus())
     val status: StateFlow<ReceiverStatus> = _status.asStateFlow()
 
+    private val _qsoLog = MutableStateFlow<List<QsoRecord>>(emptyList())
+    val qsoLog: StateFlow<List<QsoRecord>> = _qsoLog.asStateFlow()
+
+    private val qsoEngine = QsoEngine(maxRetries = 6)
+
     private var pollJob: Job? = null
+    private var txJob: Job? = null
     private var wfInfo: WaterfallInfo? = null
     private var wfPixels = IntArray(0)
     private var wfPeak = 0
 
+    private var lastSlotsDecoded = 0L
+    private var pendingDecodes = mutableListOf<DecodeResult>()
+    private var lastTxSlotIndex = -1L
+    private var txJustFinished = false
+
+    // ---- 配置 ----
+
     fun selectProtocol(protocol: Protocol) {
         if (_status.value.running) return
-        _status.update { it.copy(protocol = protocol, slotMs = if (protocol == Protocol.FT4) 7500 else 15000) }
+        _status.update {
+            it.copy(protocol = protocol, slotMs = if (protocol == Protocol.FT4) 7500 else 15000)
+        }
     }
 
     fun selectFrequency(hz: Int) {
         _status.update { it.copy(selectedFreqHz = hz.coerceAtLeast(0)) }
     }
 
+    fun setMyCall(call: String) {
+        val v = call.trim().uppercase()
+        _status.update { it.copy(myCall = v) }
+        qsoEngine.configure(v, _status.value.myGrid)
+    }
+
+    fun setMyGrid(grid: String) {
+        val v = grid.trim().uppercase()
+        _status.update { it.copy(myGrid = v) }
+        qsoEngine.configure(_status.value.myCall, v)
+    }
+
+    fun setTxParity(parity: Int) {
+        _status.update { it.copy(txParity = parity.coerceIn(0, 1)) }
+    }
+
     fun clearMessages() {
         _messages.value = emptyList()
     }
+
+    // ---- 采集 ----
 
     fun start() {
         if (_status.value.running) return
@@ -106,81 +171,255 @@ class SessionViewModel : ViewModel() {
     }
 
     fun stop() {
+        stopTransmit()
         pollJob?.cancel()
         pollJob = null
         AudioEngine.stopCapture()
         AudioEngine.release()
         wfInfo = null
-        _status.update { it.copy(running = false, status = "已停止", msToNextSlot = 0, slotProgress = 0f) }
+        _status.update {
+            it.copy(
+                running = false,
+                inSlot = false,
+                status = "已停止",
+                msToNextSlot = 0,
+                slotProgress = 0f,
+                txArmed = false,
+                txing = false,
+                qso = qsoEngine.stop(),
+            )
+        }
     }
 
-    /** 发射测试：编码一段 CQ 并按输出采样率播放。 */
+    // ---- 发射 / QSO ----
+
+    /** 是否已配置呼号，可开始 QSO。 */
+    val canOperate: Boolean get() = _status.value.myCall.isNotEmpty()
+
+    /**
+     * 开始呼叫 CQ（调用前应由 UI 弹出防误发确认）。
+     * 若采集未启动会先自动启动。
+     */
+    fun startCq() {
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (!_status.value.running) start()
+        if (!_status.value.running) return
+
+        if (!armPlayback()) return
+        lastTxSlotIndex = -1L
+        val p = qsoEngine.startCq()
+        _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
+    }
+
+    /** 应答指定 CQ（调用前应由 UI 弹出防误发确认）。 */
+    fun answer(call: String, grid: String?) {
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (!_status.value.running) start()
+        if (!_status.value.running) return
+
+        if (!armPlayback()) return
+        lastTxSlotIndex = -1L
+        val p = qsoEngine.answer(call, grid)
+        if (!p.active) {
+            _status.update { it.copy(status = "无法应答（呼号无效或与自身相同）") }
+            return
+        }
+        _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
+    }
+
+    /** 紧急停止发射：解除武装并中止可能正在进行的播放。 */
+    fun stopTransmit() {
+        txJob?.cancel()
+        txJob = null
+        AudioEngine.stopPlayback()
+        val p = qsoEngine.stop()
+        _status.update {
+            it.copy(txArmed = false, txing = false, qso = p, txCountdownMs = 0, status = "已停止发射")
+        }
+    }
+
+    /**
+     * 立即播放一段测试波形（**不按时隙对齐**，仅用于验证音频通路与音量）。
+     *
+     * 正式发射请用 [startCq] / [answer]。
+     */
     fun transmitTest() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val current = _status.value
+        val st = _status.value
+        val text = st.qso.txText
+            ?: if (canOperate) listOf("CQ", st.myCall, st.myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            else "CQ TEST"
+        if (!armPlayback()) return
+        txJob?.cancel()
+        txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (!current.running) {
-                    AudioEngine.initialize(Ft8Config(protocol = current.protocol))
-                }
-                val pcm = Ft8Engine.encode(
-                    "CQ F4FSY JN25",
-                    current.selectedFreqHz.toFloat(),
-                    current.protocol,
-                    12000,
-                )
-                val rate = AudioEngine.startPlayback(48000)
-                if (rate <= 0) {
-                    _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }
-                    return@launch
-                }
+                val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                _status.update { it.copy(txing = true) }
                 val written = AudioEngine.play(pcm)
-                _status.update { it.copy(outputRate = rate, status = "已发射测试 CQ（$written 帧 @ $rate Hz）") }
+                _status.update { it.copy(status = "已发射测试「$text」（$written 帧）") }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "发射失败: ${e.message}") }
+            } finally {
+                _status.update { it.copy(txing = false) }
             }
         }
     }
+
+    /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */
+    private fun armPlayback(): Boolean {
+        val rate = AudioEngine.startPlayback(48000)
+        if (rate <= 0) {
+            _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }
+            return false
+        }
+        _status.update { it.copy(outputRate = rate) }
+        return true
+    }
+
+    // ---- 轮询主循环 ----
 
     private fun startPolling() {
         pollJob?.cancel()
         pollJob = viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
                 try {
-                    // 1) 解码结果（新→旧）
-                    val decoded = AudioEngine.pollDecoded()
-                    if (decoded.isNotEmpty()) {
-                        _messages.update { current -> (decoded + current).take(200) }
-                    }
-
-                    // 2) 瀑布行流
-                    pollWaterfall()
-
-                    // 3) 状态
-                    AudioEngine.state()?.let { s ->
-                        _status.update {
-                            it.copy(
-                                inSlot = s.inSlot,
-                                inputRate = s.inputRate,
-                                slotMs = s.slotMs.toInt(),
-                                msToNextSlot = s.msToNextSlot,
-                                slotProgress = s.slotProgress,
-                                slotParity = if (s.slotMs > 0) ((s.utcNowMs / s.slotMs) % 2L).toInt() else 0,
-                                slotsDecoded = s.slotsDecoded,
-                                droppedSamples = s.droppedSamples,
-                            )
-                        }
-                    }
+                    pollOnce()
                 } catch (e: Exception) {
-                    // 轮询失败不应让进程崩溃
                     _status.update { it.copy(status = "轮询异常: ${e.message}") }
                 }
-
                 delay(80)
             }
         }
     }
 
-    /** 取走新的 waterfall 行，滚动写入像素缓冲（旧行上移，新行在底部）。 */
+    private fun pollOnce() {
+        // 1) 解码结果（新→旧）
+        val decoded = AudioEngine.pollDecoded()
+        if (decoded.isNotEmpty()) {
+            _messages.update { current -> (decoded + current).take(200) }
+            pendingDecodes.addAll(decoded)
+            decoded.forEach { if (it.df > 0) _status.update { s -> s.copy(theirFreqHz = it.df) } }
+        }
+
+        // 2) 状态
+        val s = AudioEngine.state()
+        if (s != null) {
+            _status.update {
+                it.copy(
+                    inSlot = s.inSlot,
+                    inputRate = s.inputRate,
+                    slotMs = s.slotMs.toInt(),
+                    msToNextSlot = s.msToNextSlot,
+                    slotProgress = s.slotProgress,
+                    slotParity = if (s.slotMs > 0) ((s.utcNowMs / s.slotMs) % 2L).toInt() else 0,
+                    slotsDecoded = s.slotsDecoded,
+                    droppedSamples = s.droppedSamples,
+                )
+            }
+
+            // 3) 每完成一个时隙，把该时隙的解码结果交给 QSO 状态机（仅接收周期）
+            if (s.slotsDecoded > lastSlotsDecoded) {
+                lastSlotsDecoded = s.slotsDecoded
+                val txParity = _status.value.txParity
+                val completedIdx = if (s.slotMs > 0) (s.utcNowMs / s.slotMs) - 1 else -1L
+                val completedParity = if (completedIdx >= 0) (completedIdx % 2L).toInt() else -1
+                if (_status.value.qso.active && (completedParity == -1 || completedParity != txParity)) {
+                    val p = qsoEngine.onDecoded(pendingDecodes.toList(), s.utcNowMs)
+                    applyQsoProgress(p)
+                }
+                pendingDecodes = mutableListOf()
+            }
+        }
+
+        // 4) 瀑布行流
+        pollWaterfall()
+
+        // 5) 发射调度
+        txTick()
+    }
+
+    /** 把状态机进度同步到 UI 状态，并落地已完成的通联。 */
+    private fun applyQsoProgress(p: QsoProgress) {
+        _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
+        qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
+            _qsoLog.update { current ->
+                (listOf(
+                    QsoRecord(
+                        theirCall = entry.theirCall,
+                        theirGrid = entry.theirGrid,
+                        reportSent = entry.reportSent,
+                        reportReceived = entry.reportReceived,
+                        utcMs = entry.utcMs,
+                    ),
+                ) + current).take(100)
+            }
+        }
+    }
+
+    /** 发射调度：只在我方周期、时隙起始窗口内、且该时隙尚未发射过时触发。 */
+    private fun txTick() {
+        // 上一轮发射结束后，在轮询线程统一推进状态机（保证 QsoEngine 单线程访问）
+        if (txJustFinished) {
+            txJustFinished = false
+            qsoEngine.onTransmitted()
+            val p = qsoEngine.progress()
+            val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+            _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
+        }
+
+        val st = _status.value
+        if (!st.txArmed || !st.running) return
+        if (txJob?.isActive == true) return
+        val text = st.qso.txText ?: return
+        val slotMs = st.slotMs.toLong()
+        if (slotMs <= 0) return
+
+        val now = AudioEngine.utcNowMs()
+        val slotIdx = now / slotMs
+        val msIntoSlot = now % slotMs
+        val parity = (slotIdx % 2L).toInt()
+
+        // 距离下一个我方发射时隙的倒计时（用于 UI）
+        val waitMs = if (parity == st.txParity) {
+            maxOf(0L, slotMs - msIntoSlot)
+        } else {
+            slotMs - msIntoSlot + slotMs
+        }
+        _status.update { it.copy(txCountdownMs = waitMs) }
+
+        if (parity != st.txParity) return
+        if (msIntoSlot > TX_START_WINDOW_MS) return
+        if (slotIdx == lastTxSlotIndex) return
+
+        lastTxSlotIndex = slotIdx
+        txJob = viewModelScope.launch(Dispatchers.IO) { transmit(text, slotIdx * slotMs) }
+    }
+
+    /** 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。 */
+    private fun transmit(text: String, slotStartMs: Long) {
+        val st = _status.value
+        try {
+            val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+            _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
+            val written = AudioEngine.play(pcm)
+            if (written <= 0) {
+                _status.update { it.copy(status = "发射失败（写入 $written 帧）") }
+            }
+        } catch (e: Exception) {
+            _status.update { it.copy(status = "发射异常: ${e.message}") }
+        } finally {
+            _status.update { it.copy(txing = false) }
+            txJustFinished = true
+        }
+    }
+
+    // ---- 瀑布 ----
+
     private fun pollWaterfall() {
         val info = wfInfo ?: return
         val bins = info.bins
@@ -233,8 +472,14 @@ class SessionViewModel : ViewModel() {
 
     override fun onCleared() {
         pollJob?.cancel()
+        txJob?.cancel()
         AudioEngine.stopCapture()
         AudioEngine.release()
         super.onCleared()
+    }
+
+    private companion object {
+        /** 允许在时隙起点后多久内开始写播放（0.5 s 前导静音可吸收该延迟）。 */
+        const val TX_START_WINDOW_MS = 1200L
     }
 }

@@ -44,8 +44,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.qso.MessageParser
+import com.example.ft8vox.ui.MyStationRow
+import com.example.ft8vox.ui.PendingTx
+import com.example.ft8vox.ui.QsoStatusLine
 import com.example.ft8vox.ui.ReceiverStatus
 import com.example.ft8vox.ui.SessionViewModel
+import com.example.ft8vox.ui.TxConfirmDialog
+import com.example.ft8vox.ui.TxControlRow
 import com.example.ft8vox.ui.WaterfallView
 import com.example.ft8vox.ui.theme.Ft8VoxTheme
 import java.util.Locale
@@ -83,6 +89,7 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
     val status by viewModel.status.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val waterfall by viewModel.waterfall.collectAsState()
+    val qsoLog by viewModel.qsoLog.collectAsState()
 
     var permissionGranted by remember {
         mutableStateOf(
@@ -90,26 +97,38 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
                 PackageManager.PERMISSION_GRANTED,
         )
     }
+    var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
+    var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
+
+    fun execute(action: PendingTx) {
+        when (action) {
+            PendingTx.Cq -> viewModel.startCq()
+            is PendingTx.Reply -> viewModel.answer(action.call, action.grid)
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
-        if (granted) viewModel.start()
+        val action = afterPermission
+        afterPermission = null
+        if (granted) {
+            if (action == null) viewModel.start() else execute(action)
+        }
     }
 
-    fun onStartStopClicked() {
-        if (status.running) {
-            viewModel.stop()
-        } else if (permissionGranted) {
-            viewModel.start()
+    fun request(action: PendingTx?) {
+        if (permissionGranted) {
+            if (action == null) viewModel.start() else execute(action)
         } else {
+            afterPermission = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
-        Text("Ft8Vox", style = MaterialTheme.typography.headlineSmall)
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Text("Ft8Vox", style = MaterialTheme.typography.titleLarge)
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -123,34 +142,44 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
                     label = { Text(p.name) },
                 )
             }
-            Text(
-                "选中 ${status.selectedFreqHz} Hz",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text("选中 ${status.selectedFreqHz} Hz", style = MaterialTheme.typography.bodySmall)
         }
+
+        MyStationRow(
+            myCall = status.myCall,
+            myGrid = status.myGrid,
+            enabled = !status.txArmed,
+            onCallChange = { viewModel.setMyCall(it) },
+            onGridChange = { viewModel.setMyGrid(it) },
+        )
+
+        TxControlRow(
+            txParity = status.txParity,
+            armed = status.txArmed,
+            canOperate = status.myCall.isNotEmpty(),
+            onParityChange = { viewModel.setTxParity(it) },
+            onStartCq = { pendingTx = PendingTx.Cq },
+            onStopTx = { viewModel.stopTransmit() },
+        )
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(onClick = { onStartStopClicked() }) {
+            Button(onClick = { if (status.running) viewModel.stop() else request(null) }) {
                 Text(if (status.running) "停止接收" else "开始接收")
             }
-            Button(onClick = { viewModel.transmitTest() }) {
-                Text("发射测试")
-            }
-            TextButton(onClick = { viewModel.clearMessages() }) {
-                Text("清空列表")
-            }
+            Button(onClick = { viewModel.transmitTest() }) { Text("发射测试") }
+            TextButton(onClick = { viewModel.clearMessages() }) { Text("清空列表") }
         }
 
         StatusBar(status)
+        QsoStatusLine(status)
 
-        // 瀑布
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(150.dp)
                 .background(Color.Black),
         ) {
             WaterfallView(
@@ -159,12 +188,33 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
                 slotParity = status.slotParity,
                 onSelectFrequency = { viewModel.selectFrequency(it) },
                 modifier = Modifier.fillMaxSize(),
+                theirFreqHz = status.theirFreqHz,
+                txing = status.txing,
             )
         }
         FrequencyAxis(waterfall?.fMinHz, waterfall?.maxHz)
 
-        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        if (qsoLog.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("通联记录（${qsoLog.size}）", style = MaterialTheme.typography.titleSmall)
+            for (r in qsoLog.take(3)) {
+                Text(
+                    String.format(
+                        Locale.US,
+                        "%s  %s%s  收 %s / 发 %s",
+                        formatUtc(r.utcMs),
+                        r.theirCall,
+                        r.theirGrid?.let { " ($it)" } ?: "",
+                        r.reportReceived?.toString() ?: "--",
+                        r.reportSent?.toString() ?: "--",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
 
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Text("解码结果（${messages.size}）", style = MaterialTheme.typography.titleSmall)
 
         LazyColumn(
@@ -176,10 +226,35 @@ private fun ReceiverScreen(viewModel: SessionViewModel, modifier: Modifier = Mod
                     message = message,
                     slotMs = status.slotMs.toLong(),
                     onClick = { viewModel.selectFrequency(message.df) },
+                    onReply = { call, grid -> pendingTx = PendingTx.Reply(call, grid) },
                 )
             }
         }
     }
+
+    pendingTx?.let { pending ->
+        TxConfirmDialog(
+            pending = pending,
+            status = status,
+            onConfirm = {
+                pendingTx = null
+                request(pending)
+            },
+            onDismiss = { pendingTx = null },
+        )
+    }
+}
+
+private fun formatUtc(utcMs: Long): String {
+    if (utcMs <= 0) return "--:--:--"
+    val secs = utcMs / 1000
+    return String.format(
+        Locale.US,
+        "%02d:%02d:%02d",
+        (secs / 3600) % 24,
+        (secs / 60) % 60,
+        secs % 60,
+    )
 }
 
 @Composable
@@ -229,19 +304,12 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
 }
 
 @Composable
-private fun DecodeRow(message: DecodeResult, slotMs: Long, onClick: () -> Unit) {
-    val time = if (message.slotUtcMs > 0) {
-        val secs = message.slotUtcMs / 1000
-        String.format(
-            Locale.US,
-            "%02d:%02d:%02d",
-            (secs / 3600) % 24,
-            (secs / 60) % 60,
-            secs % 60,
-        )
-    } else {
-        "--:--:--"
-    }
+private fun DecodeRow(
+    message: DecodeResult,
+    slotMs: Long,
+    onClick: () -> Unit,
+    onReply: (String, String?) -> Unit,
+) {
     // 偶/奇周期背景分色（按该条报文所属时隙判定）
     val tint = if (message.slotUtcMs > 0 && slotMs > 0) {
         val even = ((message.slotUtcMs / slotMs) % 2L) == 0L
@@ -249,22 +317,38 @@ private fun DecodeRow(message: DecodeResult, slotMs: Long, onClick: () -> Unit) 
     } else {
         Color.Transparent
     }
-    Text(
-        String.format(
-            Locale.US,
-            "%s  %+3d dB  DT %+.1f  DF %4d  %s",
-            time,
-            message.snr,
-            message.dt,
-            message.df,
-            message.text,
-        ),
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
+    val parsed = remember(message.text) { MessageParser.parse(message.text) }
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(tint)
             .clickable(onClick = onClick)
-            .padding(vertical = 3.dp, horizontal = 4.dp),
-    )
+            .padding(vertical = 2.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            String.format(
+                Locale.US,
+                "%s  %+3d dB  DT %+.1f  DF %4d  %s",
+                formatUtc(message.slotUtcMs),
+                message.snr,
+                message.dt,
+                message.df,
+                message.text,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f),
+        )
+        if (parsed.isCq && parsed.from != null) {
+            TextButton(onClick = { onReply(parsed.from, parsed.grid) }) {
+                Text("应答", style = MaterialTheme.typography.labelMedium)
+            }
+        } else if (parsed.from != null && parsed.to != null && parsed.report != null) {
+            TextButton(onClick = { onReply(parsed.from, parsed.grid) }) {
+                Text("应答", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
 }
