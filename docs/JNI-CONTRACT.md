@@ -59,8 +59,11 @@
 
 | Kotlin 方法 | 职责 |
 | --- | --- |
-| `encode(text, frequencyHz): FloatArray` | 文本 → 77-bit 载荷 → tone → GFSK 波形（12 kHz PCM） |
+| `encode(text, frequencyHz, protocol, sampleRate): FloatArray` | 文本 → 77-bit 载荷 → tone → GFSK 波形，返回**一个完整时隙**的 12 kHz PCM（含首尾静音填充） |
 
+- `protocol` / `sampleRate` 默认沿用最近一次 `initialize` 的配置。
+- 报文无法解析/编码时抛 `IllegalArgumentException`。
+- 时隙定位遵循 WSJT-X 约定：波形在时隙起点后 **0.5 s** 开始，末尾留白填满整个时隙（不能居中，否则 FT4 数据段会超出解码器候选搜索窗口）。
 - 覆盖报文：标准报文（CQ、呼叫、R/RR73/73）、自由文本；FT8 与 FT4。
 - 生成的 PCM 可直接交给 AAudio 播放，或落盘为 WAV 供离线验证。
 

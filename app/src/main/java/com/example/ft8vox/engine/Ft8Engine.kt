@@ -36,12 +36,16 @@ object Ft8Engine {
     /** native 引擎句柄（指向 native ft8_engine_t），0 表示未初始化。 */
     private var handle: Long = 0L
 
+    /** 最近一次 initialize 使用的配置，供 encode 默认复用。 */
+    private var config: Ft8Config = Ft8Config()
+
     /**
      * 初始化解码引擎。重复调用会先释放旧引擎。
      * @throws IllegalStateException 当 native 初始化失败时抛出。
      */
     fun initialize(config: Ft8Config = Ft8Config()) {
         release()
+        this.config = config
         handle = nativeInit(
             config.protocol.ordinal,
             config.sampleRate,
@@ -70,6 +74,24 @@ object Ft8Engine {
     fun decode(): List<String> =
         if (handle != 0L) nativeDecode(handle).toList() else emptyList()
 
+    /**
+     * 将文本编码为一个完整时隙的发射 PCM（12 kHz，float，[-1,1]，含静音填充）。
+     *
+     * @param text 报文明文，如 "CQ F4FSY JN25"、"GJ0KYZ RK9AX MO05"。
+     * @param frequencyHz 音频基频（符号 0 对应的频率）。
+     * @param protocol 协议，默认沿用 initialize 的配置。
+     * @param sampleRate 采样率，默认沿用 initialize 的配置。
+     * @throws IllegalArgumentException 当报文无法解析/编码时抛出。
+     */
+    fun encode(
+        text: String,
+        frequencyHz: Float,
+        protocol: Protocol = config.protocol,
+        sampleRate: Int = config.sampleRate,
+    ): FloatArray =
+        nativeEncode(protocol.ordinal, text, frequencyHz, sampleRate)
+            ?: throw IllegalArgumentException("无法编码报文: \"$text\"")
+
     /** 释放 native 资源。可重复调用。 */
     fun release() {
         if (handle != 0L) {
@@ -91,6 +113,13 @@ object Ft8Engine {
     private external fun nativeReset(handle: Long)
     private external fun nativeProcess(handle: Long, samples: FloatArray, length: Int)
     private external fun nativeDecode(handle: Long): Array<String>
+    private external fun nativeEncode(
+        protocol: Int,
+        text: String,
+        frequencyHz: Float,
+        sampleRate: Int,
+    ): FloatArray?
+
     private external fun nativeRelease(handle: Long)
 
     /** 占位接口：返回 native 侧的握手字符串。 */
