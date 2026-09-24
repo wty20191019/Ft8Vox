@@ -25,7 +25,7 @@ sealed interface PendingTx {
     data object Cq : PendingTx
 
     /** 应答对方的 CQ。 */
-    data class Reply(val call: String, val grid: String?) : PendingTx
+    data class Reply(val call: String, val grid: String?, val df: Int? = null) : PendingTx
 }
 
 /** 时隙起点（UTC 毫秒）→ HH:MM:SS 文本。 */

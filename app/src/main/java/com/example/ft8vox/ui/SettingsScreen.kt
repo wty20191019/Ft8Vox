@@ -13,10 +13,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.data.settings.CallFirstMode
 
 /** 设置页：台站信息、日志与 ADIF、关于。 */
 @Composable
@@ -113,6 +116,50 @@ fun SettingsScreen(
             label = { Text("备注") },
             modifier = Modifier.fillMaxWidth(),
         )
+
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+        // ---- 发射 ----
+        Text("发射", style = MaterialTheme.typography.titleSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Hold Tx Freq",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = app.holdTxFreq,
+                onCheckedChange = { v -> settings.update { s -> s.copy(holdTxFreq = v) } },
+            )
+        }
+        Text(
+            "开启后点解码行只改 RX、不跟随对方频率（split 场景）；关闭则「点谁打谁」。",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text("Call 1st 自动应答", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (m in CallFirstMode.entries) {
+                FilterChip(
+                    selected = app.callFirst == m,
+                    onClick = { settings.update { s -> s.copy(callFirst = m) } },
+                    label = { Text(m.label) },
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "最大重试次数",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = { settings.update { s -> s.copy(maxRetries = (s.maxRetries - 1).coerceAtLeast(1)) } },
+            ) { Text("−") }
+            Text("  ${app.maxRetries}  ", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(
+                onClick = { settings.update { s -> s.copy(maxRetries = (s.maxRetries + 1).coerceAtMost(20)) } },
+            ) { Text("+") }
+        }
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 

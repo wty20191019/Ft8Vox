@@ -15,10 +15,15 @@ import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.WaterfallInfo
+import com.example.ft8vox.qso.CallFirstSelector
+import com.example.ft8vox.qso.DecodeFilterState
+import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
+import com.example.ft8vox.qso.WorkedIndex
+import com.example.ft8vox.data.settings.CallFirstMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -65,8 +70,17 @@ data class ReceiverStatus(
     /** 最近一次发射的报文与所属时隙起点。 */
     val lastTxText: String? = null,
     val lastTxSlotMs: Long = 0,
-    /** 对方最近一次被解出的音频频率（用于瀑布标记）。 */
-    val theirFreqHz: Int? = null,
+    /** 选中的收听/应答频率（对应瀑布绿线）；未选时为 null。 */
+    val rxFreqHz: Int? = null,
+    // ---- JTDX 风格操作（阶段 7c） ----
+    /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
+    val holdTxFreq: Boolean = false,
+    /** Call 1st 自动应答策略（来自设置）。 */
+    val callFirst: CallFirstMode = CallFirstMode.OFF,
+    /** Call 1st 是否已武装（需用户确认；QSO 结束后自动解除）。 */
+    val callFirstArmed: Boolean = false,
+    /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
+    val manualTxText: String? = null,
 )
 
 /**
@@ -100,6 +114,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近 3 条通联（操作页展示）。 */
     val recentQso: Flow<List<QsoEntity>> = qsoRepo.observeRecent(3)
 
+    /** 已通联索引（呼号/网格/前缀），供操作页过滤与高亮、Call 1st 共用。 */
+    private val _worked = MutableStateFlow(WorkedIndex.EMPTY)
+    val workedIndex: StateFlow<WorkedIndex> = _worked.asStateFlow()
+
     private val qsoEngine = QsoEngine(maxRetries = 6)
 
     private var pollJob: Job? = null
@@ -112,6 +130,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingDecodes = mutableListOf<DecodeResult>()
     private var lastTxSlotIndex = -1L
     private var txJustFinished = false
+    /** 当前正在播放的报文是否为「一次性发射」（发完不再推进 QSO 状态机）。 */
+    private var manualInFlight = false
 
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
@@ -121,6 +141,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             settingsRepo.settings.collect { s ->
                 latestSettings = s
                 applySettings(s)
+            }
+        }
+        viewModelScope.launch {
+            qsoRepo.observeAll().collect { list ->
+                _worked.value = WorkedIndex(
+                    calls = list.map { it.theirCall },
+                    grids = list.mapNotNull { it.theirGrid },
+                )
             }
         }
     }
@@ -135,12 +163,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 band = s.band,
                 selectedFreqHz = s.selectedFreqHz,
                 txParity = s.txParity,
+                holdTxFreq = s.holdTxFreq,
+                callFirst = s.callFirst,
+                callFirstArmed = if (s.callFirst == CallFirstMode.OFF) false else cur.callFirstArmed,
                 // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
             )
         }
-        qsoEngine.configure(s.myCall, s.myGrid)
+        qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
     }
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
@@ -156,9 +187,57 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectFrequency(hz: Int) {
-        val v = hz.coerceAtLeast(0)
+        val v = clampFreq(hz)
+        val hold = _status.value.holdTxFreq
+        _status.update {
+            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
+        }
+        if (!hold) persist { it.copy(selectedFreqHz = v) }
+    }
+
+    /** 直接微调我方发射频率（TX）。 */
+    fun nudgeTxFreq(delta: Int) {
+        val v = clampFreq(_status.value.selectedFreqHz + delta)
         _status.update { it.copy(selectedFreqHz = v) }
         persist { it.copy(selectedFreqHz = v) }
+    }
+
+    fun setHoldTxFreq(value: Boolean) {
+        _status.update { it.copy(holdTxFreq = value) }
+        persist { it.copy(holdTxFreq = value) }
+    }
+
+    fun setCallFirst(mode: CallFirstMode) {
+        _status.update {
+            it.copy(callFirst = mode, callFirstArmed = if (mode == CallFirstMode.OFF) false else it.callFirstArmed)
+        }
+        persist { it.copy(callFirst = mode) }
+    }
+
+    fun setCqOnly(value: Boolean) {
+        persist { it.copy(cqOnly = value) }
+    }
+
+    fun setExcludeWorked(value: Boolean) {
+        persist { it.copy(excludeWorked = value) }
+    }
+
+    fun setCallFilter(value: String) {
+        persist { it.copy(callFilter = value) }
+    }
+
+    /** 武装 Call 1st（UI 需先弹防误发确认）。 */
+    fun armCallFirst() {
+        val mode = _status.value.callFirst
+        if (mode == CallFirstMode.OFF) {
+            _status.update { it.copy(status = "请先选择 Call 1st 策略") }
+            return
+        }
+        _status.update { it.copy(callFirstArmed = true, status = "Call 1st 已启用（${mode.label}）") }
+    }
+
+    fun disarmCallFirst() {
+        _status.update { it.copy(callFirstArmed = false, status = "Call 1st 已关闭") }
     }
 
     fun setBand(name: String) {
@@ -234,6 +313,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 slotProgress = 0f,
                 txArmed = false,
                 txing = false,
+                manualTxText = null,
+                callFirstArmed = false,
                 qso = qsoEngine.stop(),
             )
         }
@@ -263,10 +344,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 应答指定 CQ（调用前应由 UI 弹出防误发确认）。 */
-    fun answer(call: String, grid: String?) {
+    fun answer(call: String, grid: String?, theirDf: Int? = null) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
+        }
+        // 未锁定时把 TX 跟到对方的 DF（点谁打谁）
+        if (theirDf != null && theirDf > 0) {
+            val hold = _status.value.holdTxFreq
+            val v = clampFreq(theirDf)
+            _status.update {
+                it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
+            }
+            if (!hold) persist { it.copy(selectedFreqHz = v) }
         }
         if (!_status.value.running) start()
         if (!_status.value.running) return
@@ -281,6 +371,32 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
+    /**
+     * 一次性发射一条报文（长按解码行的「逐条发送」）。
+     *
+     * 不进入 QSO 自动序列，发完即解除武装；QSO 进行中不允许（避免打断自动序列）。
+     */
+    fun sendOnce(text: String) {
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (_status.value.qso.active) {
+            _status.update { it.copy(status = "QSO 进行中，暂不逐条发送") }
+            return
+        }
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        if (!_status.value.running) start()
+        if (!_status.value.running) return
+
+        if (!armPlayback()) return
+        lastTxSlotIndex = -1L
+        _status.update {
+            it.copy(manualTxText = trimmed, txArmed = true, status = "待发（一次性）：$trimmed")
+        }
+    }
+
     /** 紧急停止发射：解除武装并中止可能正在进行的播放。 */
     fun stopTransmit() {
         txJob?.cancel()
@@ -288,7 +404,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AudioEngine.stopPlayback()
         val p = qsoEngine.stop()
         _status.update {
-            it.copy(txArmed = false, txing = false, qso = p, txCountdownMs = 0, status = "已停止发射")
+            it.copy(
+                txArmed = false,
+                txing = false,
+                manualTxText = null,
+                callFirstArmed = false,
+                qso = p,
+                txCountdownMs = 0,
+                status = "已停止发射",
+            )
         }
     }
 
@@ -351,7 +475,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (decoded.isNotEmpty()) {
             _messages.update { current -> (decoded + current).take(200) }
             pendingDecodes.addAll(decoded)
-            decoded.forEach { if (it.df > 0) _status.update { s -> s.copy(theirFreqHz = it.df) } }
+            // 发给我的报文自动把 RX 跟过去（便于瀑布绿线指示当前对手）
+            val my = _status.value.myCall
+            decoded.forEach { m ->
+                if (m.df > 0 && MessageParser.parse(m.text).addressedTo(my)) {
+                    _status.update { s -> s.copy(rxFreqHz = m.df) }
+                }
+            }
         }
 
         // 2) 状态
@@ -370,15 +500,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
 
-            // 3) 每完成一个时隙，把该时隙的解码结果交给 QSO 状态机（仅接收周期）
+            // 3) 每完成一个接收时隙，交给 QSO 状态机或 Call 1st
             if (s.slotsDecoded > lastSlotsDecoded) {
                 lastSlotsDecoded = s.slotsDecoded
-                val txParity = _status.value.txParity
+                val st = _status.value
                 val completedIdx = if (s.slotMs > 0) (s.utcNowMs / s.slotMs) - 1 else -1L
                 val completedParity = if (completedIdx >= 0) (completedIdx % 2L).toInt() else -1
-                if (_status.value.qso.active && (completedParity == -1 || completedParity != txParity)) {
-                    val p = qsoEngine.onDecoded(pendingDecodes.toList(), s.utcNowMs)
-                    applyQsoProgress(p)
+                val isReceiveSlot = completedParity == -1 || completedParity != st.txParity
+                if (isReceiveSlot) {
+                    val batch = pendingDecodes.toList()
+                    if (st.qso.active) {
+                        applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
+                    } else if (st.callFirstArmed) {
+                        autoCallFirst(batch)
+                    }
                 }
                 pendingDecodes = mutableListOf()
             }
@@ -393,7 +528,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
     private fun applyQsoProgress(p: QsoProgress) {
-        _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
+        val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+        _status.update {
+            it.copy(
+                qso = p,
+                status = "QSO：${p.description}",
+                // 一次自动 QSO 结束即解除 Call 1st，避免无限自动呼叫
+                callFirstArmed = if (finished) false else it.callFirstArmed,
+            )
+        }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
             val st = _status.value
             val entity = QsoEntity(
@@ -415,21 +558,78 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Call 1st：从本时隙解码中挑一个 CQ 自动应答（需已武装）。 */
+    private fun autoCallFirst(batch: List<DecodeResult>) {
+        val st = _status.value
+        val cand = CallFirstSelector.pick(
+            messages = batch,
+            mode = st.callFirst,
+            filter = currentFilter(),
+            worked = _worked.value,
+            myCall = st.myCall,
+        ) ?: return
+        if (!armPlayback()) return
+
+        lastTxSlotIndex = -1L
+        val hold = st.holdTxFreq
+        val v = clampFreq(cand.df)
+        _status.update {
+            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
+        }
+        if (!hold) persist { it.copy(selectedFreqHz = v) }
+
+        val p = qsoEngine.answer(cand.call, cand.grid)
+        if (!p.active) return
+        _status.update {
+            it.copy(qso = p, txArmed = true, status = "Call 1st：应答 ${cand.call}")
+        }
+    }
+
+    /** 由设置构造显示过滤条件（操作页与 Call 1st 共用）。 */
+    private fun currentFilter(): DecodeFilterState {
+        val s = latestSettings
+        return DecodeFilterState(
+            cqOnly = s.cqOnly,
+            excludeWorked = s.excludeWorked,
+            query = s.callFilter,
+        )
+    }
+
+    /** 把频率钳制到当前解码频段内。 */
+    private fun clampFreq(hz: Int): Int {
+        val d = latestSettings.decode
+        val lo = d.fMinHz.coerceAtLeast(100)
+        val hi = d.fMaxHz.coerceAtLeast(lo + 100)
+        return hz.coerceIn(lo, hi)
+    }
+
     /** 发射调度：只在我方周期、时隙起始窗口内、且该时隙尚未发射过时触发。 */
     private fun txTick() {
         // 上一轮发射结束后，在轮询线程统一推进状态机（保证 QsoEngine 单线程访问）
         if (txJustFinished) {
             txJustFinished = false
-            qsoEngine.onTransmitted()
-            val p = qsoEngine.progress()
-            val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
-            _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
+            if (manualInFlight) {
+                // 一次性发射：不推进 QSO 状态机，发完即解除武装
+                manualInFlight = false
+                _status.update {
+                    it.copy(
+                        manualTxText = null,
+                        txArmed = false,
+                        status = "一次性发射完成：${it.lastTxText ?: ""}",
+                    )
+                }
+            } else {
+                qsoEngine.onTransmitted()
+                val p = qsoEngine.progress()
+                val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+                _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
+            }
         }
 
         val st = _status.value
         if (!st.txArmed || !st.running) return
         if (txJob?.isActive == true) return
-        val text = st.qso.txText ?: return
+        val text = st.manualTxText ?: st.qso.txText ?: return
         val slotMs = st.slotMs.toLong()
         if (slotMs <= 0) return
 
@@ -451,6 +651,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (slotIdx == lastTxSlotIndex) return
 
         lastTxSlotIndex = slotIdx
+        manualInFlight = st.manualTxText != null
         txJob = viewModelScope.launch(Dispatchers.IO) { transmit(text, slotIdx * slotMs) }
     }
 

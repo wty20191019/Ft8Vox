@@ -97,7 +97,7 @@ data class AppSettings(
     /** 我方发射周期：0=偶数，1=奇数。 */
     val txParity: Int = 0,
     /** 锁定发射频率（应答时不跟随对方频率）。 */
-    val holdTxFreq: Boolean = true,
+    val holdTxFreq: Boolean = false,
     /** Call 1st 自动应答策略。 */
     val callFirst: CallFirstMode = CallFirstMode.OFF,
     /** 自动序列最大重试次数。 */

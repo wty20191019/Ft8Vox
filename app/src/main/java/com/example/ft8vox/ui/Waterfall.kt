@@ -77,7 +77,7 @@ object WaterfallColors {
  * 瀑布视图：把 [frame] 画到 Canvas 上，点击可按 X 轴选频，并叠加 QSO 标记。
  *
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
- * [theirFreqHz] 为对手最近的音频频率（绿色竖线）；[txing] 为真时画红色边框表示正在发射。
+ * [rxFreqHz] 为选中的收听/应答频率（绿色竖线）；[txing] 为真时画红色边框表示正在发射。
  */
 @Composable
 fun WaterfallView(
@@ -86,7 +86,7 @@ fun WaterfallView(
     slotParity: Int,
     onSelectFrequency: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    theirFreqHz: Int? = null,
+    rxFreqHz: Int? = null,
     txing: Boolean = false,
 ) {
     val bitmap = remember(frame?.bins, frame?.rows) {
@@ -135,9 +135,9 @@ fun WaterfallView(
                 strokeWidth = 2f,
             )
 
-            // 对手频率竖线
-            if (theirFreqHz != null) {
-                val y = ((theirFreqHz - f.fMinHz) / span).coerceIn(0f, 1f) * size.width
+            // 选中/对手频率竖线（绿色）
+            if (rxFreqHz != null) {
+                val y = ((rxFreqHz - f.fMinHz) / span).coerceIn(0f, 1f) * size.width
                 drawLine(
                     color = Color(0xFF4CAF50),
                     start = Offset(y, 0f),

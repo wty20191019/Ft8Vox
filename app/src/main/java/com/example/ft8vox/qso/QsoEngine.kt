@@ -67,7 +67,7 @@ data class QsoProgress(
  * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]；
  * 若该时隙没有带来状态推进，会自动累计重试次数，超过 [maxRetries] 则放弃。
  */
-class QsoEngine(private val maxRetries: Int = 6) {
+class QsoEngine(private var maxRetries: Int = 6) {
 
     private var myCall: String = ""
     private var myGrid: String = ""
@@ -85,9 +85,11 @@ class QsoEngine(private val maxRetries: Int = 6) {
     /** 是否已配置好呼号，可以开始 QSO。 */
     val canOperate: Boolean get() = myCall.isNotEmpty()
 
-    fun configure(myCall: String, myGrid: String) {
+    /** 更新台站信息与最大重试次数（来自设置）。 */
+    fun configure(myCall: String, myGrid: String, maxRetries: Int = this.maxRetries) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
+        this.maxRetries = maxRetries.coerceIn(1, 50)
     }
 
     fun progress(): QsoProgress = QsoProgress(

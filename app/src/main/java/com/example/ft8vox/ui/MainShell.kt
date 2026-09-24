@@ -69,7 +69,11 @@ fun MainShell(
     ) { innerPadding ->
         Box(Modifier.fillMaxSize().padding(innerPadding)) {
             when (tab) {
-                MainTab.OPERATE -> OperateScreen(viewModel = session, settings = appSettings)
+                MainTab.OPERATE -> OperateScreen(
+                    viewModel = session,
+                    settings = appSettings,
+                    onOpenSettings = { tab = MainTab.SETTINGS },
+                )
                 MainTab.LOG -> LogScreen(
                     log = log,
                     myCall = appSettings.myCall,
