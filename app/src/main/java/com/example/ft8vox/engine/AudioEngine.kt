@@ -75,9 +75,20 @@ object AudioEngine {
         if (handle != 0L) nativeStopCapture(handle)
     }
 
-    /** 取走并清空自上次调用以来解出的报文。 */
-    fun pollDecoded(): List<String> =
+    /** 取走并清空自上次调用以来解出的报文（含指标）。 */
+    fun pollDecoded(): List<DecodeResult> =
         if (handle != 0L) nativePollDecoded(handle).toList() else emptyList()
+
+    /** waterfall 频率轴信息；未初始化时为 null。 */
+    fun waterfallInfo(): WaterfallInfo? {
+        if (handle == 0L) return null
+        val v = nativeWaterfallInfo(handle)
+        return WaterfallInfo(bins = v[0], binHz = v[1] / 1000f, fMinHz = v[2] / 1000f)
+    }
+
+    /** 取走新产生的 waterfall 行（每行 `waterfallInfo()!!.bins` 字节）。 */
+    fun pollWaterfall(maxRows: Int = 64): ByteArray =
+        if (handle != 0L) nativePollWaterfall(handle, maxRows) else ByteArray(0)
 
     /**
      * 打开播放流（不播放音频）。
@@ -132,7 +143,9 @@ object AudioEngine {
     private external fun nativeDestroy(handle: Long)
     private external fun nativeStartCapture(handle: Long, preferredRate: Int): Int
     private external fun nativeStopCapture(handle: Long)
-    private external fun nativePollDecoded(handle: Long): Array<String>
+    private external fun nativePollDecoded(handle: Long): Array<DecodeResult>
+    private external fun nativeWaterfallInfo(handle: Long): IntArray
+    private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
     private external fun nativeStartPlayback(handle: Long, preferredRate: Int): Int
     private external fun nativeStopPlayback(handle: Long)
     private external fun nativePlay(handle: Long, pcm: FloatArray): Int

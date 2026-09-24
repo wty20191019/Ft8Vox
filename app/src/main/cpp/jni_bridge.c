@@ -12,6 +12,7 @@
 #include <ft8/constants.h>
 
 #include "ftx_session.h"
+#include "jni_common.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -85,28 +86,82 @@ Java_com_example_ft8vox_engine_Ft8Engine_nativeProcess(
     (*env)->ReleaseFloatArrayElements(env, samples, data, JNI_ABORT);
 }
 
-// 对当前累积的 waterfall 解码，返回报文明文数组。
+// 对当前累积的 waterfall 解码，返回 DecodeResult[]（含 SNR/DT/DF/score）。
 JNIEXPORT jobjectArray JNICALL
 Java_com_example_ft8vox_engine_Ft8Engine_nativeDecode(JNIEnv* env, jobject thiz, jlong handle)
 {
-    jclass str_cls = (*env)->FindClass(env, "java/lang/String");
     ftx_session_t* session = (ftx_session_t*)(intptr_t)handle;
-    if (session == NULL || str_cls == NULL)
-        return (*env)->NewObjectArray(env, 0, str_cls, NULL);
 
-    char texts[K_MAX_DECODED_MESSAGES][FTX_MAX_MESSAGE_LENGTH];
-    int num_decoded = ftx_session_decode(session, texts, K_MAX_DECODED_MESSAGES);
+    jclass cls = ft8vox_decode_result_class(env);
+    jmethodID ctor = (cls != NULL)
+        ? (*env)->GetMethodID(env, cls, "<init>", FT8VOX_DECODE_RESULT_CTOR)
+        : NULL;
+    if (cls == NULL || ctor == NULL)
+        return NULL;
 
-    jobjectArray result = (*env)->NewObjectArray(env, num_decoded, str_cls, NULL);
+    ftx_decode_result_t results[K_MAX_DECODED_MESSAGES];
+    int num_decoded = 0;
+    if (session != NULL)
+        num_decoded = ftx_session_decode(session, results, K_MAX_DECODED_MESSAGES);
+
+    jobjectArray result = (*env)->NewObjectArray(env, num_decoded, cls, NULL);
+    if (result == NULL)
+        return NULL;
     for (int i = 0; i < num_decoded; ++i)
     {
-        jstring s = (*env)->NewStringUTF(env, texts[i]);
-        if (s != NULL)
+        // 离线解码没有时隙概念，slotUtcMs 置 0
+        jobject obj = ft8vox_make_decode_result(env, cls, ctor, &results[i], 0);
+        if (obj != NULL)
         {
-            (*env)->SetObjectArrayElement(env, result, i, s);
-            (*env)->DeleteLocalRef(env, s);
+            (*env)->SetObjectArrayElement(env, result, i, obj);
+            (*env)->DeleteLocalRef(env, obj);
         }
     }
+    return result;
+}
+
+// waterfall 静态信息：返回 [bins, binHz*1000, fMin*1000]。
+JNIEXPORT jintArray JNICALL
+Java_com_example_ft8vox_engine_Ft8Engine_nativeWaterfallInfo(JNIEnv* env, jobject thiz, jlong handle)
+{
+    ftx_session_t* session = (ftx_session_t*)(intptr_t)handle;
+    int bins = 0;
+    float bin_hz = 0.0f;
+    float f_min = 0.0f;
+    if (session != NULL)
+        ftx_session_waterfall_info(session, &bins, &bin_hz, &f_min);
+
+    jint values[3] = { (jint)bins, (jint)lroundf(bin_hz * 1000.0f), (jint)lroundf(f_min * 1000.0f) };
+    jintArray result = (*env)->NewIntArray(env, 3);
+    if (result != NULL)
+        (*env)->SetIntArrayRegion(env, result, 0, 3, values);
+    return result;
+}
+
+// 取走新产生的 waterfall 行（每行 bins 字节）。
+JNIEXPORT jbyteArray JNICALL
+Java_com_example_ft8vox_engine_Ft8Engine_nativePollWaterfall(
+    JNIEnv* env, jobject thiz, jlong handle, jint max_rows)
+{
+    ftx_session_t* session = (ftx_session_t*)(intptr_t)handle;
+    if (session == NULL || max_rows <= 0)
+        return (*env)->NewByteArray(env, 0);
+
+    int bins = 0;
+    ftx_session_waterfall_info(session, &bins, NULL, NULL);
+    if (bins <= 0)
+        return (*env)->NewByteArray(env, 0);
+
+    uint8_t* buf = (uint8_t*)malloc((size_t)bins * (size_t)max_rows);
+    if (buf == NULL)
+        return (*env)->NewByteArray(env, 0);
+
+    int rows = ftx_session_read_waterfall(session, buf, max_rows);
+    jbyteArray result = (*env)->NewByteArray(env, rows * bins);
+    if (result != NULL && rows > 0)
+        (*env)->SetByteArrayRegion(env, result, 0, rows * bins, (const jbyte*)buf);
+
+    free(buf);
     return result;
 }
 

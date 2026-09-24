@@ -16,6 +16,7 @@
 #include <ft8/constants.h>
 
 #include "ftx_session.h"
+#include "jni_common.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -243,7 +244,8 @@ typedef struct
 
     // 解码结果（等待 Kotlin 轮询取走）
     pthread_mutex_t res_mutex;
-    char results[RESULT_CAP][FTX_MAX_MESSAGE_LENGTH];
+    ftx_decode_result_t results[RESULT_CAP];
+    int64_t result_slot_ms[RESULT_CAP];
     int result_count;
 
     // 统计
@@ -275,17 +277,20 @@ static aaudio_data_callback_result_t capture_callback(
 /// 解码当前时隙并把结果追加到待轮询队列。
 static void decode_and_store(audio_engine_t* e)
 {
-    char texts[DECODE_BATCH][FTX_MAX_MESSAGE_LENGTH];
-    int n = ftx_session_decode(e->session, texts, DECODE_BATCH);
+    ftx_decode_result_t results[DECODE_BATCH];
+    int n = ftx_session_decode(e->session, results, DECODE_BATCH);
     atomic_fetch_add(&e->slots_decoded, 1);
     if (n <= 0)
         return;
 
+    // 本次解码对应的时隙起点（用于 UI 显示时间）
+    int64_t slot_start_ms = atomic_load(&e->last_slot) * e->slot_ms;
+
     pthread_mutex_lock(&e->res_mutex);
     for (int i = 0; i < n && e->result_count < RESULT_CAP; ++i)
     {
-        strncpy(e->results[e->result_count], texts[i], FTX_MAX_MESSAGE_LENGTH - 1);
-        e->results[e->result_count][FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
+        e->results[e->result_count] = results[i];
+        e->result_slot_ms[e->result_count] = slot_start_ms;
         e->result_count++;
     }
     pthread_mutex_unlock(&e->res_mutex);
@@ -502,25 +507,79 @@ JNIEXPORT jobjectArray JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativePollDecoded(
     JNIEnv* env, jobject thiz, jlong handle)
 {
-    jclass str_cls = (*env)->FindClass(env, "java/lang/String");
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    if (e == NULL || str_cls == NULL)
-        return (*env)->NewObjectArray(env, 0, str_cls, NULL);
+    jclass cls = ft8vox_decode_result_class(env);
+    jmethodID ctor = (cls != NULL)
+        ? (*env)->GetMethodID(env, cls, "<init>", FT8VOX_DECODE_RESULT_CTOR)
+        : NULL;
+    if (e == NULL || cls == NULL || ctor == NULL)
+        return (*env)->NewObjectArray(env, 0,
+                                      (cls != NULL) ? cls : (*env)->FindClass(env, "java/lang/Object"), NULL);
 
     pthread_mutex_lock(&e->res_mutex);
     int n = e->result_count;
-    jobjectArray result = (*env)->NewObjectArray(env, n, str_cls, NULL);
-    for (int i = 0; i < n; ++i)
+    jobjectArray result = (*env)->NewObjectArray(env, n, cls, NULL);
+    if (result != NULL)
     {
-        jstring s = (*env)->NewStringUTF(env, e->results[i]);
-        if (s != NULL)
+        for (int i = 0; i < n; ++i)
         {
-            (*env)->SetObjectArrayElement(env, result, i, s);
-            (*env)->DeleteLocalRef(env, s);
+            jobject obj = ft8vox_make_decode_result(env, cls, ctor, &e->results[i],
+                                                    (jlong)e->result_slot_ms[i]);
+            if (obj != NULL)
+            {
+                (*env)->SetObjectArrayElement(env, result, i, obj);
+                (*env)->DeleteLocalRef(env, obj);
+            }
         }
     }
     e->result_count = 0;
     pthread_mutex_unlock(&e->res_mutex);
+    return result;
+}
+
+// waterfall 静态信息：返回 [bins, binHz*1000, fMin*1000]。
+JNIEXPORT jintArray JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeWaterfallInfo(
+    JNIEnv* env, jobject thiz, jlong handle)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    int bins = 0;
+    float bin_hz = 0.0f;
+    float f_min = 0.0f;
+    if (e != NULL)
+        ftx_session_waterfall_info(e->session, &bins, &bin_hz, &f_min);
+
+    jint values[3] = { (jint)bins, (jint)lroundf(bin_hz * 1000.0f), (jint)lroundf(f_min * 1000.0f) };
+    jintArray result = (*env)->NewIntArray(env, 3);
+    if (result != NULL)
+        (*env)->SetIntArrayRegion(env, result, 0, 3, values);
+    return result;
+}
+
+// 取走新产生的 waterfall 行（每行 bins 字节），供瀑布 UI 滚动显示。
+JNIEXPORT jbyteArray JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativePollWaterfall(
+    JNIEnv* env, jobject thiz, jlong handle, jint max_rows)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL || max_rows <= 0)
+        return (*env)->NewByteArray(env, 0);
+
+    int bins = 0;
+    ftx_session_waterfall_info(e->session, &bins, NULL, NULL);
+    if (bins <= 0)
+        return (*env)->NewByteArray(env, 0);
+
+    uint8_t* buf = (uint8_t*)malloc((size_t)bins * (size_t)max_rows);
+    if (buf == NULL)
+        return (*env)->NewByteArray(env, 0);
+
+    int rows = ftx_session_read_waterfall(e->session, buf, max_rows);
+    jbyteArray result = (*env)->NewByteArray(env, rows * bins);
+    if (result != NULL && rows > 0)
+        (*env)->SetByteArrayRegion(env, result, 0, rows * bins, (const jbyte*)buf);
+
+    free(buf);
     return result;
 }
 

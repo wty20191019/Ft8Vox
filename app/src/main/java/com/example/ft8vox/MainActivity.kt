@@ -89,7 +89,7 @@ private fun ReceiverScreen(modifier: Modifier = Modifier) {
         while (running) {
             val newMessages = AudioEngine.pollDecoded()
             if (newMessages.isNotEmpty()) {
-                messages = (newMessages + messages).take(50)
+                messages = (newMessages.map { it.text } + messages).take(50)
             }
             audioState = AudioEngine.state()
             delay(200)

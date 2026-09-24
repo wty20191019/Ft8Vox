@@ -2,8 +2,10 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <ft8/decode.h>
+#include <ft8/encode.h>
 #include <ft8/constants.h>
 
 // -----------------------------------------------------------------------------
@@ -13,6 +15,9 @@
 #define K_MAX_CANDIDATES       140
 #define K_LDPC_ITERATIONS      25
 #define K_MAX_DECODED_MESSAGES 50
+
+// waterfall 行流环形缓冲行数（约 600 * 0.08 s ≈ 48 s 的滚动窗口）
+#define K_WF_RING_ROWS 600
 
 // -----------------------------------------------------------------------------
 // 呼号哈希表：用于 ftx_message_decode() 还原被哈希压缩的呼号。
@@ -102,6 +107,24 @@ static ftx_callsign_hash_interface_t hash_if = {
 };
 
 // -----------------------------------------------------------------------------
+// 幅度 → 线性功率查找表（uint8 幅度按 0.5 dB 步进，覆盖 -120..7.5 dB）
+// -----------------------------------------------------------------------------
+static float kMagPowerLut[256];
+static bool kMagPowerLutReady = false;
+
+static void ensure_mag_power_lut(void)
+{
+    if (kMagPowerLutReady)
+        return;
+    for (int i = 0; i < 256; ++i)
+    {
+        float db = (float)i * 0.5f - 120.0f;
+        kMagPowerLut[i] = powf(10.0f, db / 10.0f);
+    }
+    kMagPowerLutReady = true;
+}
+
+// -----------------------------------------------------------------------------
 // 会话
 // -----------------------------------------------------------------------------
 struct ftx_session
@@ -109,11 +132,37 @@ struct ftx_session
     monitor_t mon;
     float* pending; ///< 未满一个 block 的余数缓冲，容量 = mon.block_size
     int pending_len;
+
+    // waterfall 行流（供 UI 滚动显示）：环形缓冲，每行 wf_bins 字节
+    uint8_t* wf_ring;
+    int wf_ring_rows;
+    int wf_bins;
+    int64_t wf_total;     ///< 累计产生的行数
+    int64_t wf_read;      ///< 已读走的行数
+    int wf_last_block;    ///< 已发射的最后 block 索引（跨 reset 用 -1 复位）
 };
 
-static int clamp_int(int v, int lo, int hi)
+/// 把最新一次 monitor_process 产生的 block 转成 time_osr 行写入环形缓冲。
+static void session_emit_waterfall(ftx_session_t* s)
 {
-    return (v < lo) ? lo : ((v > hi) ? hi : v);
+    if (s->wf_ring == NULL)
+        return;
+
+    const ftx_waterfall_t* wf = &s->mon.wf;
+    int block = wf->num_blocks - 1;
+    if (block < 0 || block <= s->wf_last_block)
+        return;
+    s->wf_last_block = block;
+
+    for (int ts = 0; ts < wf->time_osr; ++ts)
+    {
+        const uint8_t* src = wf->mag + (size_t)block * wf->block_stride +
+                             (size_t)ts * wf->freq_osr * wf->num_bins;
+        uint8_t* dst = s->wf_ring + (size_t)(s->wf_total % s->wf_ring_rows) * s->wf_bins;
+        for (int b = 0; b < s->wf_bins; ++b)
+            dst[b] = src[b]; // 取 freq_sub = 0（block 内布局为 [ts][freq_sub][bin]）
+        s->wf_total++;
+    }
 }
 
 ftx_session_t* ftx_session_create(const monitor_config_t* cfg)
@@ -125,12 +174,20 @@ ftx_session_t* ftx_session_create(const monitor_config_t* cfg)
     if (s == NULL)
         return NULL;
 
+    ensure_mag_power_lut();
     monitor_init(&s->mon, cfg);
 
     s->pending = (float*)calloc((size_t)s->mon.block_size, sizeof(float));
+    s->wf_bins = s->mon.wf.num_bins;
+    s->wf_ring_rows = K_WF_RING_ROWS;
+    s->wf_ring = (uint8_t*)calloc((size_t)s->wf_ring_rows * s->wf_bins, 1);
+    s->wf_last_block = -1;
     s->pending_len = 0;
-    if (s->pending == NULL)
+
+    if (s->pending == NULL || s->wf_ring == NULL)
     {
+        free(s->pending);
+        free(s->wf_ring);
         monitor_free(&s->mon);
         free(s);
         return NULL;
@@ -144,6 +201,7 @@ void ftx_session_free(ftx_session_t* session)
 {
     if (session == NULL)
         return;
+    free(session->wf_ring);
     free(session->pending);
     monitor_free(&session->mon);
     free(session);
@@ -155,6 +213,7 @@ void ftx_session_reset(ftx_session_t* session)
         return;
     session->pending_len = 0;
     monitor_reset(&session->mon);
+    session->wf_last_block = -1;
 }
 
 void ftx_session_process(ftx_session_t* session, const float* samples, int count)
@@ -177,6 +236,7 @@ void ftx_session_process(ftx_session_t* session, const float* samples, int count
         if (session->pending_len < bs)
             return;
         monitor_process(mon, session->pending);
+        session_emit_waterfall(session);
         session->pending_len = 0;
     }
 
@@ -184,6 +244,7 @@ void ftx_session_process(ftx_session_t* session, const float* samples, int count
     while (pos + bs <= count)
     {
         monitor_process(mon, samples + pos);
+        session_emit_waterfall(session);
         pos += bs;
     }
 
@@ -203,9 +264,108 @@ int ftx_session_slot_samples(const ftx_session_t* session)
     return session->mon.wf.max_blocks * session->mon.block_size;
 }
 
-int ftx_session_decode(ftx_session_t* session, char (*texts)[FTX_MAX_MESSAGE_LENGTH], int max_texts)
+int ftx_session_read_waterfall(ftx_session_t* session, uint8_t* out, int max_rows)
 {
-    if (session == NULL || texts == NULL || max_texts <= 0)
+    if (session == NULL || session->wf_ring == NULL || out == NULL || max_rows <= 0)
+        return 0;
+
+    // UI 落后时丢弃已被覆盖的旧行
+    int64_t oldest = session->wf_total - session->wf_ring_rows;
+    if (session->wf_read < oldest)
+        session->wf_read = oldest;
+
+    int64_t avail = session->wf_total - session->wf_read;
+    if (avail <= 0)
+        return 0;
+
+    int rows = (int)((avail < max_rows) ? avail : max_rows);
+    for (int i = 0; i < rows; ++i)
+    {
+        const uint8_t* src =
+            session->wf_ring + (size_t)((session->wf_read + i) % session->wf_ring_rows) * session->wf_bins;
+        memcpy(out + (size_t)i * session->wf_bins, src, (size_t)session->wf_bins);
+    }
+    session->wf_read += rows;
+    return rows;
+}
+
+void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* bin_hz, float* f_min)
+{
+    if (session == NULL)
+        return;
+    float sp = session->mon.symbol_period;
+    if (bins != NULL)
+        *bins = session->mon.wf.num_bins;
+    if (bin_hz != NULL)
+        *bin_hz = (sp > 0.0f) ? (1.0f / sp) : 0.0f;
+    if (f_min != NULL)
+        *f_min = (sp > 0.0f) ? ((float)session->mon.min_bin / sp) : 0.0f;
+}
+
+// -----------------------------------------------------------------------------
+// SNR 估计：按已知音调序列取信号 bin 功率，与同时段的平均 bin 功率比较，
+// 换算到 2500 Hz 参考带宽（与 WSJT-X 口径一致）。
+// -----------------------------------------------------------------------------
+static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                         const ftx_message_t* msg)
+{
+    int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? FT4_NN : FT8_NN;
+    uint8_t tones[FT4_NN];
+    if (wf->protocol == FTX_PROTOCOL_FT4)
+        ft4_encode(msg->payload, tones);
+    else
+        ft8_encode(msg->payload, tones);
+
+    const int tstride = wf->freq_osr * wf->num_bins;
+    int ts = (cand->time_sub < wf->time_osr) ? cand->time_sub : 0;
+    int fs = (cand->freq_sub < wf->freq_osr) ? cand->freq_sub : 0;
+
+    float signal_sum = 0.0f;
+    int signal_n = 0;
+    double noise_sum = 0.0;
+    long noise_n = 0;
+
+    for (int i = 0; i < num_tones; ++i)
+    {
+        int block = cand->time_offset + i;
+        if (block < 0 || block >= wf->num_blocks)
+            continue;
+
+        const WF_ELEM_T* base =
+            wf->mag + (size_t)block * wf->block_stride + (size_t)ts * tstride;
+
+        int fbin = cand->freq_offset + tones[i];
+        if (fbin >= 0 && fbin < wf->num_bins)
+        {
+            signal_sum += kMagPowerLut[base[(size_t)fs * wf->num_bins + fbin]];
+            signal_n++;
+        }
+        // 噪声底：排除整段音调区间（freq_offset .. freq_offset+7）及其邻域，
+        // 避免把信号自身的频谱泄漏算进噪声。
+        for (int b = 0; b < wf->num_bins; ++b)
+        {
+            if (b >= cand->freq_offset - 2 && b <= cand->freq_offset + 9)
+                continue;
+            noise_sum += kMagPowerLut[base[(size_t)fs * wf->num_bins + b]];
+            noise_n++;
+        }
+    }
+
+    if (signal_n <= 0 || noise_n <= 0)
+        return -24.0f;
+
+    double ratio = (double)(signal_sum / signal_n) / (noise_sum / noise_n);
+    if (ratio <= 0.0)
+        return -24.0f;
+
+    float symbol_period = (wf->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    float bin_hz = 1.0f / symbol_period;
+    return 10.0f * log10f((float)ratio) + 10.0f * log10f(bin_hz / 2500.0f);
+}
+
+int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results)
+{
+    if (session == NULL || results == NULL || max_results <= 0)
         return 0;
 
     const ftx_waterfall_t* wf = &session->mon.wf;
@@ -260,15 +420,28 @@ int ftx_session_decode(ftx_session_t* session, char (*texts)[FTX_MAX_MESSAGE_LEN
 
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t offsets;
-        if (ftx_message_decode(&message, &hash_if, text, &offsets) == FTX_MESSAGE_RC_OK)
-        {
-            if (num_decoded < max_texts)
-            {
-                strncpy(texts[num_decoded], text, FTX_MAX_MESSAGE_LENGTH - 1);
-                texts[num_decoded][FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
-                num_decoded++;
-            }
-        }
+        if (ftx_message_decode(&message, &hash_if, text, &offsets) != FTX_MESSAGE_RC_OK)
+            continue;
+
+        if (num_decoded >= max_results)
+            continue;
+
+        ftx_decode_result_t* out = &results[num_decoded];
+        strncpy(out->text, text, FTX_MAX_MESSAGE_LENGTH - 1);
+        out->text[FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
+
+        float freq_hz = (session->mon.min_bin + cand->freq_offset +
+                         (float)cand->freq_sub / wf->freq_osr) / session->mon.symbol_period;
+        float time_sec = (cand->time_offset + (float)cand->time_sub / wf->time_osr) *
+                         session->mon.symbol_period;
+
+        out->df = (int)lroundf(freq_hz);
+        // 发射/接收的名义起点在时隙起点后 0.5 s；减去它以得到 WSJT-X 口径的 DT
+        out->dt = time_sec - 0.5f;
+        out->score = cand->score;
+        out->snr = (int)lroundf(measure_snr(wf, cand, &message));
+
+        num_decoded++;
     }
 
     // 呼号哈希表老化（跨时隙保留）
