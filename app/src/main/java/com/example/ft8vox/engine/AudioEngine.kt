@@ -2,8 +2,10 @@ package com.example.ft8vox.engine
 
 /** 实时音频引擎的状态快照（对应 native 的 audio_engine_t 统计字段）。 */
 data class AudioState(
-    val capturing: Boolean,
-    val slotActive: Boolean,
+    /** 采集流是否在运行（native running）。 */
+    val running: Boolean,
+    /** 当前是否处于时隙累积窗口内（native capturing）。 */
+    val inSlot: Boolean,
     val inputRate: Int,
     val outputRate: Int,
     val fedSamples: Long,
@@ -98,8 +100,8 @@ object AudioEngine {
         if (handle == 0L) return null
         val v = nativeGetState(handle)
         return AudioState(
-            capturing = v[0] != 0L,
-            slotActive = v[1] != 0L,
+            running = v[0] != 0L,
+            inSlot = v[1] != 0L,
             inputRate = v[2].toInt(),
             outputRate = v[3].toInt(),
             fedSamples = v[4],

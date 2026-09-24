@@ -1,6 +1,8 @@
 package com.example.ft8vox
 
+import android.Manifest
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
@@ -8,18 +10,29 @@ import com.example.ft8vox.engine.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * 阶段 4 的实时音频引擎测试：重采样质量（确定性）与采集生命周期冒烟。
+ * 阶段 4 的实时音频引擎测试：重采样质量（确定性）、采集生命周期冒烟，
+ * 以及真机上的实时采集→解码整时隙验证。
  *
- * 采集测试在无音频设备的模拟器上会自动跳过（Assume）。
+ * 采集类测试在无音频设备的模拟器上会自动跳过（Assume）。
  */
 @RunWith(AndroidJUnit4::class)
 class AudioEngineTest {
+
+    /** 直接通过 shell 授予麦克风权限，避免 OEM 弹窗阻塞测试。 */
+    @Before
+    fun grantMicrophone() {
+        val instrument = InstrumentationRegistry.getInstrumentation()
+        instrument.uiAutomation
+            .executeShellCommand("pm grant ${instrument.targetContext.packageName} ${Manifest.permission.RECORD_AUDIO}")
+            .close()
+    }
 
     /** 48 kHz 的 1 kHz 正弦重采样到 12 kHz 后，长度应约为 1/4、频率仍为 1 kHz。 */
     @Test
@@ -54,7 +67,7 @@ class AudioEngineTest {
             val state = AudioEngine.state()
             assertTrue("状态为空", state != null)
             assertEquals("FT8 时隙应为 15000 ms", 15000L, state!!.slotMs)
-            assertTrue("采集未处于运行状态", state.capturing)
+            assertTrue("采集流未处于运行状态", state.running)
 
             AudioEngine.stopCapture()
         } finally {
@@ -65,7 +78,7 @@ class AudioEngineTest {
     /** FT4 时隙应为 7500 ms。 */
     @Test
     fun ft4SlotLength() {
-        AudioEngine.initialize(Ft8Config(protocol = com.example.ft8vox.engine.Protocol.FT4))
+        AudioEngine.initialize(Ft8Config(protocol = Protocol.FT4))
         try {
             val state = AudioEngine.state()
             assertEquals("FT4 时隙应为 7500 ms", 7500L, state!!.slotMs)
@@ -92,6 +105,34 @@ class AudioEngineTest {
             assertTrue("重采样后未能解出 '$message'，实际=$messages", messages.any { it.contains(message) })
         } finally {
             Ft8Engine.release()
+        }
+    }
+
+    /**
+     * 真机实时链路：打开麦克风采集，等待至少完成一个完整时隙的解码周期。
+     * 时隙对齐 + 采集满一个时隙最坏约 30 s，故给 45 s 上限。
+     */
+    @Test
+    fun realtimeCaptureCompletesOneSlot() {
+        AudioEngine.initialize(Ft8Config())
+        try {
+            val rate = AudioEngine.startCapture(48000)
+            Assume.assumeTrue("音频采集不可用（无音频设备/模拟器），跳过", rate > 0)
+
+            val deadline = System.currentTimeMillis() + 45_000
+            var slots = 0L
+            while (System.currentTimeMillis() < deadline) {
+                val state = AudioEngine.state()
+                if (state != null && state.slotsDecoded >= 1) {
+                    slots = state.slotsDecoded
+                    break
+                }
+                Thread.sleep(500)
+            }
+            assertTrue("45 秒内未完成一个时隙的实时解码周期", slots >= 1)
+        } finally {
+            AudioEngine.stopCapture()
+            AudioEngine.release()
         }
     }
 }
