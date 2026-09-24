@@ -80,7 +80,11 @@ fun MainShell(
                     myGrid = appSettings.myGrid.ifEmpty { null },
                     onOpenSettings = { tab = MainTab.SETTINGS },
                 )
-                MainTab.GRID -> GridScreen(log = log)
+                MainTab.GRID -> GridScreen(
+                    log = log,
+                    session = session,
+                    onOpenLog = { tab = MainTab.LOG },
+                )
                 MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log)
             }
         }
