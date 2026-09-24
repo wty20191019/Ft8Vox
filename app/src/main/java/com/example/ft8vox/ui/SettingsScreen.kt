@@ -35,6 +35,7 @@ import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
+import com.example.ft8vox.data.settings.SampleRatePref
 
 /** 设置页：台站信息、日志与 ADIF、关于。 */
 @Composable
@@ -225,6 +226,28 @@ fun SettingsScreen(
         StepperRow("频率上限 Hz", app.decode.fMaxHz, DecodeSettings.F_MAX_RANGE, step = 50) { v ->
             settings.updateDecode { it.copy(fMaxHz = v) }
         }
+
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+        // ---- 音频 ----
+        Text("音频", style = MaterialTheme.typography.titleSmall)
+        Text("采样率偏好", style = MaterialTheme.typography.bodyMedium)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (p in SampleRatePref.entries) {
+                FilterChip(
+                    selected = app.sampleRate == p,
+                    onClick = { settings.update { s -> s.copy(sampleRate = p) } },
+                    label = { Text(p.label) },
+                )
+            }
+        }
+        Text(
+            "改动在下次「开始接收」时生效；设备实际采样率可能与此不同（以状态栏显示为准）。输入/输出设备目前用系统默认，未做设备路由。",
+            style = MaterialTheme.typography.labelSmall,
+        )
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 

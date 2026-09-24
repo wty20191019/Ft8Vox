@@ -297,7 +297,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         wfPeak = 0
         _waterfall.value = null
 
-        val rate = AudioEngine.startCapture(48000)
+        val rate = AudioEngine.startCapture(preferredRate())
         if (rate <= 0) {
             AudioEngine.release()
             wfInfo = null
@@ -458,7 +458,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */
     private fun armPlayback(): Boolean {
-        val rate = AudioEngine.startPlayback(48000)
+        val rate = AudioEngine.startPlayback(preferredRate())
         if (rate <= 0) {
             _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }
             return false
@@ -466,6 +466,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(outputRate = rate) }
         return true
     }
+
+    /** 音频设备采样率偏好：0（自动）回落到 48000。 */
+    private fun preferredRate(): Int =
+        latestSettings.sampleRate.hz.takeIf { it > 0 } ?: 48000
 
     // ---- 轮询主循环 ----
 
