@@ -298,6 +298,26 @@ com/example/ft8vox/
 > - **2026-09-25 需求细化与顺序调整**：用户确认操作页按 **JTDX/FT8CN 经典分区**做（彩色分类行 + 独立 Rx/Tx 频率面板 + Hold Tx），
 >   网格页必须是**地图网格**并**实时显示当前接收的台站与信号**（实时点叠加历史底图，参考 FT8CN / GridTracker2）；
 >   子阶段顺序调整为 **7c → 7d → 7b**（先落地本轮强调的两块）。详见 `docs/UI-DESIGN.md` 第 5.1 / 5.3 节。
+> - **2026-09-25 7c 操作页强化完成**（`8af302f`）：
+>   - 新增纯逻辑：`qso/DecodeHighlight.kt`（`CallPrefix` 紧凑前缀、`WorkedIndex`、`HighlightRole`/`DecodeStyle`/`DecodeHighlight`，
+>     高亮优先级 当前 QSO(琥珀) > 发给我(亮蓝加粗) > 新网格(绿) > 新前缀(红) > 普通(灰)）、
+>     `qso/DecodeFilter.kt`（`DecodeFilterState`/`DecodeFilter`/`CallFirstSelector`，CQ only / 排除已通联 / 呼号过滤）。
+>   - `SessionViewModel`：Rx（`rxFreqHz`）/ Tx（`selectedFreqHz`）频率分离、`workedIndex` 派生、显示过滤、
+>     逐条「一次性发射」`sendOnce`、Call 1st 武装/解除与自动应答、`clampFreq`、`currentFilter`；
+>     `QsoEngine.configure(myCall, myGrid, maxRetries)`。
+>   - `OperateScreen` 重写为经典分区（标题/状态栏/瀑布/频率轴/Rx-Tx 面板/过滤行/解码列表/折叠控制面板 + 三类弹窗）；
+>     `AppSettings.holdTxFreq` 默认改为 **false**（点谁打谁）。
+>   - **验证**：JVM 单测 85 项全过（新增高亮/过滤分类）；模拟器新版面渲染与 Call 1st 防误发弹窗文案正确。
+> - **2026-09-25 7d 网格页完成**（`e4c6df5`）：
+>   - 新增纯逻辑：`grid/MapProjection.kt`（等距圆柱投影 + 视口，`fit`/`fill`、缩放锚点、平移钳制）、
+>     `grid/GridIndex.kt`（`GridGranularity` 大网格/小网格归并、已确认优先）、
+>     `qso/SpotBuilder.kt`（本会话解码构造实时台站：15 分钟窗口、同呼号取最近、`gridCache` 补全网格、排除自己）。
+>   - 新增渲染 `ui/GridMap.kt`（Canvas：世界网格线 + 经纬网 + 历史着色单元 + 实时点，最小可见尺寸/SNR 半径）。
+>   - 重写 `ui/GridScreen.kt`：2:1 全球地图、手势缩放平移、点击命中选取台站或网格、粒度/实时切换、适应窗口、
+>     图例、选中详情（可应答 / 跳日志）、当前接收列表；`MainShell` 传入 `session` 与跳日志回调。
+>   - **验证**：JVM 单测 107 项全过（新增投影/网格索引/实时台站 21 项）；模拟器实测地图渲染、点击选取与详情面板、
+>     粒度切换、图例与当前接收列表。
+>   - **已知限制**：模拟器无信号，「实时 N 台」恒为 0，实时点绘制与命中交由单测覆盖，真机回归放 7e。
 > - 本阶段**明确不做**：Hound/Fox（DXpedition）、在线地图瓦片、精确 DXCC 实体表、云日志上传。
 
 ### 阶段 8：开源就绪与首个 MVP 发布
