@@ -52,7 +52,7 @@
 | D3 | DSP 位置 | native 复用 `monitor.c` + kissfft | 必须扩展 CMake；Kotlin 侧不做 FFT |
 | D4 | 协议 | FT8 + FT4 | monitor 配置需支持协议切换，UI 需协议选择 |
 | D5 | 瀑布渲染 | Compose Canvas | 先跑通；性能不足再评估 SurfaceView/OpenGL |
-| D6 | 工具链 | 降到稳定版 | AGP 8.x + Gradle 8.x + compileSdk 35 + JDK 17/21 |
+| D6 | 工具链 | 不降级，固定版本 | 保留 AGP 9.3.2 / Gradle 9.5.0 / Kotlin 2.2.10 / JDK 25；只做版本锁定与构建可复现验证 |
 | D7 | 日志 | MVP 含 ADIF | 引入 Room 与 ADIF 读写 |
 | D8 | 调试 | 模拟器为主 | 必须补 `x86_64` ABI，并提供“文件注入 / WAV 导出”调试通道 |
 | D9 | 接入方式 | 声学耦合 + USB 声卡 | 音频路由需可切换；USB 相关只能真机验证 |
@@ -149,8 +149,10 @@ com/example/ft8vox/
 **目标**：在稳定的工具链上，一条命令能构建、跑测试、出 APK。
 
 任务：
-- 工具链降级：AGP 8.x + Gradle 8.x + Kotlin 稳定版 + compileSdk 35 + JDK 17/21；同步调整 `gradle/libs.versions.toml`、`gradle-wrapper.properties`、`gradle-daemon-jvm.properties`。
+- 工具链固定（不降级）：保留现有组合（AGP 9.3.2 / Gradle 9.5.0 / Kotlin 2.2.10 / JDK 25），不降级；在 `docs/BUILD.md` 中记录各组件版本。
+- 构建可复现：校验 `gradle-wrapper.properties` 的 `distributionSha256Sum`，CI 使用固定 JDK。
 - `ndk { abiFilters }` 增加 `x86_64`（模拟器）。
+  - AGP 9 新 DSL 注意：`ndk { abiFilters }` 必须放在 `defaultConfig` 内；顶层的 `android { ndk { ... } }` 会报 `Unresolved reference 'ndk'`。
 - 清理：删除 `jni_bridge.c.bak`；修正 `jni_bridge.c` 乱码注释；保留 `.gitignore`。
 - 建立 CI：编译 + Kotlin 单测 + native 编译（Windows/Ubuntu 至少其一）。
 - 仓库治理：分支策略、提交规范、`README`、`CONTRIBUTING`、`NOTICE`（ft8_lib 归属与许可证）。
@@ -332,7 +334,7 @@ com/example/ft8vox/
 
 | # | 风险 | 影响 | 应对 |
 | --- | --- | --- | --- |
-| R1 | 工具链过新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建失败 | 阶段 0 统一降级到稳定组合并锁定版本 |
+| R1 | 工具链较新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建不可复现 | 阶段 0 锁定版本、校验 wrapper、CI 固定 JDK 并验证构建 |
 | R2 | AAudio 采样率/路由在模拟器与真机差异大 | 采集不可用或失真 | native 重采样 + 真机验证 + 文件注入兜底 |
 | R3 | 音频时钟抖动 / 时隙漂移 | 解码率下降或漏解 | 动态对齐、窗口余量、丢帧统计与补偿 |
 | R4 | `audio.c` 依赖 PortAudio | 若误加入编译会失败 | CMake 明确排除，只编 monitor/wave/kissfft/ft8 |

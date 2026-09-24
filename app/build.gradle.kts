@@ -17,6 +17,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // 保留 32/64 位 ARM（真机），并加入 x86_64 以便在模拟器上运行 native
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -38,10 +43,6 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
-    }
-    
-    ndk {
-        abiFilters += listOf("arm64-v8a", "armeabi-v7a")
     }
 }
 
