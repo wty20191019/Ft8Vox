@@ -5,10 +5,12 @@
 
 ## 1. 命名与符号
 
-- Kotlin 入口类：`com.example.ft8vox.engine.Ft8Engine`（当前为 `object`）。
+- Kotlin 入口类（均为 `object`，位于 `com.example.ft8vox.engine`）：
+  - `Ft8Engine`：离线解码 / 编码。
+  - `AudioEngine`：实时音频 I/O 与时隙调度。
 - native 函数符号必须遵循 `Java_<包名下划线>_<类名>_<方法名>`。
   - 例：`Ft8Engine.test()` → `Java_com_example_ft8vox_engine_Ft8Engine_test`。
-- **重命名类或包时，必须同步修改 `app/src/main/cpp/jni_bridge.c`。**
+- **重命名类或包时，必须同步修改 `app/src/main/cpp/jni_bridge.c` / `audio_engine.c`。**
 - 这些 JNI 类/方法必须在 `app/src/main/keepRules/rules.keep` 中保留（防 release 混淆）。
 
 ## 2. 数据格式约定
@@ -18,16 +20,19 @@
 | PCM 格式 | 单声道、`float32`、取值范围 `[-1.0, 1.0]` |
 | 分析采样率 | **12 kHz**（FT8/FT4 标准） |
 | 采集采样率 | 设备原生（常见 48 kHz），由 native 重采样到 12 kHz |
-| 大数组传递 | 优先 Direct `ByteBuffer` 或 native 分配，避免每次 JNI 拷贝 |
+| 大数组传递 | **`FloatArray`**（`GetFloatArrayElements` 读取，块间无拷贝） |
 | 文本编码 | UTF-8（报文为 ASCII 子集） |
 | 协议 | 枚举 `Protocol { FT8, FT4 }` |
 
-## 3. 生命周期接口
+> 解码核心（monitor + 呼号哈希 + 候选/解码）已抽取为 native 模块 `ftx_session.c`，
+> 离线（`jni_bridge.c`）与实时（`audio_engine.c`）两条路径共用。
+
+## 3. 生命周期接口（Ft8Engine，离线）
 
 | Kotlin 方法 | 职责 | 线程 |
 | --- | --- | --- |
 | `initialize(config: Ft8Config)` | 创建并初始化 monitor/waterfall（协议、采样率、频率范围、过采样率） | 初始化线程 |
-| `reset()` | 清空当前时隙的 waterfall 与解码缓存，准备下一周期 | 解码线程 |
+| `reset()` | 清空当前时隙的 waterfall 与分块缓冲，准备下一周期 | 解码线程 |
 | `release()` | 释放 native 资源 | 与 initialize 同线程 |
 
 `Ft8Config` 字段（对应 `monitor_config_t`）：`protocol`、`sampleRate`、`fMin`、`fMax`、`timeOsr`、`freqOsr`。
@@ -36,7 +41,7 @@
 
 | Kotlin 方法 | 职责 |
 | --- | --- |
-| `processAudio(samples, length)` | 接收一块 12 kHz PCM，内部调用 `monitor_process` 累积 waterfall |
+| `processAudio(samples, length)` | 接收任意长度的 12 kHz PCM；native 内部按 monitor 块大小累积，余数留待下次（支持流式分块喂入） |
 | `decode(): List<String>` | 时隙结束时调用，执行候选查找 + 解码，返回本周期报文**明文**列表 |
 
 > 说明：阶段 2 先返回报文明文（`List<String>`）。
@@ -67,29 +72,57 @@
 - 覆盖报文：标准报文（CQ、呼叫、R/RR73/73）、自由文本；FT8 与 FT4。
 - 生成的 PCM 可直接交给 AAudio 播放，或落盘为 WAV 供离线验证。
 
-## 6. 调试接口
+## 6. 实时音频接口（AudioEngine）
 
 | Kotlin 方法 | 职责 |
 | --- | --- |
-| `test(): String` | 占位握手，验证 so 加载（阶段 1） |
-| `version(): String` | 返回引擎版本（后续可加） |
+| `initialize(config: Ft8Config)` | 创建实时引擎（内部建 monitor 会话）；重复调用先释放 |
+| `release()` | 停止采集/播放并释放 |
+| `startCapture(preferredRate = 48000): Int` | 打开 AAudio 采集流并启动 DSP 线程；返回**设备实际采样率**，负数为错误码 |
+| `stopCapture()` | 停止采集并释放采集侧资源 |
+| `pollDecoded(): List<String>` | 取走并清空自上次调用以来解出的报文（**拉取模型**，无 native 回调） |
+| `startPlayback(preferredRate = 48000): Int` | 以阻塞写模式打开 AAudio 播放流；返回设备实际采样率，负数为错误码 |
+| `stopPlayback()` | 关闭播放流 |
+| `play(pcm: FloatArray): Int` | 播放一个时隙的 12 kHz PCM（内部重采样到输出采样率），返回写入帧数 |
+| `state(): AudioState?` | 状态快照（capturing / slotActive / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间） |
+| `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
-## 7. 线程模型
+`startCapture` 错误码：`-1` 未初始化、`-2` 无法创建 stream builder、`-3` 打开输入流失败、`-4` DSP 线程创建失败、`-5` 启动输入流失败。
+`startPlayback` 错误码：`-1` 未初始化、`-2` 无法创建 builder、`-3` 打开输出流失败、`-4` 启动失败。
+
+实现约定：
+
+- **采集**：请求 `preferredRate`（优先 48 kHz），native 重采样到 12 kHz。
+  降采样先过 **4 阶 Butterworth 低通**（截止约 `0.35 × outRate`，抗混叠），再线性插值；升采样直接线性插值。
+- **时隙调度**：按 UTC 对齐（FT8 = 15 s，FT4 = 7.5 s）。仅在时隙起点后 200 ms 内开始采集，累积满 `slot_samples` 后解码；若跨入下个时隙则先解码已采集部分并重新对齐。
+- **线程**：AAudio 回调只写入无锁 SPSC 环形缓冲（不分配、不加锁）；DSP 线程负责重采样与解码。
+- **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。
+
+## 7. 调试接口
+
+| Kotlin 方法 | 职责 |
+| --- | --- |
+| `Ft8Engine.test(): String` | 占位握手，验证 so 加载（阶段 1） |
+| `AudioEngine.resample(input, inRate, outRate): FloatArray` | 测试用重采样，验证抗混叠链路（内部接口） |
+
+## 8. 线程模型
 
 - **AAudio 回调线程**：只把 PCM 写入无锁 SPSC 环形缓冲，绝不调用重 JNI、加锁或分配内存。
-- **DSP/解码线程**：从环形缓冲取满一个时隙后调用 `processAudio` / `decode`。
-- **发射线程**：调用 `encode` 生成 PCM，写入 AAudio 播放流。
-- native 对象（monitor 等）与创建它的线程绑定；若跨线程回调需 `AttachCurrentThread`。
-- MVP 阶段解码结果**同步返回**，不引入 native → Kotlin 回调。
+- **DSP/解码线程**：从环形缓冲取数据 → 重采样 → 按块累积 waterfall → 时隙结束解码，结果进入待轮询队列。
+- **发射线程**：调用 `encode` 生成 PCM，`play()` 内部重采样后阻塞写入 AAudio 播放流。
+- native 对象（monitor 等）与创建/使用它的线程绑定；若跨线程调用 JNI 需 `AttachCurrentThread`。
+- MVP 阶段解码结果**拉取返回**，不引入 native → Kotlin 回调。
 
-## 8. 错误处理
+## 9. 错误处理
 
 - 参数非法（采样率、频率范围、协议）在 `initialize` 时校验并抛出异常。
 - 解码失败（LDPC/CRC 未通过）不抛异常，仅不产生结果；调试信息（`ldpc_errors`、CRC）通过日志输出。
+- `startCapture` / `startPlayback` 失败返回负错误码而非崩溃，UI 据此提示（如模拟器无音频设备）。
 - native 崩溃需最小化：所有输入数组长度先校验再访问。
 
-## 9. 待定
+## 10. 待定
 
 - ~~大块 PCM 用 `FloatArray` 还是 Direct `ByteBuffer`~~ → **已定稿：`FloatArray`**（阶段 2 采用，`GetFloatArrayElements` 读取，块间无拷贝）。若后续实测发现拷贝开销明显，再评估 Direct `ByteBuffer`。
-- 重采样算法（native 自写 vs 轻量库）。
-- 是否提供 native → Kotlin 的增量解码回调（当前不需要）。
+- ~~重采样算法（native 自写 vs 轻量库）~~ → **已定稿：native 自写**（阶段 4：4 阶 Butterworth 抗混叠 + 线性插值，无第三方依赖）。
+- 是否提供 native → Kotlin 的增量解码回调（当前采用拉取模型，暂不需要）。
+- 设备路由选择（内置 / USB / 蓝牙）与音频模式（`MODE_IN_COMMUNICATION`）留待阶段 5–6。
