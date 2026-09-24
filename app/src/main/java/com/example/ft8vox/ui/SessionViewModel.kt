@@ -1,7 +1,14 @@
 package com.example.ft8vox.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ft8vox.container
+import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.data.log.QsoEntity
+import com.example.ft8vox.data.log.QsoRepository
+import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.settings.SettingsRepository
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Ft8Config
@@ -15,6 +22,7 @@ import com.example.ft8vox.qso.QsoState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,9 +47,12 @@ data class ReceiverStatus(
     val slotsDecoded: Long = 0,
     val droppedSamples: Long = 0,
     val selectedFreqHz: Int = 1000,
-    // ---- 发射/QSO ----
+    // ---- 台站（来自设置） ----
     val myCall: String = "",
     val myGrid: String = "",
+    /** 当前波段（无 CAT，由用户指定，用于记录与 ADIF 导出）。 */
+    val band: String = BandPlan.DEFAULT_BAND,
+    // ---- 发射/QSO ----
     /** 我方发射所在的周期：0=偶数，1=奇数。 */
     val txParity: Int = 0,
     /** 已确认发射（防误发闸门）。 */
@@ -58,27 +69,24 @@ data class ReceiverStatus(
     val theirFreqHz: Int? = null,
 )
 
-/** 一次已完成的通联（阶段 7 将写入 ADIF）。 */
-data class QsoRecord(
-    val theirCall: String,
-    val theirGrid: String?,
-    val reportSent: Int?,
-    val reportReceived: Int?,
-    val utcMs: Long,
-)
-
 /**
  * 会话状态管理：把实时引擎的轮询结果整理为不可变 UI 状态，并驱动 QSO 自动序列。
  *
  * - [messages]：解码列表（新→旧）
  * - [waterfall]：瀑布帧（滚动缓冲）
  * - [status]：状态栏、控制区与当前 QSO 进度
- * - [qsoLog]：已完成的通联记录（内存态）
+ * - [recentQso]：最近完成的通联（来自 Room）
+ *
+ * 设置以 DataStore 为唯一事实来源：本类只读 [SettingsRepository]，用户改动经
+ * [persist] 写回，再由设置流回灌到 [status]，避免两处状态各写各的。
  *
  * 发射调度：每个时隙检查一次，仅在我方周期（[ReceiverStatus.txParity]）且处于时隙起始窗口内
  * 调用 native 阻塞写播放；其余时间保持静音。
  */
-class SessionViewModel : ViewModel() {
+class SessionViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val settingsRepo: SettingsRepository = app.container.settings
+    private val qsoRepo: QsoRepository = app.container.qso
 
     private val _messages = MutableStateFlow<List<DecodeResult>>(emptyList())
     val messages: StateFlow<List<DecodeResult>> = _messages.asStateFlow()
@@ -89,8 +97,8 @@ class SessionViewModel : ViewModel() {
     private val _status = MutableStateFlow(ReceiverStatus())
     val status: StateFlow<ReceiverStatus> = _status.asStateFlow()
 
-    private val _qsoLog = MutableStateFlow<List<QsoRecord>>(emptyList())
-    val qsoLog: StateFlow<List<QsoRecord>> = _qsoLog.asStateFlow()
+    /** 最近 3 条通联（操作页展示）。 */
+    val recentQso: Flow<List<QsoEntity>> = qsoRepo.observeRecent(3)
 
     private val qsoEngine = QsoEngine(maxRetries = 6)
 
@@ -105,33 +113,64 @@ class SessionViewModel : ViewModel() {
     private var lastTxSlotIndex = -1L
     private var txJustFinished = false
 
+    /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
+    private var latestSettings = AppSettings()
+
+    init {
+        viewModelScope.launch {
+            settingsRepo.settings.collect { s ->
+                latestSettings = s
+                applySettings(s)
+            }
+        }
+    }
+
+    // ---- 设置 → 运行状态 ----
+
+    private fun applySettings(s: AppSettings) {
+        _status.update { cur ->
+            cur.copy(
+                myCall = s.myCall,
+                myGrid = s.myGrid,
+                band = s.band,
+                selectedFreqHz = s.selectedFreqHz,
+                txParity = s.txParity,
+                // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
+                protocol = if (cur.running) cur.protocol else s.protocol,
+                slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
+            )
+        }
+        qsoEngine.configure(s.myCall, s.myGrid)
+    }
+
+    private fun persist(transform: (AppSettings) -> AppSettings) {
+        viewModelScope.launch { settingsRepo.update(transform) }
+    }
+
     // ---- 配置 ----
 
     fun selectProtocol(protocol: Protocol) {
         if (_status.value.running) return
-        _status.update {
-            it.copy(protocol = protocol, slotMs = if (protocol == Protocol.FT4) 7500 else 15000)
-        }
+        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+        persist { it.copy(protocolName = protocol.name) }
     }
 
     fun selectFrequency(hz: Int) {
-        _status.update { it.copy(selectedFreqHz = hz.coerceAtLeast(0)) }
+        val v = hz.coerceAtLeast(0)
+        _status.update { it.copy(selectedFreqHz = v) }
+        persist { it.copy(selectedFreqHz = v) }
     }
 
-    fun setMyCall(call: String) {
-        val v = call.trim().uppercase()
-        _status.update { it.copy(myCall = v) }
-        qsoEngine.configure(v, _status.value.myGrid)
-    }
-
-    fun setMyGrid(grid: String) {
-        val v = grid.trim().uppercase()
-        _status.update { it.copy(myGrid = v) }
-        qsoEngine.configure(_status.value.myCall, v)
+    fun setBand(name: String) {
+        if (!BandPlan.contains(name)) return
+        _status.update { it.copy(band = name) }
+        persist { it.copy(band = name) }
     }
 
     fun setTxParity(parity: Int) {
-        _status.update { it.copy(txParity = parity.coerceIn(0, 1)) }
+        val v = parity.coerceIn(0, 1)
+        _status.update { it.copy(txParity = v) }
+        persist { it.copy(txParity = v) }
     }
 
     fun clearMessages() {
@@ -143,9 +182,18 @@ class SessionViewModel : ViewModel() {
     fun start() {
         if (_status.value.running) return
         val protocol = _status.value.protocol
+        val decode = latestSettings.decode
 
         try {
-            AudioEngine.initialize(Ft8Config(protocol = protocol))
+            AudioEngine.initialize(
+                Ft8Config(
+                    protocol = protocol,
+                    fMin = decode.fMinHz.toFloat(),
+                    fMax = decode.fMaxHz.toFloat(),
+                    timeOsr = decode.timeOsr,
+                    freqOsr = decode.freqOsr,
+                ),
+            )
         } catch (e: Exception) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }
             return
@@ -343,21 +391,27 @@ class SessionViewModel : ViewModel() {
         txTick()
     }
 
-    /** 把状态机进度同步到 UI 状态，并落地已完成的通联。 */
+    /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
     private fun applyQsoProgress(p: QsoProgress) {
         _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
-            _qsoLog.update { current ->
-                (listOf(
-                    QsoRecord(
-                        theirCall = entry.theirCall,
-                        theirGrid = entry.theirGrid,
-                        reportSent = entry.reportSent,
-                        reportReceived = entry.reportReceived,
-                        utcMs = entry.utcMs,
-                    ),
-                ) + current).take(100)
+            val st = _status.value
+            val entity = QsoEntity(
+                theirCall = entry.theirCall,
+                theirGrid = entry.theirGrid,
+                myCall = st.myCall,
+                myGrid = st.myGrid.ifEmpty { null },
+                utcMs = entry.utcMs,
+                band = st.band,
+                freqHz = BandPlan.dialHz(st.band),
+                mode = st.protocol.name,
+                reportSent = entry.reportSent,
+                reportReceived = entry.reportReceived,
+            )
+            viewModelScope.launch(Dispatchers.IO) {
+                qsoRepo.add(entity)
             }
+            _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
         }
     }
 
@@ -481,5 +535,7 @@ class SessionViewModel : ViewModel() {
     private companion object {
         /** 允许在时隙起点后多久内开始写播放（0.5 s 前导静音可吸收该延迟）。 */
         const val TX_START_WINDOW_MS = 1200L
+
+        fun slotMsOf(protocol: Protocol): Int = if (protocol == Protocol.FT4) 7500 else 15000
     }
 }

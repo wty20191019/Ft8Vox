@@ -4,13 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,39 +39,6 @@ private fun formatUtcHms(utcMs: Long): String {
         (secs / 60) % 60,
         secs % 60,
     )
-}
-
-/** 我的呼号 / 网格输入。 */
-@Composable
-fun MyStationRow(
-    myCall: String,
-    myGrid: String,
-    enabled: Boolean,
-    onCallChange: (String) -> Unit,
-    onGridChange: (String) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = myCall,
-            onValueChange = onCallChange,
-            label = { Text("我的呼号") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.weight(1f),
-        )
-        OutlinedTextField(
-            value = myGrid,
-            onValueChange = onGridChange,
-            label = { Text("网格") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.width(120.dp),
-        )
-    }
 }
 
 /** 发射周期选择 + 开始/停止。 */
