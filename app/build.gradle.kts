@@ -8,6 +8,8 @@ android {
     compileSdk {
         version = release(37)
     }
+    // 显式固定 NDK 版本，保证本地与 CI 一致、构建可复现
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.example.ft8vox"
