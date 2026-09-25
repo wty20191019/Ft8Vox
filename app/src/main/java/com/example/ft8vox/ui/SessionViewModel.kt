@@ -9,6 +9,8 @@ import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.SettingsRepository
+import com.example.ft8vox.engine.AlertTone
+import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.DecodeResult
@@ -156,6 +158,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的 VOX/PTT 配置；引擎重建后置空以强制重下发。 */
     private var lastVoxConfig: VoxConfig? = null
 
+    /** 最近一次下发给 native 的采集增益（dB），U7c。 */
+    private var lastInputGainDb: Int? = null
+
+    /** 最近一次生效的输出设备 id（U7c）；变化时需重开播放流。 */
+    private var lastOutputDeviceId: Int? = null
+
+    /** 最近一次生效的输入设备 id（U7c）；变化需重开采集流，运行中提示下次生效。 */
+    private var lastInputDeviceId: Int? = null
+
+    /** 「含我呼号哔声」提示音（U7d）。 */
+    private val alertTone = AlertTone()
+
     init {
         viewModelScope.launch {
             settingsRepo.settings.collect { s ->
@@ -194,6 +208,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
         applyDecodeParams(s)
         applyVox(s)
+        applyAudio(s)
     }
 
     /** 运行中把「热生效」的解码参数下发给 native（频率范围/OSR 需重启，见 [start]）。 */
@@ -224,6 +239,43 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
         watchdogMs = s.watchdogMs,
     )
+
+    /**
+     * 下发音频路由/增益（U7c）。
+     *
+     * - 采集增益：热生效；
+     * - 输出设备：变化时关闭播放流，下次 [armPlayback] 用新设备重开；
+     * - 输入设备：需重开采集流，运行中时不打断，提示下次开始接收生效。
+     */
+    private fun applyAudio(s: AppSettings, force: Boolean = false) {
+        if (force || s.inputGainDb != lastInputGainDb) {
+            lastInputGainDb = s.inputGainDb
+            AudioEngine.setInputGain(s.inputGainDb)
+        }
+
+        val outId = AudioDevices.parseId(s.outputDevice)
+        if (force || outId != lastOutputDeviceId) {
+            val changed = lastOutputDeviceId != null && outId != lastOutputDeviceId
+            lastOutputDeviceId = outId
+            if (changed) {
+                if (_status.value.txing) {
+                    _status.update { it.copy(status = "输出声卡将在下次发射生效") }
+                } else {
+                    AudioEngine.stopPlayback()
+                    if (_status.value.txArmed) armPlayback()
+                }
+            }
+        }
+
+        val inId = AudioDevices.parseId(s.inputDevice)
+        if (force || inId != lastInputDeviceId) {
+            val changed = lastInputDeviceId != null && inId != lastInputDeviceId
+            lastInputDeviceId = inId
+            if (changed && _status.value.running) {
+                _status.update { it.copy(status = "输入设备将在下次开始接收生效") }
+            }
+        }
+    }
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepo.update(transform) }
@@ -371,8 +423,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
         applyVox(latestSettings, force = true)
+        applyAudio(latestSettings, force = true)
 
-        val rate = AudioEngine.startCapture(preferredRate())
+        val rate = AudioEngine.startCapture(preferredRate(), inputDeviceId())
         if (rate <= 0) {
             AudioEngine.release()
             wfInfo = null
@@ -572,7 +625,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */
     private fun armPlayback(): Boolean {
-        val rate = AudioEngine.startPlayback(preferredRate())
+        val rate = AudioEngine.startPlayback(preferredRate(), outputDeviceId())
         if (rate <= 0) {
             _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }
             return false
@@ -584,6 +637,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 音频设备采样率偏好：0（自动）回落到 48000。 */
     private fun preferredRate(): Int =
         latestSettings.sampleRate.hz.takeIf { it > 0 } ?: 48000
+
+    /** 设置里保存的输入设备 id（0=系统默认）。 */
+    private fun inputDeviceId(): Int = AudioDevices.parseId(latestSettings.inputDevice)
+
+    /** 设置里保存的输出设备 id（0=系统默认）。 */
+    private fun outputDeviceId(): Int = AudioDevices.parseId(latestSettings.outputDevice)
 
     // ---- 轮询主循环 ----
 
@@ -614,6 +673,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (m.df > 0 && MessageParser.parse(m.text).addressedTo(my)) {
                     _status.update { s -> s.copy(rxFreqHz = m.df) }
                 }
+            }
+            // U7d：有报文叫我呼号时短促提示
+            if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {
+                alertTone.beep()
             }
         }
 
@@ -908,6 +971,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         txJob?.cancel()
         AudioEngine.stopCapture()
         AudioEngine.release()
+        alertTone.release()
         super.onCleared()
     }
 
@@ -951,3 +1015,16 @@ internal fun planTx(nowMs: Long, slotMs: Long, txParity: Int, preambleMs: Long):
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
 internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
+
+/**
+ * 「含我呼号哔声」判定（纯函数，便于单测，U7d）。
+ *
+ * 仅在开关打开、我方呼号非空，且本批解码中存在发给我（`to == myCall`）的报文时为真。
+ * 自己发出的报文不会被解码回来，因此不会误报。
+ */
+internal fun shouldAlertMyCall(beepOn: Boolean, myCall: String, texts: List<String>): Boolean {
+    if (!beepOn) return false
+    val my = myCall.trim()
+    if (my.isEmpty()) return false
+    return texts.any { MessageParser.parse(it).addressedTo(my) }
+}

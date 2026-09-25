@@ -57,6 +57,7 @@ import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WaterfallPalette
 import com.example.ft8vox.data.settings.WorkedStyle
+import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
 import com.example.ft8vox.ui.theme.VoxRxGreen
@@ -76,6 +77,11 @@ fun SettingsScreen(
     val app by settings.settings.collectAsState()
     val entries by log.entries.collectAsState()
     val sessionStatus by session.status.collectAsState()
+
+    // U7c：音频设备枚举（系统默认恒为首项）；设备插拔后需重进本页刷新
+    val context = LocalContext.current
+    val inputDevices = remember(context) { AudioDevices.inputs(context) }
+    val outputDevices = remember(context) { AudioDevices.outputs(context) }
 
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -203,13 +209,11 @@ fun SettingsScreen(
             PrefDivider()
             PrefDropdown(
                 title = "输出声卡",
-                subtitle = "设备枚举与路由属「音频路由」U7 项；当前使用系统默认输出",
-                options = listOf(""),
-                selected = "",
+                subtitle = "指定发射音频输出；USB 声卡插入后需重进本页刷新。设备 id 可能随插拔变化",
+                options = outputDevices.map { AudioDevices.formatId(it.id) },
+                selected = AudioDevices.formatId(AudioDevices.parseId(app.outputDevice)),
                 onSelect = { v -> settings.update { it.copy(outputDevice = v) } },
-                label = { if (it.isEmpty()) "系统默认" else it },
-                enabled = false,
-                badge = "U7",
+                label = { id -> AudioDevices.label(outputDevices, id) },
             )
             PrefDivider()
             PrefAction(
@@ -245,13 +249,11 @@ fun SettingsScreen(
         SettingsGroup("音频") {
             PrefDropdown(
                 title = "输入设备",
-                subtitle = "设备枚举依赖 U7；当前使用系统默认输入",
-                options = listOf(""),
-                selected = "",
+                subtitle = "指定接收音频输入；USB 声卡插入后需重进本页刷新。运行中切换需重新「开始接收」",
+                options = inputDevices.map { AudioDevices.formatId(it.id) },
+                selected = AudioDevices.formatId(AudioDevices.parseId(app.inputDevice)),
                 onSelect = { v -> settings.update { it.copy(inputDevice = v) } },
-                label = { if (it.isEmpty()) "系统默认" else it },
-                enabled = false,
-                badge = "U7",
+                label = { id -> AudioDevices.label(inputDevices, id) },
             )
             PrefDivider()
             PrefChoice(
@@ -265,12 +267,11 @@ fun SettingsScreen(
             PrefDivider()
             PrefStepper(
                 title = "输入增益",
+                subtitle = "对采集样本生效（含 VOX 电平读数），热生效",
                 value = app.inputGainDb,
                 range = -12..30,
                 unit = " dB",
                 onChange = { v -> settings.update { it.copy(inputGainDb = v) } },
-                enabled = false,
-                badge = "U7",
             )
         }
 
@@ -278,7 +279,7 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
-                subtitle = "FST4 需要 U7（ft8_lib 不支持）",
+                subtitle = "FST4 暂不支持：ft8_lib 无该模式，需自研调制解调",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
@@ -472,10 +473,9 @@ fun SettingsScreen(
             PrefDivider()
             PrefSwitch(
                 title = "含我呼号哔声",
+                subtitle = "有报文直接叫我呼号时，用系统提示音提醒",
                 checked = app.beepOnMyCall,
                 onCheckedChange = { v -> settings.update { it.copy(beepOnMyCall = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefSwitch(

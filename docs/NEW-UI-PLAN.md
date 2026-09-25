@@ -114,7 +114,9 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U6 设置页 | ✅ | | Preference 风格 8 组（台站/VOX/音频/FT8/高亮/外观/日志网络/关于）；新增 30+ 设置项落 DataStore；外观「暗/亮」「字体小中大」即时生效；高亮开关接入解码列表；未接后端项标 U7 置灰；JVM 168 测试全绿 |
 | U7a DXCC/ITU 实体表 | ✅ | | `qso/Dxcc.kt`：约 180 个实体（规范名 + 代表坐标 + CQ/ITU 区域）+ 呼号前缀映射（最长前缀优先，含常用呼号区扩展）；日志 DXCC 按实体去重；「新 DXCC / 新 ITU / 新 CQ 区域」开关点亮；JVM 180 测试全绿 |
 | U7b VOX/PTT native | ✅ | | native 输入电平/VOX 触发判定（音频/静音检测 + 阈值 + 去抖）；发射前导静音 + 前导音（1 kHz），`planTx` 对齐时隙起点；写入看门狗；测试音；状态栏/音频速览显示 VOX 电平；设置页 6.1 除「输出声卡」外全部点亮；JVM 187 + 设备端 26 测试全绿 |
-| U7 其余能力 | ⏳ | | 音频路由与增益、FST4、含我呼号哔声、局域网后台、在线日志、离线瓦片 |
+| U7c 音频路由与增益 | ✅ | | `engine/AudioDevices.kt` 枚举输入/输出设备（系统默认恒为首项）；AAudio `setDeviceId` 选择输入（`nativeStartCapture`）与输出（`nativeStartPlayback`）；`nativeSetInputGain` 采集增益在 DSP 线程热生效（含 VOX 电平，限幅防回绕）；设置页 6.1 输出声卡、6.2 输入设备/输入增益点亮，音频速览显示设备与增益；JVM 191 + 设备端 30 测试全绿 |
+| U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
+| U7 其余能力 | ⏳ | | FST4（`ft8_lib` 无该模式，需自研调制解调，暂缓）、局域网后台、在线日志、离线瓦片 |
 
 ### U2 落地说明（与设计的取舍）
 
@@ -164,7 +166,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **组件**：自建 Preference 风格原语——`SettingsGroup`（标题 + 圆角卡）、`PrefRow`（左标题/副标题 + 右控件，`minHeight 56dp`）、`PrefSwitch` / `PrefChoice`(FilterChip) / `PrefDropdown` / `PrefStepper`(`−/值/+`，按钮 48dp) / `PrefText` / `PrefAction` / `PrefInfo` / `PrefNote` / `U7Badge`。
 - **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；发射偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体/瀑布配色；CloudLog/LoTW/eQSL/局域网后台。`SampleRatePref` 增补 `96000`。
 - **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC/新 ITU/新 CQ 区域/新前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体（DXCC/ITU/CQ 区域/前缀）→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体/瀑布配色。
-- **标记「U7」置灰**：VOX/PTT 的**输出声卡**（设备枚举属「音频路由」项）、输入设备与增益、发射偏移、FST4、含我呼号哔声、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。`FST4` 未列入模式 Chip（`Protocol` 仅 FT8/FT4），以副标题「需要 U7」说明。（「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮。）
+- **标记「U7」置灰**：发射偏移、FST4（未列入模式 Chip，`Protocol` 仅 FT8/FT4）、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。（「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮；**输出声卡、输入设备与增益**已在 **U7c** 点亮；**含我呼号哔声**已在 **U7d** 点亮。）
 - **亮色主题的连带改造**：原 UI 直接引用硬编码 `VoxCard/VoxText/VoxOnSurfaceVariant/VoxSurfaceVariant/VoxBackground`，亮色下会失效；已全部改为 `MaterialTheme.colorScheme.{surface,onSurface,onSurfaceVariant,surfaceVariant,background}`，并把选中 Chip / 发送按钮 / 强调文字改用 `primary`。语义色（`barColor` 各高亮、`VoxRxGreen`/`VoxTxRed`/`VoxError`、地图标记、瀑布底层）保持固定，暗色表现不变；地图底图与瀑布图本身仍固定深色（设计如此）。
 - **模拟器验收**：设置页全部 8 组滚动渲染正常；主题切「亮」全局即时生效且**重启后回读一致**；字体切「大」字号明显放大；呼号/网格/波段等旧值回读一致；无崩溃（`logcat` 无 FATAL）。未接后端的项均为禁用态 + `U7` 徽标。
 
@@ -195,8 +197,33 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   - `sendNow` / `transmitTest`（立即发）也走 `playTx` 带完整前导。
 - **UI**：
   - 底部状态条 `VOX -xx dB ●`（触发点亮），音频速览显示电平/状态/触发方式/阈值/前导/看门狗；
-  - 设置页 6.1：VOX 触发/延迟/阈值、发射前导音与时长、测试音（含实时电平条）、PTT 延迟、看门狗全部启用；**输出声卡**保留 `U7`（归「音频路由」项）。
+  - 设置页 6.1：VOX 触发/延迟/阈值、发射前导音与时长、测试音（含实时电平条）、PTT 延迟、看门狗全部启用；**输出声卡**当时保留 `U7`（已由 **U7c** 点亮）。
 - **诚实边界**：无 CAT 时无法读取电台真实键控状态，`voxOpen` 仅为**输入音频活动**的近似提示，不参与发射门控；前导音结束后到 FT8 波形之间还有 0.5 s 的 WSJT-X 保护静音，需电台 VOX 的释放延时（hang time）覆盖该间隔，否则可能中途掉键。真机 VOX 键控效果需实际电台验证（见 `REGRESSION.md`）。
 - **测试**：新增 JVM `ui/VoxPlanTest.kt`（`planTx` 四种周期/前导组合、缩水前导、电平文案）；设备端 `VoxTxNativeTest.kt`（`playTx` 前导路径写入完成、测试音）。JVM **187/187**、设备端 **26/26** 全绿。
+
+### U7c 落地说明：音频路由与增益
+
+- **背景**：设计 §6.1 的「输出声卡」与 §6.2 的「输入设备 / 输入增益」此前只存设置值。U7c 用系统 `AudioManager` 枚举设备，并让 AAudio 按所选设备建流。
+- **设备枚举（`engine/AudioDevices.kt`）**：
+  - `inputs()/outputs()` 读取 `AudioManager.getDevices(...)`，返回 `{id, 名称, 类型标签}`；首项恒为「系统默认」（id 0）。
+  - 设备 id 即 `AudioDeviceInfo.getId()`，与 AAudio `setDeviceId` 同一编号；`parseId/formatId/label` 为纯函数（空串=默认，id 可能随插拔变化）。
+  - 枚举在进入设置页时快照一次（`remember`），故 USB 声卡插拔后需重进本页刷新。
+- **native（`audio_engine.c`）**：
+  - `nativeStartCapture(handle, rate, deviceId)` / `nativeStartPlayback(handle, rate, deviceId)`：`deviceId > 0` 时 `AAudioStreamBuilder_setDeviceId`，否则系统默认。
+  - `nativeSetInputGain(handle, gainDb)`：DSP 线程对原始采集块乘 `10^(dB/20)`（钳制 −12..30 dB），超过满幅限幅到 [−1,1] 防回绕；**该增益同时作用于 VOX 电平读数**。
+- **Kotlin 接线（`SessionViewModel`）**：
+  - `start()` → `startCapture(preferredRate(), inputDeviceId())`；`armPlayback()` → `startPlayback(preferredRate(), outputDeviceId())`。
+  - `applyAudio()`：增益热生效；输出设备变化时关闭旧播放流、下次发射用新设备重开（发射中则提示「下次发射生效」）；输入设备变化需重开采集流，运行中提示「下次开始接收生效」。
+  - 设置页 6.1 输出声卡、6.2 输入设备的下拉列出实际设备；输入增益步进器点亮；音频速览新增输入/输出设备与输入增益。
+- **测试**：新增 JVM `engine/AudioDevicesTest.kt`（id 编解码、显示文本回退）与设备端 `AudioRoutingTest.kt`（枚举含默认首项且 id 唯一、显式设备 id 打开采集流、增益下发后状态有限）。JVM **191/191**、设备端 **30/30** 全绿。模拟器实测：输出下拉列出「系统默认 / 内置扬声器 / 通话」，输入下拉另含「内置麦克风 / 远端混音 / 其他」。
+
+### U7d 落地说明：含我呼号哔声
+
+- **语义**：设计 §6.4 的「含我呼号哔声」= 收到**直接呼叫我方呼号**的报文（`ParsedMessage.addressedTo(myCall)`，即报文首字段为我呼号）时给一声提示；CQ、他台之间的通联不触发。自己发射的报文不会被解码回来，故不会误报。
+- **实现**：纯函数 `shouldAlertMyCall(beepOnMyCall, myCall, texts)`（开关关 / 呼号空 → 永假）；`engine/AlertTone.kt` 懒建 `ToneGenerator`（通知流，`TONE_PROP_BEEP` 150 ms）播放，构造或播放失败即静默降级并标记不再重试；`SessionViewModel.pollOnce` 有解码结果时判定并播放，`onCleared` 释放。
+- **UI**：设置页 6.4「含我呼号哔声」开关点亮。
+- **测试**：JVM `ui/MyCallAlertTest.kt`（开关/空呼号/发给他人/CQ/大小写/批量）7 例。JVM **198/198** 全绿。
+
+> **FST4**：`ft8_lib` 仅含 FT8/FT4 调制解调，FST4 需自研（LDPC/多种符号速率/GFSK），超出当前范围，暂缓。**离线瓦片**需打包瓦片资源，暂无数据源，暂缓。
 
 

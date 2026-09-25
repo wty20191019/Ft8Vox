@@ -38,11 +38,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.ui.theme.VoxError
@@ -187,10 +189,20 @@ fun Ft8VoxTopBar(
 /** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与触发配置）。 */
 @Composable
 private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
+    val context = LocalContext.current
+    val inputName = remember(appSettings.inputDevice) {
+        AudioDevices.label(AudioDevices.inputs(context), appSettings.inputDevice)
+    }
+    val outputName = remember(appSettings.outputDevice) {
+        AudioDevices.label(AudioDevices.outputs(context), appSettings.outputDevice)
+    }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
         Text("音频", style = MaterialTheme.typography.titleSmall)
+        Text("输入设备  $inputName", style = MaterialTheme.typography.labelSmall)
+        Text("输出设备  $outputName", style = MaterialTheme.typography.labelSmall)
         Text("输入采样率  ${if (status.inputRate > 0) "${status.inputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
         Text("输出采样率  ${if (status.outputRate > 0) "${status.outputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
+        Text("输入增益  ${appSettings.inputGainDb} dB", style = MaterialTheme.typography.labelSmall)
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Text("VOX", style = MaterialTheme.typography.titleSmall)
         Text(

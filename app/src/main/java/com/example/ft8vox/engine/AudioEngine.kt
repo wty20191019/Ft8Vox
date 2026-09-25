@@ -115,10 +115,11 @@ object AudioEngine {
 
     /**
      * 开始采集。
+     * @param deviceId 指定输入设备（AudioManager 的设备 id）；<=0 表示系统默认。
      * @return 设备实际采样率；负数表示失败（-1 未初始化，-2 无法建流，-3 打开失败…）。
      */
-    fun startCapture(preferredRate: Int = 48000): Int =
-        if (handle != 0L) nativeStartCapture(handle, preferredRate) else -1
+    fun startCapture(preferredRate: Int = 48000, deviceId: Int = 0): Int =
+        if (handle != 0L) nativeStartCapture(handle, preferredRate, deviceId) else -1
 
     /** 停止采集。 */
     fun stopCapture() {
@@ -142,10 +143,11 @@ object AudioEngine {
 
     /**
      * 打开播放流（不播放音频）。
+     * @param deviceId 指定输出设备（AudioManager 的设备 id）；<=0 表示系统默认。
      * @return 设备实际采样率；负数表示失败。
      */
-    fun startPlayback(preferredRate: Int = 48000): Int =
-        if (handle != 0L) nativeStartPlayback(handle, preferredRate) else -1
+    fun startPlayback(preferredRate: Int = 48000, deviceId: Int = 0): Int =
+        if (handle != 0L) nativeStartPlayback(handle, preferredRate, deviceId) else -1
 
     /** 关闭播放流。 */
     fun stopPlayback() {
@@ -185,6 +187,15 @@ object AudioEngine {
             config.leadToneMs.coerceIn(0, 2000),
             config.watchdogMs.coerceIn(1000, 60_000),
         )
+    }
+
+    /**
+     * 下发采集增益（热生效，U7c）。需先 [initialize]；未初始化时静默忽略。
+     * 增益在 native 对原始样本生效（含 VOX 电平），范围按设置页钳制到 -12..30 dB。
+     */
+    fun setInputGain(gainDb: Int) {
+        if (handle == 0L) return
+        nativeSetInputGain(handle, gainDb.coerceIn(-12, 30))
     }
 
     /** 读取当前状态快照。 */
@@ -232,12 +243,12 @@ object AudioEngine {
     )
 
     private external fun nativeDestroy(handle: Long)
-    private external fun nativeStartCapture(handle: Long, preferredRate: Int): Int
+    private external fun nativeStartCapture(handle: Long, preferredRate: Int, deviceId: Int): Int
     private external fun nativeStopCapture(handle: Long)
     private external fun nativePollDecoded(handle: Long): Array<DecodeResult>
     private external fun nativeWaterfallInfo(handle: Long): IntArray
     private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
-    private external fun nativeStartPlayback(handle: Long, preferredRate: Int): Int
+    private external fun nativeStartPlayback(handle: Long, preferredRate: Int, deviceId: Int): Int
     private external fun nativeStopPlayback(handle: Long)
     private external fun nativePlay(handle: Long, pcm: FloatArray): Int
     private external fun nativePlayTx(
@@ -256,6 +267,7 @@ object AudioEngine {
         leadToneMs: Int,
         watchdogMs: Int,
     )
+    private external fun nativeSetInputGain(handle: Long, gainDb: Int)
     private external fun nativeGetState(handle: Long): LongArray
     private external fun nativeUtcNowMs(): Long
     private external fun nativeResample(input: FloatArray, inRate: Int, outRate: Int): FloatArray?

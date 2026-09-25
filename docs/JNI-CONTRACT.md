@@ -99,17 +99,18 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 | `initialize(config: Ft8Config, decodeParams: DecodeParams = DecodeParams())` | 创建实时引擎（内部建 monitor 会话并下发解码参数）；重复调用先释放 |
 | `setDecodeParams(params: DecodeParams)` | 运行中热更新解码参数（见 4.1） |
 | `release()` | 停止采集/播放并释放 |
-| `startCapture(preferredRate = 48000): Int` | 打开 AAudio 采集流并启动 DSP 线程；返回**设备实际采样率**，负数为错误码 |
+| `startCapture(preferredRate = 48000, deviceId = 0): Int` | 打开 AAudio 采集流并启动 DSP 线程；`deviceId > 0` 时用 `AAudioStreamBuilder_setDeviceId` 指定输入设备（见 6.2），否则系统默认；返回**设备实际采样率**，负数为错误码 |
 | `stopCapture()` | 停止采集并释放采集侧资源 |
 | `pollDecoded(): List<DecodeResult>` | 取走并清空自上次调用以来解出的报文（**拉取模型**，无 native 回调） |
 | `waterfallInfo(): WaterfallInfo?` | waterfall 频率轴：`bins`、`binHz`（FT8/FT4 为 6.25 Hz）、`fMinHz` |
 | `pollWaterfall(maxRows = 64): ByteArray` | 取走新产生的 waterfall 行；每行 `bins` 字节（uint8 幅度，`2·dB+240`），行按时间先后排列 |
-| `startPlayback(preferredRate = 48000): Int` | 以阻塞写模式打开 AAudio 播放流；返回设备实际采样率，负数为错误码 |
+| `startPlayback(preferredRate = 48000, deviceId = 0): Int` | 以阻塞写模式打开 AAudio 播放流；`deviceId > 0` 时用 `AAudioStreamBuilder_setDeviceId` 指定输出设备，否则系统默认；返回设备实际采样率，负数为错误码 |
 | `stopPlayback()` | 关闭播放流 |
 | `play(pcm: FloatArray): Int` | 播放一个时隙的 12 kHz PCM（内部重采样到输出采样率），返回写入帧数 |
 | `playTx(pcm: FloatArray, pttSilenceMs = 0, leadToneMs = 0): Int` | 发射播放：在数据前插入 `pttSilenceMs` 静音与 `leadToneMs` 单音（前导音），带看门狗写入；返回写入帧数 |
 | `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音（VOX 键控/音量联调），返回写入帧数 |
 | `setVox(config: VoxConfig)` | 下发 VOX/PTT 配置（热生效，见 6.1） |
+| `setInputGain(gainDb: Int)` | 下发采集增益（热生效，−12..30 dB，见 6.2） |
 | `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
@@ -149,6 +150,15 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 - **前导与对齐**：`playTx()` 把 `pttDelayMs` 静音与 `leadToneMs` 单音插在数据之前；调用方（`planTx`）相应提前播放起点，保证数据落在时隙起点。
 - **看门狗**：`write_blocking()` 以「本段音频预期播放时长 + 3 s」为实际阈值（不低于 `watchdogMs`），避免截断合法的整时隙发射；仅在音频设备卡死时中止写循环。
 - `nativeGetState` 返回 12 个 `Long`：索引 0–9 同前，`[10]=vox_open`、`[11]=vox_level_db×10`。
+
+### 6.2 音频路由与增益（U7c）
+
+- **设备枚举（Kotlin，`engine/AudioDevices.kt`）**：用 `AudioManager.getDevices(GET_DEVICES_INPUTS/OUTPUTS)` 列出设备，返回 `{id, 名称, 类型标签}`；首项恒为「系统默认」（id 0）。设备 id 即 `AudioDeviceInfo.getId()`，与 AAudio `setDeviceId` 使用同一编号。
+- **路由**：`startCapture(preferredRate, deviceId)` / `startPlayback(preferredRate, deviceId)` 在 `deviceId > 0` 时调用 `AAudioStreamBuilder_setDeviceId`；`<= 0` 走系统默认。设备选择只在**建流时**生效：
+  - 输入设备变化需重开采集流（运行中提示「下次开始接收生效」）；
+  - 输出设备变化时 `stopPlayback()` 关闭旧流，下次发射用新设备重开（发射中提示「下次发射生效」）。
+- **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**包含 VOX 电平判定**的整条链路，故调增益会同时改变状态栏 VOX 读数。
+- **设备 id 易变**：设备 id 可能随插拔/重启变化，存的是原始 id 字符串（空串=默认），失配时 `label` 回退「系统默认」。
 
 ## 7. 调试接口
 

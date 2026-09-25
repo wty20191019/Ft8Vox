@@ -269,6 +269,9 @@ typedef struct
     _Atomic int lead_tone_ms;      ///< 发射前导音时长（ms，0=关）
     _Atomic int watchdog_ms;       ///< 单次发射写入看门狗（ms，native 会抬高到发射时长以上）
 
+    // ---- 音频路由 / 增益（U7c） ----
+    _Atomic int in_gain_db;        ///< 采集增益（dB），在 DSP 线程对原始样本生效
+
     // ---- VOX 运行状态（dsp 线程写，任意线程读） ----
     _Atomic int vox_level_db_x10;  ///< 平滑后的输入电平（dBFS × 10）
     _Atomic int vox_open;          ///< 1=VOX 判定为已触发
@@ -429,6 +432,17 @@ static void* dsp_thread_fn(void* arg)
             usleep(2000);
             continue;
         }
+        // U7c：采集增益（dB→线性），限幅避免超过满幅回绕
+        int gdb = atomic_load(&e->in_gain_db);
+        if (gdb != 0)
+        {
+            float g = powf(10.0f, (float)gdb / 20.0f);
+            for (uint32_t i = 0; i < n; i++)
+            {
+                float v = raw[i] * g;
+                raw[i] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+            }
+        }
         int rn = resampler_process(&e->cap_rs, raw, (int)n, rs, RS_CHUNK);
         update_vox(e, raw, (int)n);
         feed_slot(e, rs, rn);
@@ -478,6 +492,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->vox_open, 0);
     atomic_store(&e->vox_candidate, 0);
     atomic_store(&e->vox_change_ms, 0);
+    atomic_store(&e->in_gain_db, 0);
     return (jlong)(intptr_t)e;
 }
 
@@ -514,7 +529,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject th
 // -----------------------------------------------------------------------------
 JNIEXPORT jint JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeStartCapture(
-    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate)
+    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate, jint device_id)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
     if (e == NULL)
@@ -536,6 +551,9 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStartCapture(
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(builder, 1);
     AAudioStreamBuilder_setSampleRate(builder, preferred_rate);
+    // U7c：指定输入设备（AudioManager 的设备 id）；<=0 表示系统默认
+    if (device_id > 0)
+        AAudioStreamBuilder_setDeviceId(builder, device_id);
     AAudioStreamBuilder_setDataCallback(builder, capture_callback, e);
 
     aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &e->in_stream);
@@ -693,7 +711,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePollWaterfall(
 // -----------------------------------------------------------------------------
 JNIEXPORT jint JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
-    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate)
+    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate, jint device_id)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
     if (e == NULL)
@@ -709,6 +727,9 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(builder, 1);
     AAudioStreamBuilder_setSampleRate(builder, preferred_rate);
+    // U7c：指定输出设备（AudioManager 的设备 id）；<=0 表示系统默认
+    if (device_id > 0)
+        AAudioStreamBuilder_setDeviceId(builder, device_id);
     // 不设置数据回调：使用阻塞式 AAudioStream_write
     aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &e->out_stream);
     AAudioStreamBuilder_delete(builder);
@@ -944,6 +965,28 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetVox(
     atomic_store(&e->ptt_delay_ms, ptt_delay_ms < 0 ? 0 : ptt_delay_ms);
     atomic_store(&e->lead_tone_ms, lead_tone_ms < 0 ? 0 : lead_tone_ms);
     atomic_store(&e->watchdog_ms, watchdog_ms < 0 ? 0 : watchdog_ms);
+}
+
+/**
+ * 下发采集增益（热生效，U7c）。
+ *
+ * 增益在 DSP 线程对原始采集样本生效（含 VOX 电平判定），因此调大增益会同时
+ * 抬高 VOX 读数。超过满幅的样本会被限幅到 [-1, 1]，避免回绕爆音。
+ *
+ * @param gain_db 增益（dB），合法范围 -12..30
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetInputGain(
+    JNIEnv* env, jobject thiz, jlong handle, jint gain_db)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    if (gain_db < -12)
+        gain_db = -12;
+    if (gain_db > 30)
+        gain_db = 30;
+    atomic_store(&e->in_gain_db, gain_db);
 }
 
 // -----------------------------------------------------------------------------
