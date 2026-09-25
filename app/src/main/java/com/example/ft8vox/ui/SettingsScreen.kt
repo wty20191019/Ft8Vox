@@ -36,6 +36,8 @@ import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.SampleRatePref
+import com.example.ft8vox.data.settings.WaterfallHeight
+import com.example.ft8vox.grid.Maidenhead
 
 /** 设置页：台站信息、日志与 ADIF、关于。 */
 @Composable
@@ -55,6 +57,10 @@ fun SettingsScreen(
     var call by remember { mutableStateOf(app.myCall) }
     var grid by remember { mutableStateOf(app.myGrid) }
     var note by remember { mutableStateOf(app.note) }
+
+    // 错误态：呼号必填；网格允许留空，但填了就必须合法（Maidenhead 2/4/6/8 位）
+    val callError = call.isEmpty()
+    val gridError = grid.isNotEmpty() && !Maidenhead.isValid(grid)
 
     Column(
         modifier = modifier
@@ -76,6 +82,10 @@ fun SettingsScreen(
             },
             label = { Text("呼号") },
             singleLine = true,
+            isError = callError,
+            supportingText = {
+                Text(if (callError) "发射前必须填写呼号" else "台站呼号，用于生成与识别报文")
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -87,6 +97,10 @@ fun SettingsScreen(
             },
             label = { Text("网格（Maidenhead，如 JN25）") },
             singleLine = true,
+            isError = gridError,
+            supportingText = {
+                Text(if (gridError) "网格格式不正确（2/4/6/8 位，如 JN25、JN25AA）" else "可留空")
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -117,6 +131,7 @@ fun SettingsScreen(
                 settings.update { it.copy(note = v) }
             },
             label = { Text("备注") },
+            supportingText = { Text("自动写入新通联记录的 COMMENT 字段（可留空）") },
             modifier = Modifier.fillMaxWidth(),
         )
 
@@ -139,6 +154,20 @@ fun SettingsScreen(
             "开启后点解码行只改 RX、不跟随对方频率（split 场景）；关闭则「点谁打谁」。",
             style = MaterialTheme.typography.labelSmall,
         )
+        Text("默认发射周期", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(
+                selected = app.txParity == 0,
+                onClick = { settings.update { s -> s.copy(txParity = 0) } },
+                label = { Text("偶数") },
+            )
+            FilterChip(
+                selected = app.txParity == 1,
+                onClick = { settings.update { s -> s.copy(txParity = 1) } },
+                label = { Text("奇数") },
+            )
+        }
+        Text("操作页可临时切换；此处作为默认值。", style = MaterialTheme.typography.labelSmall)
         Text("Call 1st 自动应答", style = MaterialTheme.typography.bodyMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (m in CallFirstMode.entries) {
@@ -226,6 +255,32 @@ fun SettingsScreen(
         StepperRow("频率上限 Hz", app.decode.fMaxHz, DecodeSettings.F_MAX_RANGE, step = 50) { v ->
             settings.updateDecode { it.copy(fMaxHz = v) }
         }
+        OutlinedButton(
+            onClick = { settings.resetToDefaults() },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("恢复默认（保留台站信息）") }
+
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+        // ---- 界面 ----
+        Text("界面", style = MaterialTheme.typography.titleSmall)
+        Text("瀑布高度", style = MaterialTheme.typography.bodyMedium)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (h in WaterfallHeight.entries) {
+                FilterChip(
+                    selected = app.waterfallHeight == h,
+                    onClick = { settings.update { s -> s.copy(waterfallHeight = h) } },
+                    label = { Text(h.label) },
+                )
+            }
+        }
+        Text(
+            "改动回到操作页立即生效（占用解码列表的可视高度）。",
+            style = MaterialTheme.typography.labelSmall,
+        )
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 

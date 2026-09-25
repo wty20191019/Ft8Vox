@@ -568,6 +568,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 mode = st.protocol.name,
                 reportSent = entry.reportSent,
                 reportReceived = entry.reportReceived,
+                // 台站备注作为默认 COMMENT 写入新记录（快照，可留空）
+                comment = latestSettings.note.trim().ifEmpty { null },
             )
             viewModelScope.launch(Dispatchers.IO) {
                 qsoRepo.add(entity)

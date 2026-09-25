@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.data.BandPlan
@@ -195,19 +196,34 @@ fun OperateScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-        LazyColumn(
+        Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(1.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            items(rows, key = { it.msg.text + "@" + it.msg.slotUtcMs }) { row ->
-                DecodeRow(
-                    model = row,
-                    slotMs = status.slotMs.toLong(),
-                    manualEnabled = !status.qso.active,
-                    onClick = { viewModel.selectFrequency(row.msg.df) },
-                    onReply = { pendingTx = PendingTx.Reply(row.parsed.from!!, row.parsed.grid, row.msg.df) },
-                    onLongPress = { manualFor = row.msg },
+            if (rows.isEmpty()) {
+                Text(
+                    decodeEmptyHint(status, messages.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 24.dp),
                 )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    items(rows, key = { it.msg.text + "@" + it.msg.slotUtcMs }) { row ->
+                        DecodeRow(
+                            model = row,
+                            slotMs = status.slotMs.toLong(),
+                            manualEnabled = !status.qso.active,
+                            onClick = { viewModel.selectFrequency(row.msg.df) },
+                            onReply = { pendingTx = PendingTx.Reply(row.parsed.from!!, row.parsed.grid, row.msg.df) },
+                            onLongPress = { manualFor = row.msg },
+                        )
+                    }
+                }
             }
         }
 
@@ -295,6 +311,17 @@ fun OperateScreen(
             },
         )
     }
+}
+
+/**
+ * 解码列表空态提示文案（纯函数，便于 JVM 单测）。
+ *
+ * 三种情况：未开始接收 / 已接收但本时隙无解码 / 有解码但被过滤掉。
+ */
+fun decodeEmptyHint(status: ReceiverStatus, decodedTotal: Int): String = when {
+    !status.running -> "未开始接收：点右上角「开始接收」"
+    decodedTotal == 0 -> "本时隙暂无解码，等待信号…\n（未接天线 / 无音频输入时不会出现解码）"
+    else -> "没有符合当前过滤条件的解码"
 }
 
 /** 解码行 + 解析结果 + 高亮分类。 */
