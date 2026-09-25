@@ -22,7 +22,7 @@
 
 | 项 | 结论 |
 | --- | --- |
-| 项目定位 | **开源发布**（需许可证合规、文档、多语言、CI） |
+| 项目定位 | **开源发布**（需许可证合规、文档、多语言）；**CI 暂不配置**（见下） |
 | 开源许可证 | **GPL-3.0**（内嵌 ft8_lib 为 MIT、kissfft 为 BSD-3-Clause，均与 GPL-3.0 兼容） |
 | 协议范围 | **FT8 + FT4** |
 | 音频 API | **AAudio**（minSdk 26） |
@@ -33,6 +33,7 @@
 | 日志 | **MVP 即含 ADIF 日志** |
 | 调试环境 | **以模拟器为主**，真机做音频/硬件验证 |
 | UI 框架 | Jetpack Compose（沿用现有工程） |
+| 持续集成 | **暂不配置**（2026-09-25 决定）：只做本地构建与测试；原 GitHub Actions 工作流已改名为 `.github/workflows/android.yml.disabled` 停用保留，随时可恢复（见 `docs/BUILD.md` §5） |
 
 ### 1.3 当前仓库起点（作为基线）
 
@@ -151,14 +152,15 @@ com/example/ft8vox/
 
 任务：
 - 工具链固定（不降级）：保留现有组合（AGP 9.3.2 / Gradle 9.5.0 / Kotlin 2.2.10 / JDK 25），不降级；在 `docs/BUILD.md` 中记录各组件版本。
-- 构建可复现：校验 `gradle-wrapper.properties` 的 `distributionSha256Sum`，CI 使用固定 JDK。
+- 构建可复现：校验 `gradle-wrapper.properties` 的 `distributionSha256Sum`，固定 JDK 25。
 - `ndk { abiFilters }` 增加 `x86_64`（模拟器）。
   - AGP 9 新 DSL 注意：`ndk { abiFilters }` 必须放在 `defaultConfig` 内；顶层的 `android { ndk { ... } }` 会报 `Unresolved reference 'ndk'`。
 - 清理：删除 `jni_bridge.c.bak`；修正 `jni_bridge.c` 乱码注释；保留 `.gitignore`。
 - 建立 CI：编译 + Kotlin 单测 + native 编译（Windows/Ubuntu 至少其一）。
+  - **2026-09-25 调整**：CI **暂不使用**，只做本地构建与测试；原工作流保留为 `.github/workflows/android.yml.disabled`（见 `docs/BUILD.md` §5）。
 - 仓库治理：分支策略、提交规范、`README`、`CONTRIBUTING`、`NOTICE`（ft8_lib 归属与许可证）。
 
-验收：`gradlew assembleDebug` 与 `gradlew test` 成功；CI 绿灯；模拟器可安装运行。
+验收：`gradlew assembleDebug` 与 `gradlew test` 成功；模拟器可安装运行（CI 绿灯一项暂不适用）。
 
 ### 阶段 1：打通 JNI 最小闭环 + CMake 扩展
 
@@ -364,7 +366,7 @@ com/example/ft8vox/
 - 多语言：中/英起步，字符串外置。
 - 许可证合规：保留 ft8_lib 的 LICENSE 与归属；项目自身采用 **GPL-3.0**；生成 `NOTICE`。
 - R8/混淆：JNI 类与方法 keep（`keepRules/rules.keep`），否则 release 崩溃。
-- 发布：签名配置、版本号、GitHub Release / tag；CI 产出 APK。
+- 发布：签名配置、版本号、GitHub Release / tag；APK 由本地构建产出（**暂不配置 CI 出包**，见 `docs/BUILD.md` §5）。
 - 免责声明与合规提示（发射相关）。
 
 验收：Release APK 在模拟器与真机稳定运行；仓库可被他人克隆构建。
@@ -446,7 +448,7 @@ com/example/ft8vox/
 
 | # | 风险 | 影响 | 应对 |
 | --- | --- | --- | --- |
-| R1 | 工具链较新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建不可复现 | 阶段 0 锁定版本、校验 wrapper、CI 固定 JDK 并验证构建 |
+| R1 | 工具链较新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建不可复现 | 阶段 0 锁定版本、校验 wrapper、固定 JDK 25 并以本地全量构建（`assembleDebug` + `testDebugUnitTest`）验证（CI 暂不配置） |
 | R2 | AAudio 采样率/路由在模拟器与真机差异大 | 采集不可用或失真 | native 重采样 + 真机验证 + 文件注入兜底 |
 | R3 | 音频时钟抖动 / 时隙漂移 | 解码率下降或漏解 | 动态对齐、窗口余量、丢帧统计与补偿 |
 | R4 | `audio.c` 依赖 PortAudio | 若误加入编译会失败 | CMake 明确排除，只编 monitor/wave/kissfft/ft8 |
@@ -463,7 +465,7 @@ com/example/ft8vox/
 
 | 里程碑 | 对应阶段 | 标志 |
 | --- | --- | --- |
-| M0 基线就绪 | 0 | 稳定工具链 + CI + 可跑 APK |
+| M0 基线就绪 | 0 | 稳定工具链 + 可跑 APK（CI 暂不配置） |
 | M1 桥打通 | 1 | Kotlin 调到 native，库完整编入 |
 | M2 解码可用 | 2 | WAV 回归通过（FT8+FT4） |
 | M3 编码可用 | 3 | 自回环解码成功 |
