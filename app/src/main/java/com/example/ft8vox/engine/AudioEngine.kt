@@ -173,6 +173,18 @@ object AudioEngine {
         if (handle != 0L) nativeStopPlayback(handle)
     }
 
+    /**
+     * 立即作废正在进行的发射写入（**非阻塞、不加锁**，可在主线程调用）。
+     *
+     * 只让 native 的写入线程在下一块边界退出（≤ 一块，约 85 ms），**不关流**：
+     * 关流要等 `tx_mutex`，而 `AAudioStream_write` 对阻塞流会一直等到请求的帧全部
+     * 写完才返回，旧实现「UI 线程直接 stopPlayback + 整段一次写」会把主线程卡满整段
+     * 发射（FT8 约 16 s）→ ANR。
+     */
+    fun abortTx() {
+        if (handle != 0L) nativeAbortTx(handle)
+    }
+
     /** 播放一段 12 kHz PCM（内部按输出采样率重采样），返回写入帧数。 */
     fun play(pcm: FloatArray): Int =
         if (handle != 0L) nativePlay(handle, pcm) else -1
@@ -293,6 +305,9 @@ object AudioEngine {
     private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
     private external fun nativeStartPlayback(handle: Long, preferredRate: Int, deviceId: Int): Int
     private external fun nativeStopPlayback(handle: Long)
+
+    /** 立即作废发射写入（非阻塞、不加锁，见 [abortTx]）。 */
+    private external fun nativeAbortTx(handle: Long)
     private external fun nativePlay(handle: Long, pcm: FloatArray): Int
     private external fun nativePlayTx(
         handle: Long,

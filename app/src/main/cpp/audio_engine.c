@@ -52,6 +52,12 @@
 #define LEAD_TONE_HZ 1000
 #define LEAD_TONE_AMP 0.6f
 
+// 发射写入的分块大小（帧）。**必须分块**：AAudioStream_write 对阻塞流会一直等到
+// 「请求的帧数全部写完」才返回（timeout 只在设备卡死时兜底），若一次请求剩余全部帧，
+// 写线程会整段独占 tx_mutex（FT8 整时隙约 16 s），把同进程的关流/中止线程卡死
+// （主线程 → ANR）。4096 帧在 48 kHz 下约 85 ms，中止延迟与关流等待都被限制在这个量级。
+#define TX_WRITE_CHUNK_FRAMES 4096
+
 // 输出音量（发射音频的数字衰减）允许范围（dB）：发射波形本身已是数字满幅
 // （synth_gfsk 输出 sinf()，峰值 1.0），所以只能往小调；与设置页范围一致
 #define OUT_GAIN_MIN_DB (-30)
@@ -928,6 +934,26 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(JNIEnv* env, jobje
     tx_stop_and_close(e, true);
 }
 
+/**
+ * 立即作废当前发射写入 —— **非阻塞、不加锁，可在任意线程（含主线程）调用**。
+ *
+ * 只把 [out_gen] 加一：正在写声卡的线程会在下一块边界（≤ [TX_WRITE_CHUNK_FRAMES]，
+ * 48 kHz 下约 85 ms）自行退出；已经写进 AAudio 缓冲的少量音频（≤ 一个缓冲，几十毫秒）
+ * 会自然播完。**不关流**（避免和后续 armPlayback 抢流，也避免阻塞调用方）——
+ * 要真正关流释放设备请用 nativeStopPlayback / nativeDestroy。
+ *
+ * 用途：UI 线程「停止发射」。旧实现直接调 nativeStopPlayback，需等 tx_mutex，
+ * 而旧版一次 write 独占整段发射（约 16 s），导致主线程卡死 → ANR。
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeAbortTx(JNIEnv* env, jobject thiz, jlong handle)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    atomic_fetch_add(&e->out_gen, 1);
+}
+
 /// 阻塞写入浮点样本，带看门狗；返回写入的帧数。
 ///
 /**
@@ -975,9 +1001,15 @@ static int write_blocking(audio_engine_t* e, float* buf, int n)
     int written = 0;
     while (written < n)
     {
-        // 流已被停止/关闭/重建（tx_stop_and_close 会 +1）：本次发射提前结束，不算失败
+        // 流已被停止/关闭/重建（tx_stop_and_close / nativeAbortTx 会 +1）：本次发射提前结束，不算失败
         if (atomic_load(&e->out_gen) != gen)
             break;
+
+        // 每次最多写一块：AAudioStream_write 会一直等到「请求的帧数」全部写完才返回，
+        // 若一次请求剩余全部帧，本线程会整段独占 tx_mutex（见 TX_WRITE_CHUNK_FRAMES）
+        int32_t want = n - written;
+        if (want > TX_WRITE_CHUNK_FRAMES)
+            want = TX_WRITE_CHUNK_FRAMES;
 
         bool valid = false;
         int32_t w = 0;
@@ -986,7 +1018,7 @@ static int write_blocking(audio_engine_t* e, float* buf, int n)
         {
             valid = true;
             // 单次写入超时 0.5 s：保证关流方最多等这么久就能拿到 tx_mutex
-            w = AAudioStream_write(e->out_stream, buf + written, n - written, 500000000LL);
+            w = AAudioStream_write(e->out_stream, buf + written, want, 500000000LL);
         }
         pthread_mutex_unlock(&e->tx_mutex);
         if (!valid)

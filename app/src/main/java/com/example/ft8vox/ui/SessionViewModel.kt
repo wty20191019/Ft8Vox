@@ -175,6 +175,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var manualInFlight = false
 
     /**
+     * 发射「作废代次」：每次中止发射（[stopTransmit]）时 +1。
+     *
+     * 用于丢弃**已排程但还没开始写声卡**的那次发射：`txJob.cancel()` 打断不了 native
+     * 阻塞写入，若某个协程已经跑过检查、正要做 `playTx`，中止后它不能再出声。
+     * 由 UI 线程写、IO 线程读，因此标 `@Volatile`。
+     */
+    @Volatile
+    private var txAbortGen = 0
+
+    /**
      * 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。
      *
      * 锁定后**一直沿用**，QSO 结束也不清除（否则会按时间重锁导致偶/奇来回跳）。
@@ -889,12 +899,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) return
         if (!armPlayback()) return
 
-        txJob?.cancel()
+        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
         val (pttMs, leadMs) = txPreambleParts()
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val st = _status.value
                 val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射「$trimmed」（$written 帧）") }
@@ -911,11 +923,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      *
      * **只停本次发射，不动自动程序等级**：等级 ≥1 时自动程序下一时隙会继续（要全停请关
      * 「发送总开关」，或把等级切回「0 手动选择」）。
+     *
+     * 中止走 [AudioEngine.abortTx]（非阻塞、不加锁）：**不要**在这里调
+     * `AudioEngine.stopPlayback()` —— 关流要等 `tx_mutex`，而阻塞式 `AAudioStream_write`
+     * 会整段独占它（FT8 约 16 s），UI 线程一调用就卡死（ANR）。
      */
     fun stopTransmit() {
-        txJob?.cancel()
-        txJob = null
-        AudioEngine.stopPlayback()
+        abortTransmit()
         autoParity = null
         val p = qsoEngine.stop()
         _status.update {
@@ -935,6 +949,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 作废当前发射（取消协程 + 非阻塞中止 native 写入 + 记一次作废代次）。
+     *
+     * 可在主线程调用；返回后当前报文最多再响一块（约 85 ms）就会停。
+     */
+    private fun abortTransmit() {
+        txJob?.cancel()
+        txJob = null
+        txAbortGen++
+        AudioEngine.abortTx()
+    }
+
+    /**
      * 立即播放一段测试波形（**不按时隙对齐**，仅用于验证音频通路与音量）。
      *
      * 正式发射请用 [startCq] / [answer]。
@@ -945,13 +971,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             ?: if (canOperate) listOf("CQ", st.myCall, st.myGrid).filter { it.isNotEmpty() }.joinToString(" ")
             else "CQ TEST"
         if (!armPlayback()) return
-        txJob?.cancel()
+        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
         val (pttMs, leadMs) = txPreambleParts()
         val genAtPlan = engineGen
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (genAtPlan != engineGen) return@launch   // 期间重建过引擎：丢弃
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射测试「$text」（$written 帧）") }
@@ -1312,8 +1340,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         lastTxSlotIndex = plan.targetSlotIndex
         manualInFlight = st.manualTxText != null
         val genAtPlan = engineGen
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
-            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan)
+            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan, abortAtPlan)
         }
     }
 
@@ -1334,8 +1363,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * [genAtPlan] 是排程时的引擎代次：若期间引擎被重建（例如切了协议），**直接丢弃**本次
      * 发射 —— `txJob.cancel()` 打断不了已经开始的 JNI 阻塞写入，只能用代次判断，否则会
      * 把上一个协议的波形写到新引擎上。
+     *
+     * [abortAtPlan] 是排程时的「发射作废代次」（见 [txAbortGen]）：期间用户按了「停止发射」
+     * 就丢弃 —— 否则已排程的这次仍会响一整段。
      */
-    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long, genAtPlan: Int) {
+    private fun transmit(
+        text: String,
+        slotStartMs: Long,
+        preambleMs: Long,
+        genAtPlan: Int,
+        abortAtPlan: Int,
+    ) {
         val st = _status.value
         val (pttMs, leadMs) = txPreambleParts()
         // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
@@ -1343,14 +1381,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val effLead = minOf(leadMs.toLong(), eff).toInt()
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
 
-        if (genAtPlan != engineGen) return
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
         } catch (e: Exception) {
             _status.update { it.copy(status = "发射异常: ${e.message}") }
             return
         }
-        if (genAtPlan != engineGen) return
+        // 解码/编码期间可能被「停止发射」或换了引擎：丢弃
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
 
         try {
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
