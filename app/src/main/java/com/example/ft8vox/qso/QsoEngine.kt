@@ -154,9 +154,34 @@ class QsoEngine(private var maxRetries: Int = 6) {
     }
 
     /**
+     * 对方主动呼叫我方（`<myCall> <theirCall> <grid>`）：以呼叫方身份直接补发信号报告，
+     * 进入「等待对方 R 报告」阶段。
+     *
+     * 用于自动程序：即使我方当前空闲（没有进行中的 QSO），收到定向呼叫也直接应答，
+     * 把这段 QSO 跑完。
+     *
+     * @param snr 本次解码的信噪比（作为我发给对方的报告）
+     */
+    fun callBack(call: String, grid: String?, snr: Int): QsoProgress {
+        require(canOperate) { "未配置呼号" }
+        val their = call.trim().uppercase()
+        if (their.isEmpty() || their == myCall) return progress()
+        role = QsoRole.CALLER
+        state = QsoState.WAIT_REPORT
+        theirCall = their
+        theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
+        reportSent = reportFromSnr(snr)
+        reportReceived = null
+        retries = 0
+        logEntry = null
+        txText = "$their $myCall ${MessageParser.formatReport(reportSent!!)}"
+        return progress()
+    }
+
+    /**
      * 对方直接发来信号报告（未经我应答）：以应答方身份从「已收报告」阶段进入 QSO。
      *
-     * 用于自动程序的「报告信息优先」：对方发 `<myCall> <theirCall> <report>` 时，
+     * 用于自动程序的「被呼自动应答」：对方发 `<myCall> <theirCall> <report>` 时，
      * 我直接回 `R<报告>` 并等待对方 RR73。
      *
      * @param theirReport 对方给我的信号报告
@@ -175,6 +200,36 @@ class QsoEngine(private var maxRetries: Int = 6) {
         retries = 0
         logEntry = null
         txText = "$their $myCall R${MessageParser.formatReport(reportSent!!)}"
+        return progress()
+    }
+
+    /**
+     * 对方已 Roger 我的报告（`<myCall> <theirCall> R<report>`）：回 `RR73` 并直接完成本次通联。
+     *
+     * 用于自动程序的「被呼自动应答」：我方空闲时收到带 R 的定向报文，说明对方已确认，
+     * 只需收尾即可完成 QSO。
+     *
+     * @param utcMs 本次通联的 UTC 时间（毫秒）；<=0 时记录为 0
+     */
+    fun respondToRoger(call: String, theirReport: Int, snr: Int, utcMs: Long = 0L): QsoProgress {
+        require(canOperate) { "未配置呼号" }
+        val their = call.trim().uppercase()
+        if (their.isEmpty() || their == myCall) return progress()
+        role = QsoRole.RESPONDER
+        state = QsoState.DONE
+        theirCall = their
+        theirGrid = null
+        reportReceived = theirReport
+        reportSent = reportFromSnr(snr)
+        retries = 0
+        txText = "$their $myCall RR73"
+        logEntry = QsoLogEntry(
+            theirCall = their,
+            theirGrid = null,
+            reportSent = reportSent,
+            reportReceived = reportReceived,
+            utcMs = if (utcMs > 0) utcMs else 0L,
+        )
         return progress()
     }
 

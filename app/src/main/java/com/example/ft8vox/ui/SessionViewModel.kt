@@ -169,6 +169,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pinnedTxParity: Int? = null
 
+    /**
+     * 上一次失败的 QSO 对手呼号：若它仍在本批解码中出现，自动程序优先重试它。
+     *
+     * 由 [applyQsoProgress] 在 QSO 失败时记下；重试次数超过 [AUTO_FAIL_RETRY_MAX] 或
+     * 通联完成/关闭自动程序时清空。
+     */
+    private var retryCall: String? = null
+
+    /** 同一对手连续失败的重试上限（超过则换台，避免无限重试）。 */
+    private var retryLeft = 0
+
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
 
@@ -338,6 +349,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 设置自动程序等级；切到「手动」时立即解除启用。 */
     fun setAutoLevel(level: AutoLevel) {
+        if (level == AutoLevel.MANUAL) {
+            retryCall = null
+            retryLeft = 0
+        }
         _status.update {
             it.copy(
                 autoProgram = it.autoProgram.copy(level = level),
@@ -415,6 +430,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disarmAutoProgram() {
+        retryCall = null
+        retryLeft = 0
         _status.update { it.copy(autoArmed = false, status = "自动程序已关闭") }
     }
 
@@ -440,6 +457,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!enabled) {
             autoParity = null
             pinnedTxParity = null
+            retryCall = null
+            retryLeft = 0
             stopTransmit()
             _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
             return
@@ -471,14 +490,21 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun alignTxToTarget(targetSlotUtcMs: Long) {
         val st = _status.value
         if (st.qso.active) return
-        val mine = oppositeSlotParity(targetSlotUtcMs, st.slotMs.toLong())
+        val mine = pinToTargetSlot(targetSlotUtcMs)
         if (mine == null) {
             pinnedTxParity = null
             return
         }
+        _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
+    }
+
+    /** 把发射时隙固定到 [targetSlotUtcMs] 的相反周期；返回固定后的周期，无法判定返回 null。 */
+    private fun pinToTargetSlot(targetSlotUtcMs: Long): Int? {
+        val st = _status.value
+        val mine = oppositeSlotParity(targetSlotUtcMs, st.slotMs.toLong()) ?: return null
         pinnedTxParity = mine
         autoParity = mine
-        _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
+        return mine
     }
 
     /** 清除「设为目标」时的时隙固定（取消目标 / 关闭发射时）。 */
@@ -551,6 +577,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         pollJob?.cancel()
         pollJob = null
         pinnedTxParity = null
+        retryCall = null
+        retryLeft = 0
         AudioEngine.stopCapture()
         AudioEngine.release()
         wfInfo = null
@@ -854,6 +882,25 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (finished) {
             autoParity = null
             pinnedTxParity = null
+            when (p.state) {
+                QsoState.DONE -> {
+                    // 通联完成：清空失败重试记忆
+                    retryCall = null
+                    retryLeft = 0
+                }
+                QsoState.FAILED -> {
+                    // 通联失败：记住对手，供自动程序优先重试（有次数上限）
+                    val c = p.theirCall
+                    if (c != null && c.equals(retryCall, ignoreCase = true)) {
+                        if (retryLeft > 0) retryLeft--
+                    } else {
+                        retryCall = c
+                        retryLeft = AUTO_FAIL_RETRY_MAX
+                    }
+                    if (retryLeft <= 0) retryCall = null
+                }
+                else -> Unit
+            }
         }
         _status.update {
             it.copy(
@@ -901,18 +948,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             worked = _worked.value,
             myCall = st.myCall,
             myGrid = st.myGrid,
+            retryCall = retryCall,
         )
         when (decision) {
             is AutoDecision.AnswerCq -> startAutoTarget(decision.target)
-            is AutoDecision.AnswerReport -> startAutoTarget(decision.target)
+            is AutoDecision.AnswerDirected -> startAutoTarget(decision.target)
             AutoDecision.CallCq -> startAutoSearch()
             AutoDecision.None -> Unit
         }
     }
 
-    /** 自动应答选中的目标（对方的 CQ，或对方直接发来的信号报告）。 */
+    /**
+     * 自动应答选中的目标，并把整段 QSO 交给状态机跑完。
+     *
+     * 支持四类目标：[AutoTargetKind.CQ]（应答 CQ）、[AutoTargetKind.CALL]（对方呼叫我）、
+     * [AutoTargetKind.REPORT]（对方给我报告）、[AutoTargetKind.ROGER]（对方 Roger 我的报告）。
+     */
     private fun startAutoTarget(t: AutoTarget) {
         val st = _status.value
+        // 时隙自动对应：固定到对方时隙的相反周期
+        if (pinToTargetSlot(t.slotUtcMs) == null) pinnedTxParity = null
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
 
@@ -924,15 +979,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!hold) persist { it.copy(selectedFreqHz = v) }
 
-        val p = if (t.kind == AutoTargetKind.REPORT && t.report != null) {
-            qsoEngine.respondToReport(t.call, t.report, t.snr)
-        } else {
-            qsoEngine.answer(t.call, t.grid)
+        val p = when (t.kind) {
+            AutoTargetKind.CQ -> qsoEngine.answer(t.call, t.grid)
+            AutoTargetKind.CALL -> qsoEngine.callBack(t.call, t.grid, t.snr)
+            AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr)
+            AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
         }
-        if (!p.active) return
-        _status.update {
-            it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
-        }
+        if (!p.active && p.state != QsoState.DONE) return
+        _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}") }
+        // ROGER 场景一上来即完成：走统一收尾（写日志、按「单次通联」决定是否继续）
+        if (p.state == QsoState.DONE) applyQsoProgress(p)
     }
 
     /** 自动搜索：无可答目标时自动发 CQ（等级 4+）。 */
@@ -1182,6 +1238,9 @@ internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
+
+/** 自动程序：同一对手 QSO 失败后最多再重试的次数（之后换台）。 */
+internal const val AUTO_FAIL_RETRY_MAX = 1
 
 /**
  * 时隙奇偶标记（0/1）：按 UTC 时隙起点取整后的槽位序号取奇偶。

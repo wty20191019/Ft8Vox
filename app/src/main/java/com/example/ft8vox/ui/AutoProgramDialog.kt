@@ -71,7 +71,8 @@ fun AutoProgramPanel(
             .verticalScroll(rememberScrollState()),
     ) {
         Text(
-            "等级决定自动应答的时机；4+ 在无可答目标时自动发 CQ（自动搜索）。" +
+            "启用后自动完成整段 QSO：自动应答对方的 CQ，也自动应答发给我方的呼号 / 报告，" +
+                "完成后自动接续下一台；4+ 在无可答目标时自动发 CQ（自动搜索）。" +
                 "启用/关闭请在发射抽屉的「自动程序」行操作（需先打开发射总开关）。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -122,7 +123,7 @@ fun AutoProgramPanel(
         )
         AutoOptionRow(
             title = "报告信息优先",
-            subtitle = "优先处理发给我且带信号报告的定向报文",
+            subtitle = "发给我方的定向报文优先于 CQ 排队",
             checked = program.reportPriority,
             onChange = { v -> onOption { it.copy(reportPriority = v) } },
         )
@@ -134,7 +135,7 @@ fun AutoProgramPanel(
         )
         AutoOptionRow(
             title = "单次通联",
-            subtitle = "完成一次 QSO 后自动停止自动程序",
+            subtitle = "完成一次 QSO 后自动停止自动程序（默认关＝连续通联）",
             checked = program.singleQso,
             onChange = { v -> onOption { it.copy(singleQso = v) } },
         )

@@ -143,4 +143,53 @@ class QsoEngineTest {
         val s = q.answer("F4FSY", "JN25")
         assertEquals(QsoState.IDLE, s.state)
     }
+
+    @Test
+    fun callBackRespondsToDirectedCallAndCompletes() {
+        // 对方主动呼叫我方：<myCall> <theirCall> <grid> → 我直接发报告
+        val q = engine()
+        val start = q.callBack("GJ0KYZ", "IO90", snr = -11)
+        assertEquals(QsoRole.CALLER, start.role)
+        assertEquals(QsoState.WAIT_REPORT, start.state)
+        assertEquals("GJ0KYZ F4FSY -11", start.txText)
+
+        // 对方 Roger → 回 RR73 并完成
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
+        assertEquals(QsoState.DONE, s.state)
+        assertEquals("GJ0KYZ F4FSY RR73", s.txText)
+
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals("GJ0KYZ", log!!.theirCall)
+        assertEquals("IO90", log.theirGrid)
+        assertEquals(-11, log.reportSent)
+        assertEquals(-5, log.reportReceived)
+    }
+
+    @Test
+    fun respondToRogerCompletesImmediately() {
+        val q = engine()
+        val s = q.respondToRoger("GJ0KYZ", theirReport = -12, snr = -7, utcMs = 30_000L)
+        assertEquals(QsoRole.RESPONDER, s.role)
+        assertEquals(QsoState.DONE, s.state)
+        assertEquals("GJ0KYZ F4FSY RR73", s.txText)
+        assertFalse(s.active)
+
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-7, log!!.reportSent)
+        assertEquals(-12, log.reportReceived)
+        assertEquals(30_000L, log.utcMs)
+    }
+
+    @Test
+    fun respondToReportWaitsForRr73() {
+        val q = engine()
+        val start = q.respondToReport("GJ0KYZ", theirReport = -12, snr = -7)
+        assertEquals(QsoState.WAIT_RR73, start.state)
+        assertEquals("GJ0KYZ F4FSY R-07", start.txText)
+
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
+        assertEquals(QsoState.DONE, s.state)
+    }
 }

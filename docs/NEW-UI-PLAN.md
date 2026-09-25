@@ -248,11 +248,28 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   - `1 呼叫首先解码`：取本时隙**最先解码到**的候选（不做排序）。
   - `2 解码至发射间隔期间` / `3 直到解码结束`：在整批解码中**择优**（最强信噪比 / 最远距离）。Ft8Vox 解码按接收时隙整批返回，故 2/3 语义一致，差异仅保留在菜单文案。
   - `4+ 自动搜索及自动回应别人的CQ信息`：在择优基础上，**无可答目标时自动发 CQ**（自动搜索）。
-- **策略开关（`AutoProgramSettings`）**：回答曾经通联的电台 / 呼叫曾经通联过的电台（Ft8Vox 无跟踪列表，二者合并为 `allowsWorked = 任一开启`，默认**关**，即跳过已通联台）；优先选择新呼号（默认开，排序时新呼号优先）；报告信息优先（默认关，把发给我且带信号报告的定向报文纳入候选并优先处理，经 `QsoEngine.respondToReport` 从「已收报告」阶段进入应答方）；最远距离取代最佳信噪比（默认关，选台准则由 `snr` 改为 `Geo` 大圆距离，需填写我的网格）；单次通联（默认开，完成一次 QSO 后自动解除；关闭则连续自动通联）。
-- **决策（`AutoProgramSelector`）**：候选与本时隙解码共用 `DecodeFilter`（忽略名单 / 筛选 chip / 搜索串一致），同呼号去重；`decide()` 返回 `AnswerCq` / `AnswerReport` / `CallCq` / `None`。
+- **策略开关（`AutoProgramSettings`）**：回答曾经通联的电台 / 呼叫曾经通联过的电台（Ft8Vox 无跟踪列表，二者合并为 `allowsWorked = 任一开启`，默认**关**，即跳过已通联台）；优先选择新呼号（默认开，排序时新呼号优先）；报告信息优先（默认关，仅作**排序**：发给我方的定向报文优先于 CQ 排队）；最远距离取代最佳信噪比（默认关，选台准则由 `snr` 改为 `Geo` 大圆距离，需填写我的网格）；单次通联（**默认关 ＝ 连续通联**，完成一次 QSO 后自动接续下一台；开启则完成一次即解除）。
+- **决策（`AutoProgramSelector`）**：候选与本时隙解码共用 `DecodeFilter`（忽略名单 / 筛选 chip / 搜索串一致），同呼号去重；`decide()` 返回 `AnswerCq` / `AnswerDirected` / `CallCq` / `None`。
 - **接线**：`SessionViewModel` 以 `ReceiverStatus.autoProgram` + `autoArmed` 取代 `callFirst` / `callFirstArmed`（DataStore 键 `call_first` → `auto_level` 等）；接收时隙结束且无进行中 QSO 时调用 `runAutoProgram`；`startAutoTarget` / `startAutoSearch` 复用原 Call 1st 的时隙锁定与频率跟随逻辑。
 - **UI**：顶栏菜单新增「自动程序」（打开 `AutoProgramDialog`）；发射抽屉「自动序列」区改为「自动程序」行（等级摘要 + 设置… + 启用/关闭，启用走原防误发确认）；设置页 6.3 用 `AutoProgramPanel` 内嵌同一套等级 + 开关。
-- **测试**：`qso/AutoProgramTest`（等级、自动 CQ、已通联门控、优先新呼号、最远距离、报告优先、过滤/去重/自呼号）；原 `DecodeFilterTest` 中的 CallFirst 用例移除。JVM 全绿，`:app:assembleDebug` 通过。
+- **测试**：`qso/AutoProgramTest`（等级、自动 CQ、已通联门控、优先新呼号、最远距离、报告优先、定向报文、失败重试、过滤/去重/自呼号）；原 `DecodeFilterTest` 中的 CallFirst 用例移除。JVM 全绿，`:app:assembleDebug` 通过。
+
+### U9 补记：自动程序以「完成 QSO」为目标（被呼自动应答 / 时隙对应 / 失败续台）
+
+- **目标澄清**：自动程序不只是「挑台起呼」，而是把**整段 QSO 跑完**（状态机 `QsoEngine` 负责 报告 → R报告 → RR73/73）。本次补齐三处衔接：
+- **被呼自动应答**：候选不再只含 CQ，还包含**发给我方**的定向报文，按 `AutoTargetKind` 分四类：
+  - `CQ` → `QsoEngine.answer`（应答 CQ）；
+  - `CALL`（`<my> <their> <grid>`，对方呼叫我 / 应答我之前的 CQ）→ 新增 `QsoEngine.callBack`，直接补发报告进入「等待 R 报告」；
+  - `REPORT`（`<my> <their> <report>`）→ `QsoEngine.respondToReport`（回 `R<报告>` 等 RR73）；
+  - `ROGER`（`<my> <their> R<report>`）→ 新增 `QsoEngine.respondToRoger`，回 `RR73` 并**即时完成**（走 `applyQsoProgress` 统一写日志）。
+  - `RR73`/`73`/`RRR`（`DecodeFilter.is73`）视为通联结束，不作为新 QSO 起点；发给别人的报文不算。
+  - 「报告信息优先」由「是否纳入候选」改为「排序优先」。
+- **时隙自动对应**：`startAutoTarget` 先按目标时隙固定发射周期到其**相反周期**（`pinToTargetSlot` → `oppositeSlotParity`），再 `relockAutoParityIfNeeded`，保证与目标交替收发。
+- **失败续台 / 重试**：QSO 期间每个时隙重发当前报文，超过 `maxRetries`（6）判 `FAILED`；失败时 `applyQsoProgress` 记下对手 `retryCall`，自动程序下一批若仍能解到它就**优先重试**（同一对手最多再试 `AUTO_FAIL_RETRY_MAX = 1` 次，之后换台）；`DONE` / 关闭发射 / 停止 / 等级切回手动时清空。
+- **默认值**：`AutoProgramSettings.singleQso` 默认由 `true` 改为 `false`（连续通联），与「自动完成 QSO」用途一致。
+- **文案**：`AutoProgramPanel` 顶部说明改为「启用后自动完成整段 QSO：自动应答对方的 CQ，也自动应答发给我方的呼号 / 报告，完成后自动接续下一台；4+ 无可答目标时自动发 CQ」。
+- **测试**：`AutoProgramTest` 增补定向报告 / 定向呼叫 / Roger / 73 忽略 / 发给他人的报文忽略 / 报告优先排序 / 失败重试优先与缺省 / 默认连续通联；`QsoEngineTest` 增补 `callBack` 全流程、`respondToRoger` 即时完成（含日志）、`respondToReport` 等 RR73。JVM 全绿，`:app:assembleDebug` 通过。
+- **待真机**：被呼自动应答的实际触发与整段 QSO 落点、失败重试次数，需真机 + 对方电台验证（`REGRESSION.md` E 组）。
 
 
 
