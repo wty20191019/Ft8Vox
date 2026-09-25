@@ -30,12 +30,16 @@ private val AxisLine = Color(0x99E0E0E0)
 private val CellWorked = Color(0x9966BB6A) // 60% 透明绿
 private val CellConfirmed = Color(0xCC1E88E5) // 80% 透明蓝
 
-/** 高亮语义色（与操作页一致）。 */
-private val SpotCurrent = Color(0xFFFFAB00)
-private val SpotToMe = Color(0xFF00B0FF)
-private val SpotNewGrid = Color(0xFF00C853)
-private val SpotNewPrefix = Color(0xFFD50000)
-private val SpotNormal = Color(0xFFB0BEC5)
+/** 高亮语义色（与操作页色条一致，U4 地图页再按 §4.2 重构）。 */
+private val SpotTx = Color(0xFFFFEB3B)
+private val SpotToMe = Color(0xFF89B4FA)
+private val SpotCq = Color(0xFFFF9800)
+private val SpotWorked = Color(0xFFE53935)
+private val SpotDuplicate = Color(0xFF757575)
+private val SpotNewGrid = Color(0xFF9C27B0)
+private val SpotNewEntity = Color(0xFF8D6E63)
+private val SpotNewCall = Color(0xFFF06292)
+private val SpotNormal = Color(0xFF4CAF50)
 
 /**
  * 离线 Maidenhead 网格地图：历史通联着色 + 实时台站点。
@@ -232,9 +236,13 @@ fun GridMap(
 }
 
 private fun spotColor(role: HighlightRole): Color = when (role) {
-    HighlightRole.CURRENT_QSO -> SpotCurrent
+    HighlightRole.TX -> SpotTx
     HighlightRole.TO_ME -> SpotToMe
+    HighlightRole.CQ -> SpotCq
+    HighlightRole.WORKED -> SpotWorked
+    HighlightRole.DUPLICATE -> SpotDuplicate
     HighlightRole.NEW_GRID -> SpotNewGrid
-    HighlightRole.NEW_PREFIX -> SpotNewPrefix
+    HighlightRole.NEW_ENTITY -> SpotNewEntity
+    HighlightRole.NEW_CALL -> SpotNewCall
     HighlightRole.NORMAL -> SpotNormal
 }

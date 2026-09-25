@@ -1,5 +1,6 @@
 package com.example.ft8vox.qso
 
+import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Maidenhead
 
 /**
@@ -57,46 +58,87 @@ class WorkedIndex(
     }
 }
 
-/** 解码行的最高优先级高亮类别。 */
+/**
+ * 解码行的最高优先级高亮类别（new_ui.md §3.3 色条）。
+ *
+ * 优先级（高→低）：正在发射 > 与我有关 > CQ > 已通联 > 重复 > 新网格 > 新 DXCC/ITU > 新呼号 > 新解码。
+ */
 enum class HighlightRole {
-    /** 当前 QSO 对手。 */
-    CURRENT_QSO,
+    /** 正在发射（黄底黑字）。 */
+    TX,
 
-    /** 发给我（`to == myCall`）。 */
+    /** 与我有关 / 当前 QSO 对手（蓝）。 */
     TO_ME,
 
-    /** 对方网格未通联。 */
+    /** CQ（橙）。 */
+    CQ,
+
+    /** 已通联（红，删除线）。 */
+    WORKED,
+
+    /** 重复解码（灰）。 */
+    DUPLICATE,
+
+    /** 新网格（紫）。 */
     NEW_GRID,
 
-    /** 对面前缀未通联（近似）。 */
-    NEW_PREFIX,
+    /** 新 DXCC / 新 ITU（棕；当前以「新前缀」近似，精确实体表见 U7）。 */
+    NEW_ENTITY,
 
-    /** 其余（含已通联）。 */
+    /** 新呼号（粉）。 */
+    NEW_CALL,
+
+    /** 其余新解码（绿）。 */
     NORMAL,
 }
 
 /**
  * 一条解码的高亮判定结果。
  *
- * [role] 用于决定左侧色条/行底色；各布尔标记用于显示圆点与外层过滤。
+ * [role] 用于决定左侧色条/行底色；各布尔标记用于显示标记点与详情半屏。
  */
 data class DecodeStyle(
     val role: HighlightRole,
     val isCq: Boolean = false,
     val toMe: Boolean = false,
+    /** 是否为当前 QSO 对手。 */
+    val current: Boolean = false,
+    val newCall: Boolean = false,
     val newGrid: Boolean = false,
+    /** 新前缀（近似「新 DXCC / 新 ITU」）。 */
     val newPrefix: Boolean = false,
     val worked: Boolean = false,
+    val duplicate: Boolean = false,
+    val transmitting: Boolean = false,
 )
 
-/** 依据 `docs/UI-DESIGN.md` 第 5.1 节的判定顺序给解码行分类。 */
+/** 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。 */
 object DecodeHighlight {
+
+    /** 解码行的稳定键：同一文本 + 同一时隙视为同一行。 */
+    fun rowKey(text: String, slotUtcMs: Long): String = "${text.trim()}@$slotUtcMs"
+
+    /**
+     * 计算「重复解码」行的键集合：同一文本在更早时隙已出现过（按时间从旧到新扫描）。
+     *
+     * 返回的键与 [rowKey] 一致，供 UI 直接比对。
+     */
+    fun duplicateRowKeys(messages: List<DecodeResult>): Set<String> {
+        val seen = HashSet<String>()
+        val dup = HashSet<String>()
+        for (m in messages.sortedBy { it.slotUtcMs }) {
+            if (!seen.add(m.text.trim())) dup.add(rowKey(m.text, m.slotUtcMs))
+        }
+        return dup
+    }
 
     fun classify(
         parsed: ParsedMessage,
         worked: WorkedIndex = WorkedIndex.EMPTY,
         currentQsoCall: String? = null,
         myCall: String = "",
+        duplicate: Boolean = false,
+        currentTxText: String? = null,
     ): DecodeStyle {
         val from = parsed.from
         val toMe = parsed.addressedTo(myCall)
@@ -106,21 +148,31 @@ object DecodeHighlight {
         val current = from != null &&
             currentQsoCall != null &&
             from.equals(currentQsoCall, ignoreCase = true)
+        val transmitting = currentTxText != null &&
+            parsed.raw.trim().equals(currentTxText.trim(), ignoreCase = true)
 
         val role = when {
-            current -> HighlightRole.CURRENT_QSO
-            toMe -> HighlightRole.TO_ME
+            transmitting -> HighlightRole.TX
+            current || toMe -> HighlightRole.TO_ME
+            parsed.isCq -> HighlightRole.CQ
+            workedCall -> HighlightRole.WORKED
+            duplicate -> HighlightRole.DUPLICATE
             newGrid -> HighlightRole.NEW_GRID
-            newPrefix -> HighlightRole.NEW_PREFIX
+            newPrefix -> HighlightRole.NEW_ENTITY
+            from != null -> HighlightRole.NEW_CALL
             else -> HighlightRole.NORMAL
         }
         return DecodeStyle(
             role = role,
             isCq = parsed.isCq,
             toMe = toMe,
+            current = current,
+            newCall = from != null && !workedCall,
             newGrid = newGrid,
             newPrefix = newPrefix,
             worked = workedCall,
+            duplicate = duplicate,
+            transmitting = transmitting,
         )
     }
 }

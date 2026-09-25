@@ -18,6 +18,7 @@ import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.CallFirstSelector
 import com.example.ft8vox.qso.DecodeFilterState
+import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
@@ -229,12 +230,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(callFirst = mode) }
     }
 
-    fun setCqOnly(value: Boolean) {
-        persist { it.copy(cqOnly = value) }
+    fun setFilterTags(tags: Set<DecodeFilterTag>) {
+        persist { it.copy(filterTags = tags) }
     }
 
-    fun setExcludeWorked(value: Boolean) {
-        persist { it.copy(excludeWorked = value) }
+    /** 忽略一个呼号（不再显示其解码，也不参与 Call 1st）。 */
+    fun ignoreCall(call: String) {
+        val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
+        persist { it.copy(ignoredCalls = it.ignoredCalls + c) }
+    }
+
+    /** 取消忽略（供设置页管理）。 */
+    fun unignoreCall(call: String) {
+        val c = call.trim().uppercase()
+        persist { it.copy(ignoredCalls = it.ignoredCalls - c) }
+    }
+
+    fun clearIgnored() {
+        persist { it.copy(ignoredCalls = emptySet()) }
     }
 
     fun setCallFilter(value: String) {
@@ -617,9 +630,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun currentFilter(): DecodeFilterState {
         val s = latestSettings
         return DecodeFilterState(
-            cqOnly = s.cqOnly,
-            excludeWorked = s.excludeWorked,
+            tags = s.filterTags,
             query = s.callFilter,
+            ignoredCalls = s.ignoredCalls,
         )
     }
 

@@ -9,8 +9,10 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.qso.DecodeFilterTag
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -60,7 +62,9 @@ private object Keys {
     val maxRetries = intPreferencesKey("max_retries")
     val cqOnly = booleanPreferencesKey("cq_only")
     val excludeWorked = booleanPreferencesKey("exclude_worked")
+    val filterTags = stringSetPreferencesKey("filter_tags")
     val callFilter = stringPreferencesKey("call_filter")
+    val ignoredCalls = stringSetPreferencesKey("ignored_calls")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
     val decodePreset = stringPreferencesKey("decode_preset")
@@ -79,6 +83,18 @@ private inline fun <reified T : Enum<T>> Preferences.enumOr(key: Preferences.Key
     return enumValues<T>().firstOrNull { it.name == name } ?: fallback
 }
 
+/** 读取筛选项；旧版本只有 cqOnly 时迁移为「CQ」，缺失则用默认值。 */
+private fun readFilterTags(prefs: Preferences, defaults: Set<DecodeFilterTag>): Set<DecodeFilterTag> {
+    val stored = prefs[Keys.filterTags]
+    if (stored != null) {
+        return stored.mapNotNull { name -> DecodeFilterTag.entries.firstOrNull { it.name == name } }.toSet()
+    }
+    return when (prefs[Keys.cqOnly]) {
+        true -> setOf(DecodeFilterTag.CQ)
+        false, null -> defaults
+    }
+}
+
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
     return AppSettings(
@@ -92,9 +108,12 @@ private fun Preferences.toAppSettings(): AppSettings {
         holdTxFreq = this[Keys.holdTxFreq] ?: defaults.holdTxFreq,
         callFirst = enumOr(Keys.callFirst, defaults.callFirst),
         maxRetries = (this[Keys.maxRetries] ?: defaults.maxRetries).coerceIn(1, 20),
-        cqOnly = this[Keys.cqOnly] ?: defaults.cqOnly,
-        excludeWorked = this[Keys.excludeWorked] ?: defaults.excludeWorked,
+        filterTags = readFilterTags(this, defaults.filterTags),
         callFilter = this[Keys.callFilter] ?: defaults.callFilter,
+        ignoredCalls = this[Keys.ignoredCalls]
+            ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+            ?.toSet()
+            ?: defaults.ignoredCalls,
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
@@ -122,9 +141,9 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.holdTxFreq] = holdTxFreq
     prefs[Keys.callFirst] = callFirst.name
     prefs[Keys.maxRetries] = maxRetries
-    prefs[Keys.cqOnly] = cqOnly
-    prefs[Keys.excludeWorked] = excludeWorked
+    prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
+    prefs[Keys.ignoredCalls] = ignoredCalls
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodePreset] = decodePreset.name

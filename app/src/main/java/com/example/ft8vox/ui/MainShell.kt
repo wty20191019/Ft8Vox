@@ -100,6 +100,8 @@ fun MainShell(
                     viewModel = session,
                     settings = appSettings,
                     onOpenSettings = { tab = MainTab.SETTINGS },
+                    onOpenMap = { tab = MainTab.MAP },
+                    onOpenLog = { tab = MainTab.LOG },
                 )
                 MainTab.MAP -> GridScreen(
                     log = log,

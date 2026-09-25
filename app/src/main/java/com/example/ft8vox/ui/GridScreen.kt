@@ -372,10 +372,14 @@ private fun LiveList(
 }
 
 private fun roleShort(role: HighlightRole): String = when (role) {
-    HighlightRole.CURRENT_QSO -> "当前"
+    HighlightRole.TX -> "发射"
     HighlightRole.TO_ME -> "给我"
+    HighlightRole.CQ -> "CQ"
+    HighlightRole.WORKED -> "已通"
+    HighlightRole.DUPLICATE -> "重复"
     HighlightRole.NEW_GRID -> "新格"
-    HighlightRole.NEW_PREFIX -> "新缀"
+    HighlightRole.NEW_ENTITY -> "新实体"
+    HighlightRole.NEW_CALL -> "新呼号"
     HighlightRole.NORMAL -> "普通"
 }
 

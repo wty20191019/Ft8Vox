@@ -1,13 +1,15 @@
 package com.example.ft8vox.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,16 +18,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -41,46 +47,43 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.CallFirstMode
-import com.example.ft8vox.engine.DecodeResult
-import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
+import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.DecodeHighlight
-import com.example.ft8vox.qso.DecodeStyle
-import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.MessageParser
-import com.example.ft8vox.qso.ParsedMessage
 import com.example.ft8vox.qso.WorkedIndex
+import com.example.ft8vox.ui.theme.VoxAccent
+import com.example.ft8vox.ui.theme.VoxError
+import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
+import com.example.ft8vox.ui.theme.VoxRxGreen
+import com.example.ft8vox.ui.theme.VoxTxRed
 import java.util.Locale
 
-// ---- 高亮语义色（与 docs/UI-DESIGN.md 第 4.1 节一致） ----
-private val HighlightCurrent = Color(0xFFFFAB00)
-private val HighlightToMe = Color(0xFF00B0FF)
-private val HighlightNewGrid = Color(0xFF00C853)
-private val HighlightNewPrefix = Color(0xFFD50000)
-
 /**
- * 操作页：JTDX / FT8CN 风格的分区布局。
+ * 操作页（new_ui.md §3）：水位图 → 筛选条 → 解码列表 → 发射控制。
  *
- * 自上而下：台站身份/波段 → 时隙进度 → 瀑布 → 频率轴 → RX/TX 面板 → 过滤条 → 解码列表 → QSO 控制面板。
+ * 顶栏（波段/模式/UTC）与底部状态条由 [MainShell] 统一提供，本页不再重复。
  */
 @Composable
 fun OperateScreen(
     viewModel: SessionViewModel,
     settings: AppSettings,
     onOpenSettings: () -> Unit,
+    onOpenMap: (String?) -> Unit,
+    onOpenLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -99,10 +102,10 @@ fun OperateScreen(
     }
     var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
     var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
-    var manualFor by remember { mutableStateOf<DecodeResult?>(null) }
-    var freeTextFor by remember { mutableStateOf<String?>(null) }
     var confirmCallFirst by remember { mutableStateOf(false) }
     var controlExpanded by rememberSaveable { mutableStateOf(false) }
+    var queryOpen by rememberSaveable { mutableStateOf(false) }
+    var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
 
     fun execute(action: PendingTx) {
         when (action) {
@@ -131,111 +134,148 @@ fun OperateScreen(
         }
     }
 
+    fun copyToClipboard(text: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("FT8 消息", text))
+    }
+
     // 过滤 + 高亮（纯逻辑，见 DecodeFilter / DecodeHighlight）
     val filter = DecodeFilterState(
-        cqOnly = settings.cqOnly,
-        excludeWorked = settings.excludeWorked,
+        tags = settings.filterTags,
         query = settings.callFilter,
+        ignoredCalls = settings.ignoredCalls,
     )
+    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls) {
+        DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
+    }
+    val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     val rows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,
+        status.txing, status.lastTxText, duplicateKeys,
     ) {
+        val txText = if (status.txing) status.lastTxText else null
         messages.mapNotNull { m ->
             val p = MessageParser.parse(m.text)
             if (!DecodeFilter.matches(p, filter, worked, status.myCall)) return@mapNotNull null
-            DecodeRowModel(m, p, DecodeHighlight.classify(p, worked, status.qso.theirCall, status.myCall))
+            val dup = DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys
+            DecodeRow(
+                m,
+                p,
+                DecodeHighlight.classify(p, worked, status.qso.theirCall, status.myCall, dup, txText),
+            )
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)) {
 
-        HeaderRow(
-            status = status,
-            onOpenSettings = onOpenSettings,
-            onToggleRunning = { if (status.running) viewModel.stop() else request(null) },
-            onBandChange = { viewModel.setBand(it) },
-        )
-
-        StatusBar(status)
-
-        // ---- 瀑布 ----
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(settings.waterfallHeight.heightDp.dp)
-                .background(Color.Black),
-        ) {
-            WaterfallView(
-                frame = waterfall,
-                selectedFreqHz = status.selectedFreqHz,
-                slotParity = status.slotParity,
-                onSelectFrequency = { viewModel.selectFrequency(it) },
-                modifier = Modifier.fillMaxSize(),
-                rxFreqHz = status.rxFreqHz,
-                txing = status.txing,
+        if (status.myCall.isEmpty()) {
+            Text(
+                "未设置呼号与网格，点此前往设置后再发射。",
+                style = MaterialTheme.typography.labelSmall,
+                color = VoxError,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 2.dp)
+                    .clickable(onClick = onOpenSettings),
             )
         }
+
+        // ---- §3.1 水位图（约 0.30 屏高）+ 顶部浮条 ----
+        WaterfallBox(
+            waterfall = waterfall,
+            status = status,
+            settings = settings,
+            onToggleRunning = { if (status.running) viewModel.stop() else request(null) },
+            onSelectFrequency = { viewModel.selectFrequency(it) },
+            onLongPress = { hz ->
+                viewModel.selectFrequency(hz)
+                val near = rows.minByOrNull { kotlin.math.abs(it.msg.df - hz) }
+                if (near != null && (near.parsed.from != null || near.parsed.isCq)) detailFor = near
+            },
+        )
+
         FrequencyAxis(waterfall?.fMinHz, waterfall?.maxHz)
 
-        FreqPanel(
-            rxFreqHz = status.rxFreqHz,
-            txFreqHz = status.selectedFreqHz,
-            holdTxFreq = status.holdTxFreq,
-            onNudge = { viewModel.nudgeTxFreq(it) },
-            onHoldChange = { viewModel.setHoldTxFreq(it) },
-        )
-
-        FilterRow(
+        // ---- §3.2 筛选 Chip 行 ----
+        FilterChipRow(
             filter = filter,
-            shown = rows.size,
-            total = messages.size,
-            onCqOnly = { viewModel.setCqOnly(it) },
-            onExcludeWorked = { viewModel.setExcludeWorked(it) },
-            onQuery = { viewModel.setCallFilter(it) },
+            counts = counts,
+            queryOpen = queryOpen,
+            onToggleSearch = { queryOpen = !queryOpen },
+            onToggle = { viewModel.setFilterTags(filter.toggle(it).tags) },
         )
+        if (queryOpen) {
+            var query by remember { mutableStateOf(settings.callFilter) }
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    viewModel.setCallFilter(it)
+                },
+                placeholder = { Text("呼号 / 前缀 / 网格（逗号分隔）", style = MaterialTheme.typography.labelSmall) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
+        }
 
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        HorizontalDivider(Modifier.padding(vertical = 3.dp))
 
+        // ---- §3.3 解码列表 ----
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.Center,
         ) {
             if (rows.isEmpty()) {
                 Text(
-                    decodeEmptyHint(status, messages.size),
+                    decodeEmptyHint(status, messages.size, filter.isEmptySelection),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = VoxOnSurfaceVariant,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 24.dp),
                 )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(rows, key = { it.msg.text + "@" + it.msg.slotUtcMs }) { row ->
-                        DecodeRow(
-                            model = row,
-                            slotMs = status.slotMs.toLong(),
-                            manualEnabled = !status.qso.active,
-                            onClick = { viewModel.selectFrequency(row.msg.df) },
-                            onReply = { pendingTx = PendingTx.Reply(row.parsed.from!!, row.parsed.grid, row.msg.df) },
-                            onLongPress = { manualFor = row.msg },
+                        val from = row.parsed.from
+                        DecodeCard(
+                            row = row,
+                            myCall = status.myCall,
+                            onClick = {
+                                viewModel.selectFrequency(row.msg.df)
+                                detailFor = row
+                            },
+                            onDoubleClick = { onOpenMap(from) },
+                            onSwipeCall = {
+                                if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                                }
+                            },
+                            onSwipeIgnore = { from?.let { viewModel.ignoreCall(it) } },
+                            onCopy = { copyToClipboard(row.msg.text) },
+                            onIgnore = { from?.let { viewModel.ignoreCall(it) } },
                         )
                     }
                 }
             }
         }
 
+        // ---- §3.4 发射控制（U3 改为抽屉；此处保持折叠面板） ----
         ControlPanel(
             status = status,
             expanded = controlExpanded,
             onToggle = { controlExpanded = !controlExpanded },
             onParityChange = { viewModel.setTxParity(it) },
+            onNudge = { viewModel.nudgeTxFreq(it) },
+            onHoldTxChange = { viewModel.setHoldTxFreq(it) },
             onStartCq = { pendingTx = PendingTx.Cq },
             onStopTx = { viewModel.stopTransmit() },
             onSetCallFirst = { viewModel.setCallFirst(it) },
-            onRequestArmCallFirst = { if (status.callFirstArmed) viewModel.disarmCallFirst() else confirmCallFirst = true },
+            onRequestArmCallFirst = {
+                if (status.callFirstArmed) viewModel.disarmCallFirst() else confirmCallFirst = true
+            },
             recentQso = recentQso,
         )
     }
@@ -252,37 +292,23 @@ fun OperateScreen(
         )
     }
 
-    manualFor?.let { msg ->
-        val parsed = MessageParser.parse(msg.text)
-        ManualSendDialog(
-            parsed = parsed,
-            snr = msg.snr,
+    detailFor?.let { row ->
+        DecodeDetailSheet(
+            row = row,
             myCall = status.myCall,
-            onAnswer = {
-                manualFor = null
-                pendingTx = PendingTx.Reply(parsed.from!!, parsed.grid, msg.df)
+            myGrid = status.myGrid.ifEmpty { null },
+            onCall = {
+                val from = row.parsed.from
+                detailFor = null
+                if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                }
             },
-            onSend = {
-                manualFor = null
-                viewModel.sendOnce(it)
+            onOpenLog = {
+                detailFor = null
+                onOpenLog()
             },
-            onFreeText = {
-                manualFor = null
-                freeTextFor = parsed.from
-            },
-            onDismiss = { manualFor = null },
-        )
-    }
-
-    freeTextFor?.let { to ->
-        FreeTextDialog(
-            to = to,
-            myCall = status.myCall,
-            onSend = {
-                freeTextFor = null
-                viewModel.sendOnce(it)
-            },
-            onDismiss = { freeTextFor = null },
+            onDismiss = { detailFor = null },
         )
     }
 
@@ -313,155 +339,233 @@ fun OperateScreen(
     }
 }
 
-/**
- * 解码列表空态提示文案（纯函数，便于 JVM 单测）。
- *
- * 三种情况：未开始接收 / 已接收但本时隙无解码 / 有解码但被过滤掉。
- */
-fun decodeEmptyHint(status: ReceiverStatus, decodedTotal: Int): String = when {
-    !status.running -> "未开始接收：点右上角「开始接收」"
-    decodedTotal == 0 -> "本时隙暂无解码，等待信号…\n（未接天线 / 无音频输入时不会出现解码）"
-    else -> "没有符合当前过滤条件的解码"
+/** 水位图高度档位 → 屏高比例（new_ui.md §3.1：约 0.30）。 */
+fun WaterfallHeight.screenFraction(): Float = when (this) {
+    WaterfallHeight.COMPACT -> 0.24f
+    WaterfallHeight.NORMAL -> 0.30f
+    WaterfallHeight.TALL -> 0.38f
 }
 
-/** 解码行 + 解析结果 + 高亮分类。 */
-private data class DecodeRowModel(
-    val msg: DecodeResult,
-    val parsed: ParsedMessage,
-    val style: DecodeStyle,
-)
-
+/**
+ * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + RX/TX 读数。
+ */
 @Composable
-private fun HeaderRow(
+private fun WaterfallBox(
+    waterfall: WaterfallFrame?,
     status: ReceiverStatus,
-    onOpenSettings: () -> Unit,
+    settings: AppSettings,
     onToggleRunning: () -> Unit,
-    onBandChange: (String) -> Unit,
+    onSelectFrequency: (Int) -> Unit,
+    onLongPress: (Int) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val wfHeight: Dp = (screenHeight * settings.waterfallHeight.screenFraction()).coerceAtLeast(150.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(wfHeight)
+            .background(Color.Black),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "${status.myCall.ifEmpty { "（未设置呼号）" }} / ${status.myGrid.ifEmpty { "--" }}",
-                style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.clickable(onClick = onOpenSettings),
+        WaterfallView(
+            frame = waterfall,
+            selectedFreqHz = status.selectedFreqHz,
+            slotParity = status.slotParity,
+            onSelectFrequency = onSelectFrequency,
+            modifier = Modifier.fillMaxSize(),
+            rxFreqHz = status.rxFreqHz,
+            txing = status.txing,
+            onLongPress = onLongPress,
+        )
+
+        // 顶部浮条
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .background(Color(0x99000000))
+                .padding(horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OverlayButton(
+                text = if (status.running) "❚❚" else "▶",
+                enabled = true,
+                onClick = onToggleRunning,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                BandSelector(band = status.band, enabled = true, onChange = onBandChange)
-                Text(if (status.running) "● 接收中" else "○ 已停止", style = MaterialTheme.typography.labelMedium)
-            }
+            OverlayButton(text = "增益", enabled = false, onClick = {})
+            OverlayButton(text = "噪抑", enabled = false, onClick = {})
+            OverlayButton(text = "带宽", enabled = false, onClick = {})
         }
-        Button(onClick = onToggleRunning) {
-            Text(if (status.running) "停止接收" else "开始接收")
+
+        // 参考电平（右上）
+        Text(
+            "Ref -50~-10dB",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xCCFFFFFF),
+            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+        )
+
+        // RX / TX 读数（右下）
+        Text(
+            String.format(
+                Locale.US,
+                "RX %s   TX %d Hz",
+                status.rxFreqHz?.toString() ?: "--",
+                status.selectedFreqHz,
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xCCFFFFFF),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+        )
+
+        // 时隙进度条（贴底）
+        if (status.running) {
+            LinearProgressIndicator(
+                progress = { status.slotProgress },
+                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp),
+            )
         }
     }
-    if (status.myCall.isEmpty()) {
+}
+
+/** 浮条上的小按钮（44dp 触摸高度）。 */
+@Composable
+private fun OverlayButton(text: String, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = 44.dp),
+    ) {
         Text(
-            "请到「设置」填写呼号与网格后再发射。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.error,
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (enabled) Color.White else Color(0x66FFFFFF),
         )
     }
 }
 
-@Composable
-private fun BandSelector(band: String, enabled: Boolean, onChange: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }, enabled = enabled) {
-            Text("波段 $band ▾", style = MaterialTheme.typography.labelMedium)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            for (b in BandPlan.bands) {
-                DropdownMenuItem(
-                    text = { Text(b.name) },
-                    onClick = {
-                        expanded = false
-                        onChange(b.name)
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatusBar(status: ReceiverStatus) {
-    val parity = if (status.slotParity == 0) "偶数周期" else "奇数周期"
-    val alignHint = if (status.running && !status.inSlot) "（等待时隙对齐…）" else ""
-    Column {
-        Text("状态：${status.status}$alignHint", style = MaterialTheme.typography.bodySmall)
-        if (status.running) {
-            Text(
-                String.format(
-                    Locale.US,
-                    "时隙 %d ms｜%s｜下一时隙 %.1f s｜已解码时隙 %d｜丢帧 %d",
-                    status.slotMs,
-                    parity,
-                    status.msToNextSlot / 1000.0,
-                    status.slotsDecoded,
-                    status.droppedSamples,
-                ),
-                style = MaterialTheme.typography.labelSmall,
-            )
-            LinearProgressIndicator(
-                progress = { status.slotProgress },
-                modifier = Modifier.fillMaxWidth().height(4.dp),
-            )
-        }
-    }
-}
-
+/** 频率轴刻度（左 / 中 / 右）。 */
 @Composable
 private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
+    val a = fMinHz ?: 0f
+    val b = maxHz ?: 0f
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        val a = fMinHz ?: 0f
-        val b = maxHz ?: 0f
-        val mid = (a + b) / 2f
-        for (v in listOf(a, mid, b)) {
+        for (v in listOf(a, (a + b) / 2f, b)) {
             Text(
                 "${v.toInt()} Hz",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
+                color = VoxOnSurfaceVariant,
             )
         }
     }
 }
 
-/** RX / TX 频率面板：点瀑布或解码行设 RX，步进按钮调 TX，Hold Tx 决定是否联动。 */
+/** 筛选 Chip 行（横向滚动）：全部互斥，其余多选，附角标计数。 */
 @Composable
-private fun FreqPanel(
-    rxFreqHz: Int?,
-    txFreqHz: Int,
-    holdTxFreq: Boolean,
-    onNudge: (Int) -> Unit,
-    onHoldChange: (Boolean) -> Unit,
+private fun FilterChipRow(
+    filter: DecodeFilterState,
+    counts: Map<DecodeFilterTag, Int>,
+    queryOpen: Boolean,
+    onToggleSearch: () -> Unit,
+    onToggle: (DecodeFilterTag) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (tag in DecodeFilterTag.entries) {
+            FilterChip(
+                selected = filter.isSelected(tag),
+                onClick = { onToggle(tag) },
+                label = {
+                    Text(
+                        "${tag.label} ${counts[tag] ?: 0}",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = VoxAccent,
+                    selectedLabelColor = Color.White,
+                ),
+            )
+        }
+        IconButton(onClick = onToggleSearch) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = "呼号过滤",
+                tint = if (queryOpen) VoxAccent else VoxOnSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 解码列表空态提示文案（纯函数，便于 JVM 单测）。
+ *
+ * 四种情况：未选筛选项 / 未开始接收 / 已接收但无解码 / 有解码但被过滤。
+ */
+fun decodeEmptyHint(
+    status: ReceiverStatus,
+    decodedTotal: Int,
+    filterEmptySelection: Boolean = false,
+): String = when {
+    filterEmptySelection -> "请至少开启一个筛选"
+    !status.running -> "未开始接收：点水位图左上角「▶」开始"
+    decodedTotal == 0 -> "等待解码…\n（未接天线 / 无音频输入时不会出现解码）"
+    else -> "没有符合当前筛选条件的解码消息"
+}
+
+/** 折叠式 QSO 控制面板：折叠态一行摘要，展开态含频率微调、周期、Call 1st 与最近通联。 */
+@Composable
+private fun ControlPanel(
+    status: ReceiverStatus,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onParityChange: (Int) -> Unit,
+    onNudge: (Int) -> Unit,
+    onHoldTxChange: (Boolean) -> Unit,
+    onStartCq: () -> Unit,
+    onStopTx: () -> Unit,
+    onSetCallFirst: (CallFirstMode) -> Unit,
+    onRequestArmCallFirst: () -> Unit,
+    recentQso: List<com.example.ft8vox.data.log.QsoEntity>,
+) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "RX  ${rxFreqHz?.let { "$it Hz" } ?: "--"}",
+                if (status.txArmed) {
+                    "发射 ${status.qso.txText ?: status.manualTxText ?: "--"}"
+                } else {
+                    "QSO ${status.qso.description}"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
-                color = Color(0xFF2E7D32),
+                color = if (status.txing) VoxTxRed else if (status.running) VoxRxGreen else VoxOnSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
             Text(
-                "TX  $txFreqHz Hz",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = Color(0xFFC62828),
+                "Call 1st ${status.callFirst.label}${if (status.callFirstArmed) "●" else ""}",
+                style = MaterialTheme.typography.labelSmall,
             )
+            TextButton(onClick = onToggle) { Text(if (expanded) "收起" else "展开") }
         }
+        if (!expanded) return@Column
+
+        HorizontalDivider(Modifier.padding(vertical = 2.dp))
+        QsoStatusLine(status)
+
+        // 发射频率微调 + Hold Tx
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -476,159 +580,12 @@ private fun FreqPanel(
                 }
             }
             FilterChip(
-                selected = holdTxFreq,
-                onClick = { onHoldChange(!holdTxFreq) },
+                selected = status.holdTxFreq,
+                onClick = { onHoldTxChange(!status.holdTxFreq) },
                 label = { Text("Hold Tx", style = MaterialTheme.typography.labelSmall) },
             )
         }
-    }
-}
 
-@Composable
-private fun FilterRow(
-    filter: DecodeFilterState,
-    shown: Int,
-    total: Int,
-    onCqOnly: (Boolean) -> Unit,
-    onExcludeWorked: (Boolean) -> Unit,
-    onQuery: (String) -> Unit,
-) {
-    var query by remember { mutableStateOf(filter.query) }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilterChip(
-                selected = filter.cqOnly,
-                onClick = { onCqOnly(!filter.cqOnly) },
-                label = { Text("CQ only", style = MaterialTheme.typography.labelSmall) },
-            )
-            FilterChip(
-                selected = filter.excludeWorked,
-                onClick = { onExcludeWorked(!filter.excludeWorked) },
-                label = { Text("排除已通联", style = MaterialTheme.typography.labelSmall) },
-            )
-            Text("显示 $shown / $total", style = MaterialTheme.typography.labelSmall)
-        }
-        OutlinedTextField(
-            value = query,
-            onValueChange = {
-                query = it
-                onQuery(it)
-            },
-            placeholder = { Text("呼号/前缀过滤（逗号分隔多个）", style = MaterialTheme.typography.labelSmall) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun DecodeRow(
-    model: DecodeRowModel,
-    slotMs: Long,
-    manualEnabled: Boolean,
-    onClick: () -> Unit,
-    onReply: () -> Unit,
-    onLongPress: () -> Unit,
-) {
-    val message = model.msg
-    val style = model.style
-
-    // 偶/奇周期背景分色（按该条报文所属时隙判定）
-    val tint = if (message.slotUtcMs > 0 && slotMs > 0) {
-        val even = ((message.slotUtcMs / slotMs) % 2L) == 0L
-        if (even) Color(0x142962FF) else Color(0x14FF6D00)
-    } else {
-        Color.Transparent
-    }
-    val barColor = when (style.role) {
-        HighlightRole.CURRENT_QSO -> HighlightCurrent
-        HighlightRole.TO_ME -> HighlightToMe
-        HighlightRole.NEW_GRID -> HighlightNewGrid
-        HighlightRole.NEW_PREFIX -> HighlightNewPrefix
-        HighlightRole.NORMAL -> Color(0x33FFFFFF)
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(tint)
-            .combinedClickable(
-                enabled = true,
-                onClick = onClick,
-                onLongClick = { if (manualEnabled) onLongPress() },
-            )
-            .drawBehind {
-                drawRect(color = barColor, size = Size(3.dp.toPx(), size.height))
-            }
-            .padding(start = 6.dp, top = 2.dp, bottom = 2.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            buildString {
-                append(QsoTime.isoTime(message.slotUtcMs))
-                append(String.format(Locale.US, "  %+3d  DT %+.1f  %4d  ", message.snr, message.dt, message.df))
-                if (style.toMe) append("▎")
-                if (style.newGrid) append("●")
-                if (style.newPrefix) append("●")
-                append(" ")
-                append(message.text)
-            },
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = if (style.role == HighlightRole.TO_ME) HighlightToMe else Color.Unspecified,
-            modifier = Modifier.weight(1f),
-        )
-        val canReply = model.parsed.from != null &&
-            (model.parsed.isCq ||
-                (model.parsed.to != null &&
-                    (model.parsed.report != null || model.parsed.isRoger || model.parsed.grid != null)))
-        if (canReply) {
-            TextButton(onClick = onReply) {
-                Text("应答", style = MaterialTheme.typography.labelMedium)
-            }
-        }
-    }
-}
-
-/** 折叠式 QSO 控制面板：折叠态一行摘要，展开态含周期、Call 1st 与最近通联。 */
-@Composable
-private fun ControlPanel(
-    status: ReceiverStatus,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onParityChange: (Int) -> Unit,
-    onStartCq: () -> Unit,
-    onStopTx: () -> Unit,
-    onSetCallFirst: (CallFirstMode) -> Unit,
-    onRequestArmCallFirst: () -> Unit,
-    recentQso: List<com.example.ft8vox.data.log.QsoEntity>,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "QSO ${status.qso.description}",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "Call 1st ${status.callFirst.label}${if (status.callFirstArmed) "●" else ""}",
-                style = MaterialTheme.typography.labelSmall,
-            )
-            TextButton(onClick = onToggle) { Text(if (expanded) "收起" else "展开") }
-        }
-        if (!expanded) return@Column
-
-        HorizontalDivider(Modifier.padding(vertical = 2.dp))
-        QsoStatusLine(status)
         TxControlRow(
             txParity = status.txParity,
             armed = status.txArmed,
@@ -687,82 +644,4 @@ private fun ControlPanel(
             }
         }
     }
-}
-
-/** 长按解码行的逐条发送菜单。 */
-@Composable
-private fun ManualSendDialog(
-    parsed: ParsedMessage,
-    snr: Int,
-    myCall: String,
-    onAnswer: () -> Unit,
-    onSend: (String) -> Unit,
-    onFreeText: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val from = parsed.from
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("逐条发送") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(parsed.raw, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                if (from == null) {
-                    Text("该条没有可识别的呼号，只能发自由文本。", style = MaterialTheme.typography.labelSmall)
-                } else if (!parsed.isCq) {
-                    TextButton(onClick = onAnswer) { Text("应答 $from") }
-                }
-                if (from != null) {
-                    TextButton(onClick = { onSend("$from $myCall ${MessageParser.formatReport(snr)}") }) {
-                        Text("发报告 ${MessageParser.formatReport(snr)}")
-                    }
-                    TextButton(onClick = { onSend("$from $myCall R${MessageParser.formatReport(snr)}") }) {
-                        Text("发 R 报告")
-                    }
-                    TextButton(onClick = { onSend("$from $myCall RR73") }) { Text("发 RR73") }
-                    TextButton(onClick = { onSend("$from $myCall 73") }) { Text("发 73") }
-                }
-                TextButton(onClick = onFreeText) { Text("发自由文本…") }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-/** 自由文本发送（预填收方呼号）。 */
-@Composable
-private fun FreeTextDialog(
-    to: String?,
-    myCall: String,
-    onSend: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by remember { mutableStateOf(if (to != null) "$to $myCall " else "") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("发送自由文本") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it.uppercase() },
-                    label = { Text("报文") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    "自由文本需 4 个以上 token 才会被编码（如 CQ TEST）。",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSend(text) },
-                enabled = text.isNotBlank(),
-            ) { Text("发送") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
 }

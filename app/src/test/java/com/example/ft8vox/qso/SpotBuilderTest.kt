@@ -119,11 +119,11 @@ class SpotBuilderTest {
     fun carriesHighlightRole() {
         val worked = WorkedIndex(grids = listOf("PM95"))
         val spots = SpotBuilder.build(
-            messages = listOf(decoded("CQ JA1ABC PM95", slotUtcMs = 1000)),
+            messages = listOf(decoded("W1AW JA1ABC PM95", slotUtcMs = 1000)),
             worked = worked,
             myCall = "F4FSY",
         )
-        // 网格已通联、但前缀未通联 → NEW_PREFIX
-        assertEquals(HighlightRole.NEW_PREFIX, spots[0].style.role)
+        // 网格已通联、但前缀未通联 → 新实体（近似新 DXCC/ITU）
+        assertEquals(HighlightRole.NEW_ENTITY, spots[0].style.role)
     }
 }

@@ -3,6 +3,7 @@ package com.example.ft8vox.data.settings
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.qso.DecodeFilterTag
 
 /** Call 1st 自动应答策略。 */
 enum class CallFirstMode(val label: String) {
@@ -123,11 +124,13 @@ data class AppSettings(
     /** 自动序列最大重试次数。 */
     val maxRetries: Int = 6,
 
-    // ---- 解码列表过滤（显示层） ----
-    val cqOnly: Boolean = false,
-    val excludeWorked: Boolean = false,
+    // ---- 解码列表过滤（显示层，new_ui §3.2） ----
+    /** 已选中的筛选项；空集表示「一个都没开」。 */
+    val filterTags: Set<DecodeFilterTag> = setOf(DecodeFilterTag.ALL),
     /** 呼号/前缀过滤串（逗号分隔）。 */
     val callFilter: String = "",
+    /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
+    val ignoredCalls: Set<String> = emptySet(),
 
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,

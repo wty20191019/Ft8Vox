@@ -9,18 +9,24 @@ class DecodeEmptyHintTest {
     @Test
     fun stoppedReceiverAsksUserToStart() {
         val hint = decodeEmptyHint(ReceiverStatus(running = false), decodedTotal = 0)
-        assertTrue(hint.contains("开始接收"))
+        assertTrue(hint.contains("未开始接收"))
     }
 
     @Test
     fun runningWithoutDecodesWaitsForSignal() {
         val hint = decodeEmptyHint(ReceiverStatus(running = true), decodedTotal = 0)
-        assertTrue(hint.contains("暂无解码"))
+        assertTrue(hint.contains("等待解码"))
     }
 
     @Test
     fun filteredOutIsDistinguishedFromNoDecode() {
         val hint = decodeEmptyHint(ReceiverStatus(running = true), decodedTotal = 12)
-        assertTrue(hint.contains("过滤"))
+        assertTrue(hint.contains("筛选"))
+    }
+
+    @Test
+    fun emptyChipSelectionAsksToPickOne() {
+        val hint = decodeEmptyHint(ReceiverStatus(running = true), decodedTotal = 12, filterEmptySelection = true)
+        assertTrue(hint.contains("至少"))
     }
 }
