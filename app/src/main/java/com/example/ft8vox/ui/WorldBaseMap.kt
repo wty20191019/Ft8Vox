@@ -5,13 +5,18 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Rect
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.ft8vox.grid.MapProjection
 import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -91,32 +96,76 @@ internal object WorldBaseMap {
     }
 }
 
-/** 底图解码块的内存 LRU 缓存（仅在主线程增删，解码在 [Dispatchers.Default]）。 */
-internal class WorldBaseMapState(private val decoder: BitmapRegionDecoder) {
+/**
+ * 底图解码器的**应用级单例** + 解码块 LRU 缓存。
+ *
+ * 关键设计（都为了「切页不卡、快速切页不崩」）：
+ * - 解码器**应用生命周期内只打开一次、永不 `recycle()`**。此前每次进入地图页都会
+ *   `produceState` 新建解码器、离开时 `DisposableEffect` 里 `recycle()`；而
+ *   `ensure()` 的解码跑在 [Dispatchers.Default] 上无法被协程取消打断（`decodeRegion`
+ *   是阻塞 JNI），于是「快速切页」时 `recycle()` 与正在执行的 `decodeRegion` 并发 →
+ *   native use-after-free（`SIGSEGV`）。永不 recycle 从根上消除该竞态，且切换页面后
+ *   再回来无需重新解码整屏底图，明显更顺。
+ * - [ensure] 用 [ensureMutex] 串行化；解码在后台**纯计算**，Compose 状态只在持有锁的
+ *   调用方线程上修改；协程被取消只是丢弃结果，不会留下半更新状态。
+ * - 解码器访问统一走 [decoderLock]，任何路径都不会在解码中释放它。
+ */
+internal object WorldBaseMapState {
+    private val decoderLock = Any()
+    private val prepareMutex = Mutex()
+    private val ensureMutex = Mutex()
+
+    @Volatile
+    private var decoder: BitmapRegionDecoder? = null
+
+    @Volatile
+    private var opened = false
+
+    /** `null` = 尚未尝试打开；`true`/`false` = 可用/不可用（UI 据此决定是否回退纯色底图）。 */
+    var ready by mutableStateOf<Boolean?>(null)
+        private set
+
     private val bitmaps = mutableStateMapOf<Long, ImageBitmap>()
     private val order = ArrayDeque<Long>()
 
     /** 已解码好的块（未就绪返回 null）。读取该 State 会随解码完成自动触发重绘。 */
     fun bitmap(block: MapBlock): ImageBitmap? = bitmaps[block.key]
 
-    /** 确保 [blocks] 都已解码（缺的按序解码；淘汰时**不淘汰** [blocks] 内的块）。 */
-    suspend fun ensure(blocks: List<MapBlock>) {
-        val pinned = HashSet<Long>(blocks.size * 2)
-        for (b in blocks) pinned += b.key
-        for (b in blocks) {
-            if (bitmaps.containsKey(b.key)) {
-                touch(b.key)
-                continue
+    /** 打开解码器（幂等，只真正打开一次）。 */
+    suspend fun prepare(context: Context) {
+        if (opened) return
+        prepareMutex.withLock {
+            if (opened) return
+            val d = withContext(Dispatchers.IO) {
+                synchronized(decoderLock) {
+                    if (decoder == null) decoder = WorldBaseMap.open(context)
+                    decoder
+                }
             }
-            val img = withContext(Dispatchers.Default) { decode(b) } ?: continue
-            bitmaps[b.key] = img
-            order.addLast(b.key)
-            evict(pinned)
+            ready = d != null
+            opened = true
         }
     }
 
-    private fun touch(key: Long) {
-        if (order.remove(key)) order.addLast(key)
+    /** 确保 [blocks] 都已解码（缺的按序解码；淘汰时**不淘汰** [blocks] 内的块）。 */
+    suspend fun ensure(blocks: List<MapBlock>) {
+        if (blocks.isEmpty()) return
+        ensureMutex.withLock {
+            val pinned = HashSet<Long>(blocks.size * 2)
+            for (b in blocks) pinned += b.key
+            val missing = blocks.filter { it.key !in bitmaps }
+            if (missing.isEmpty()) return
+            // 纯解码，不触碰 Compose 状态；协程被取消只是丢弃结果
+            val decoded = withContext(Dispatchers.Default) {
+                missing.mapNotNull { b -> decode(b)?.let { b.key to it } }
+            }
+            for ((key, img) in decoded) {
+                if (key in bitmaps) continue
+                bitmaps[key] = img
+                order.addLast(key)
+                evict(pinned)
+            }
+        }
     }
 
     /**
@@ -135,25 +184,20 @@ internal class WorldBaseMapState(private val decoder: BitmapRegionDecoder) {
         }
     }
 
-    /** 释放 native 解码器与缓存。 */
-    fun close() {
-        runCatching { decoder.recycle() }
-        bitmaps.clear()
-        order.clear()
-    }
-
-    private fun decode(b: MapBlock): ImageBitmap? {
+    private fun decode(b: MapBlock): ImageBitmap? = synchronized(decoderLock) {
+        val d = decoder ?: return@synchronized null
         val dim = WorldBaseMap.SIZE shr b.level
         val x = b.bx * WorldBaseMap.BLOCK
         val y = b.by * WorldBaseMap.BLOCK
         val w = minOf(WorldBaseMap.BLOCK, dim - x)
         val h = minOf(WorldBaseMap.BLOCK, dim - y)
-        if (w <= 0 || h <= 0) return null
+        if (w <= 0 || h <= 0) return@synchronized null
         val options = BitmapFactory.Options().apply { inSampleSize = 1 shl b.level }
         val region = Rect(x shl b.level, y shl b.level, (x + w) shl b.level, (y + h) shl b.level)
-        val bitmap = runCatching { decoder.decodeRegion(region, options) }
+        val bitmap = runCatching { d.decodeRegion(region, options) }
             .onFailure { Log.w(TAG, "decodeRegion 失败 $region：${it.message}") }
-            .getOrNull() ?: return null
-        return bitmap.asImageBitmap()
+            .getOrNull() ?: return@synchronized null
+        bitmap.asImageBitmap()
     }
 }
+
