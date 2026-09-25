@@ -288,7 +288,9 @@ com/example/ft8vox/
 >     `SettingsScreen`（台站 / 日志与 ADIF / 关于）；`AppContainer` + `Ft8VoxApplication` 做手工依赖注入。
 >   - 呼号/网格/波段**下沉到设置页**并 DataStore 持久化；QSO 完成自动写入 Room；操作页「最近通联」改读 Room。
 >   - 即时生效：`start()` 会用设置里的 `fMin/fMax/timeOsr/freqOsr` 初始化引擎（7b 的设置界面待补）。
->   - **ADIF 细节**：长度按 **UTF-8 字节数**（ADIF 3.x 规定）解析/生成；导入判重口径为「呼号 + 完成时间 + 波段 + 模式」；
+>   - **ADIF 细节**：长度按 **UTF-8 字节数**（ADIF 3.x 规定）解析/生成；导入判重口径为「呼号 + 完成时间 + 波段 + 模式」（时间容差 ±60s，兼容 LoTW 只精确到分钟的导出），
+>     命中同一通联时按 `QsoMerge` **合并**（QSL/LoTW 确认状态与缺失字段补齐，已有非空值不覆盖），而非直接丢弃——
+>     否则导入 LoTW 确认报告会整份被跳过，「确认」永远不亮；
 >     导出用 `CreateDocument("application/octet-stream")`——用 `text/plain` 会被 DocumentsUI 强制追加 `.txt`，把 `.adi` 变成 `.adi.txt`。
 >   - **已知取舍**：打开 SAF 文件选择器会让 Activity 进入后台，`onStop` 会停止接收（阶段 9 上前台服务后消除）。
 >   - **验证**：`assembleDebug` 通过；JVM 单测 62 项全过（新增 ADIF/Maidenhead/QsoTime/BandPlan/日志筛选统计）；

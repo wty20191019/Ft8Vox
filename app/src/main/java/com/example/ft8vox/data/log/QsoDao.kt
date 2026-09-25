@@ -53,10 +53,30 @@ interface QsoDao {
     @Query("SELECT DISTINCT UPPER(theirGrid) FROM qso WHERE theirGrid IS NOT NULL AND theirGrid != ''")
     suspend fun workedGrids(): List<String>
 
-    /** 判重：呼号 + 完成时间 + 波段 + 模式。 */
+    /** 判重：呼号 + 完成时间 + 波段 + 模式。用于 ADIF 导入时的精确匹配。 */
     @Query(
-        "SELECT COUNT(*) FROM qso WHERE UPPER(theirCall) = UPPER(:call) " +
-            "AND utcMs = :utcMs AND band = :band AND mode = :mode",
+        "SELECT * FROM qso WHERE UPPER(theirCall) = UPPER(:call) " +
+            "AND utcMs = :utcMs AND band = :band AND mode = :mode LIMIT 1",
     )
-    suspend fun countExact(call: String, utcMs: Long, band: String, mode: String): Int
+    suspend fun findExact(call: String, utcMs: Long, band: String, mode: String): QsoEntity?
+
+    /**
+     * 近似判重：呼号 + 波段 + 模式相同且时间落在 `[fromMs, toMs]` 内，取时间最接近的一条。
+     *
+     * 用于兼容 LoTW 等只把 `TIME_ON` 精确到分钟的导出（与本地记录可能差几十秒）。
+     */
+    @Query(
+        "SELECT * FROM qso WHERE UPPER(theirCall) = UPPER(:call) " +
+            "AND band = :band AND mode = :mode " +
+            "AND utcMs BETWEEN :fromMs AND :toMs " +
+            "ORDER BY ABS(utcMs - :utcMs) LIMIT 1",
+    )
+    suspend fun findNear(
+        call: String,
+        band: String,
+        mode: String,
+        utcMs: Long,
+        fromMs: Long,
+        toMs: Long,
+    ): QsoEntity?
 }

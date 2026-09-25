@@ -286,7 +286,7 @@ Room(通联日志) ───┤         │
 | 编辑页 | 可改：呼号、网格、日期时间、波段/频率、模式、报告收发、QSL 状态、备注；可删除（二次确认） |
 | 补录 | 用同一编辑页，字段留空由用户填 |
 | 导出 ADIF | `ActivityResultContracts.CreateDocument("application/octet-stream")`，文件名 `ft8vox_yyyyMMdd.adi` |
-| 导入 ADIF | `ActivityResultContracts.OpenDocument`，容错解析；导入前显示「新增 N / 跳过重复 M」，重复判定用 `呼号+日期时间+波段+模式` |
+| 导入 ADIF | `ActivityResultContracts.OpenDocument`，容错解析；完成后显示「新增 N / 更新 U / 跳过 M」；重复判定用 `呼号+日期时间+波段+模式`（时间容差 ±60s，兼容 LoTW 只精确到分钟的导出），命中同一通联时**合并**新字段（QSL / LoTW 确认状态、缺失的网格/报告/备注），不新增重复行 |
 
 **ADIF 字段映射**（导出/导入）
 

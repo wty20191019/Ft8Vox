@@ -160,6 +160,68 @@ class QsoRepositoryTest {
     }
 
     @Test
+    fun importMergesLotwConfirmationIntoExistingRecords() = runBlocking {
+        repo.add(entity("JA1ABC")) // 本机记录：尚无确认
+        assertEquals(1, repo.count())
+
+        // LoTW 确认报告：同一条通联 + LOTW_QSL_RCVD=Y
+        val report = AdifCodec.encode(
+            listOf(
+                adifRecord(
+                    "CALL" to "JA1ABC",
+                    "QSO_DATE" to "20260924",
+                    "TIME_ON" to "120315",
+                    "BAND" to "20m",
+                    "MODE" to "FT8",
+                    "QSL_RCVD" to "Y",
+                    "LOTW_QSL_RCVD" to "Y",
+                ),
+            ),
+        )
+
+        val result = repo.importAdif(report, myCall = "F4FSY", myGrid = "JN25")
+        assertEquals(0, result.added)
+        assertEquals(1, result.updated)
+        assertEquals(0, result.skipped)
+        assertEquals(1, repo.count()) // 不新增重复行
+
+        val row = repo.observeAll().first().single()
+        assertEquals("Y", row.lotwRcvd)
+        assertEquals("Y", row.qslRcvd)
+        assertEquals(-8, row.reportSent) // 原有信息不被清空
+
+        // 再次导入同一份报告：已确认，无变化 → 全部跳过
+        val again = repo.importAdif(report, myCall = "F4FSY", myGrid = "JN25")
+        assertEquals(0, again.added)
+        assertEquals(0, again.updated)
+        assertEquals(1, again.skipped)
+    }
+
+    @Test
+    fun importMatchesLoTWTimeRoundedToMinute() = runBlocking {
+        repo.add(entity("JA1ABC")) // 12:03:15
+
+        // LoTW 导出常只精确到分钟
+        val report = AdifCodec.encode(
+            listOf(
+                adifRecord(
+                    "CALL" to "JA1ABC",
+                    "QSO_DATE" to "20260924",
+                    "TIME_ON" to "1203",
+                    "BAND" to "20m",
+                    "MODE" to "FT8",
+                    "LOTW_QSL_RCVD" to "Y",
+                ),
+            ),
+        )
+        val result = repo.importAdif(report, myCall = "", myGrid = null)
+        assertEquals(0, result.added)
+        assertEquals(1, result.updated)
+        assertEquals(1, repo.count())
+        assertEquals("Y", repo.observeAll().first().single().lotwRcvd)
+    }
+
+    @Test
     fun workedIndexesAreUppercasedAndDeduplicated() = runBlocking {
         repo.add(entity("ja1abc"))
         repo.add(entity("JA1ABC", utcMs = QsoTime.parseUtc("20260924", "130000")!!))

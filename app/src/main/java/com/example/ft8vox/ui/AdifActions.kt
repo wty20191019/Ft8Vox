@@ -82,7 +82,7 @@ fun rememberAdifActions(
                     } ?: throw IllegalStateException("无法读取所选文件")
                 }
                 val result = log.importAdif(text, call, grid?.ifEmpty { null })
-                "导入完成：新增 ${result.added} 条，跳过 ${result.skipped} 条（共 ${result.total}）"
+                "导入完成：新增 ${result.added} 条，更新 ${result.updated} 条，跳过 ${result.skipped} 条（共 ${result.total}）"
             } catch (e: Exception) {
                 "导入失败：${e.message}"
             }
