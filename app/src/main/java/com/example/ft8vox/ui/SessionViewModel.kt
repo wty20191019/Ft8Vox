@@ -260,10 +260,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 holdTxFreq = s.holdTxFreq,
                 autoProgram = s.auto,
-                // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
+                // 协议绑定在 native 引擎上（时隙长度 15s/7.5s 与调制方式），运行中不能直接改：
+                // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
             )
+        }
+        // 运行中改协议 → 重建引擎（接收短暂中断）
+        if (_status.value.running && s.protocol != _status.value.protocol) {
+            restartForProtocol(s.protocol)
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
         applyDecodeParams(s)
@@ -362,8 +367,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 配置 ----
 
     fun selectProtocol(protocol: Protocol) {
-        if (_status.value.running) return
-        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+        if (_status.value.protocol == protocol) return
+        // 协议不能热切换：只持久化，[applySettings] 检测到差异后会自动重建引擎重启接收
         persist { it.copy(protocolName = protocol.name) }
     }
 
@@ -674,6 +679,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 qso = qsoEngine.stop(),
             )
         }
+    }
+
+    /**
+     * 运行中切换协议（FT8 ⇄ FT4）：**停一下再重建引擎**。
+     *
+     * native monitor 的时隙长度（15 s / 7.5 s）与调制方式在创建时就固定了，没法热改，
+     * 所以只能重启一次采集。[stop] 会顺手关掉「发送总开关」并结束当前 QSO，这里按切换前
+     * 的状态把总开关恢复回来（换协议本身不应该收回「能不能发」的授权）。
+     */
+    private fun restartForProtocol(protocol: Protocol) {
+        val txWasOn = _status.value.txEnabled
+        stop()
+        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+        start()
+        if (!_status.value.running) return
+        if (txWasOn) setTxEnabled(true)
+        _status.update { it.copy(status = "已切换到 ${protocol.name}（重建引擎）") }
     }
 
     // ---- 发射 / QSO ----

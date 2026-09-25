@@ -528,4 +528,28 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   发射报文对方可解（`REGRESSION.md` A 组新增该项）。
 
 
+### 补记：模式切换（FT8 ⇄ FT4）在运行中也能生效
+
+用户反馈「操作页左上角的设置里，模式只能 FT8」。
+
+- **根因**：`selectProtocol()` 开头是 `if (running) return`，而 U8 起「进操作页且已授权即自动
+  `start()`」，所以 App 几乎总是处于接收中 → 在顶栏菜单里点 FT4 被静默忽略，看起来就像
+  「模式只能是 FT8」。设置页 6.3「模式」同因（`applySettings` 里 `protocol = if (cur.running) cur.protocol else s.protocol`）。
+- **为什么不能热切换**：协议决定 native monitor 的**时隙长度（15 s / 7.5 s）与调制方式**，
+  在建引擎（`AudioEngine.initialize(Ft8Config(protocol=…))`）时就固定了，只能重建。
+- **改法（单一规则）**：`selectProtocol()` 退化为「只持久化」；由 `applySettings()` 统一判断
+  —— 若 `running && s.protocol != status.protocol`，调用新增的 `restartForProtocol()`：
+  `stop()` → 更新 `protocol`/`slotMs` → `start()` → 按切换前状态恢复「发送总开关」。
+  这样顶栏菜单与设置页**两个入口**同一条路径，且顺带修掉了「冷启动首帧设置未到就 start()」
+  导致的协议不一致。
+- **副作用（可接受且已写在 UI 提示里）**：接收短暂中断；`stop()` 会结束当前 QSO（换协议本就
+  不该继续）；总开关状态保留（换协议不收回发射授权）；周期锁定按新协议重新对齐。
+- **UI 提示**：顶栏菜单「模式」标题改为「模式（切换会重建引擎，接收短暂中断）」；设置页 6.3
+  「模式」副标题说明「FT8 时隙 15 s、FT4 时隙 7.5 s，运行中切换自动重建引擎（总开关保留）」。
+- **测试**：FT4 时隙长度（7500 ms）与奇偶规则已由 `TxParityAutoTest` / `VoxPlanTest` 覆盖；
+  本次改动是 ViewModel 生命周期行为（依赖 JNI 引擎），故补在 `REGRESSION.md` 的**模拟器**可验证项
+  （协议切换会重建引擎，模拟器能直接看到顶栏变 `· FT4` 与状态提示）。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM 258 例 / 29 suite 全过。
+
+
 

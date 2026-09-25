@@ -161,7 +161,7 @@ fun Ft8VoxTopBar(
                     )
                     HorizontalDivider()
                     Text(
-                        "模式",
+                        "模式（切换会重建引擎，接收短暂中断）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),

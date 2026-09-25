@@ -306,6 +306,8 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
+                subtitle = "FT8 时隙 15 s、FT4 时隙 7.5 s。运行中切换会自动重建引擎（接收短暂中断，" +
+                    "发送总开关状态保留）；未接收时下次开始接收生效。",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
