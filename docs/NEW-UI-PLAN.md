@@ -382,5 +382,26 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   ③在 1+ 等级之间切换不弹确认，直接生效；④要「关掉自动程序」只能把等级切回 0（这也是设计意图）。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL、JVM 253 例全过（无新增单测；真机项见 `REGRESSION.md` E / M 组）。
 
+### U9 补记 7：设置页「高亮与提醒」加颜色小圆点 + 固定颜色图例
+
+用户要求：「给每个开关右边加一个颜色小圆点；不受这些开关控制的颜色加一个颜色图例。」
+起因是原说明只写「具体颜色见设计说明」，设置页里根本看不到颜色表，无法把开关和颜色对上。
+
+- **开关右侧色点**：`SettingsScreen.kt` 的 `PrefSwitch` 新增可选参数 `dotColor: Color?`，非空时在 `Switch`
+  **右侧**渲染 10dp 圆点（`ColorDot`，带一圈 `outline` 60% 淡描边，暗/亮主题都看得清）；`PrefChoice`
+  （「已通联」不是开关）也同样加 `dotColor`，色点右对齐到标题行末端，使同组色点排成一列。
+- **映射**（取自 `ui/theme/Color.kt:39-47`，与 `DecodeHighlight` 的色条角色一致）：
+  新 CQ 区域 / 新 ITU 区域 / 新 DXCC / 新前缀 = 棕 `BarNewEntity`；新网格 = 紫 `BarNewGrid`；
+  新呼号 = 粉 `BarNewCall`；已通联 = 红 `BarWorked`；末端标记「红=有我」= `VoxError`、
+  「蓝=正通联」= `colorScheme.primary`；「含我呼号哔声」无颜色，因此**不加**圆点。
+- **固定颜色图例**：组尾新增 `HighlightLegend()`（前面一条 `PrefDivider`），列出**不受这些开关控制**的颜色：
+  黄 `BarTx`＝正在发射（整行黄底黑字）、蓝 `BarToMe`＝与我有关 / 当前 QSO 对手（呼号同时红字）、
+  橙 `BarCq`＝CQ、灰 `BarDuplicate`＝重复解码（整行变淡）、绿 `BarNewDecode`＝其余新解码（兜底）。
+- **顶部说明改写**：原「关闭某类后…具体颜色见设计说明」改为给出完整优先级链
+  （正在发射 > 与我有关/当前对手 > CQ > 已通联 > 重复 > 新网格 > 新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码），
+  并说明「关闭某类即不再参与竞争，行尾圆点也随之消失；开关右侧圆点 = 该类对应的色条颜色」。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（无新增单测，纯 UI）；模拟器 `emulator-5554` 实拍暗/亮主题各一张，
+  色点与图例渲染正常、无布局跳动（真机项见 `REGRESSION.md` A 组与 §4）。
+
 
 
