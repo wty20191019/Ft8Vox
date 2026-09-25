@@ -183,10 +183,12 @@ object MapModel {
     }
 
     /**
-     * 信号连线：**只取最近一个时隙**的解码。
+     * 信号连线：**只取最近一个时隙**的解码，且**只画收发双方都在的报文**（如 `A B -12`）。
      *
-     * 方向为 `发方 → 收方`；CQ（无收方）时连到「我」（需已知 [myGrid]）。
-     * 端点位置优先用报文网格，其次 [gridCache]，最后呼号前缀归属地。
+     * 方向为 `发方 → 收方`；**CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用红旗表示，
+     * 见 [cqFlags]），所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
+     * 端点位置优先用报文网格，其次 [gridCache]，最后呼号前缀归属地；
+     * 收方是「我」时用 [myGrid]（避免把「我」定位到呼号前缀归属地）。
      */
     fun signalLinks(
         messages: List<DecodeResult>,
@@ -205,24 +207,18 @@ object MapModel {
             val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
             if (from == me) continue
             val fromLoc = resolve(from, p.grid, gridCache) ?: continue
-            val to = p.to?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+            // CQ：无收方，不画连线（CQ 位置另有红旗标记）
+            val to = p.to?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
             val toLat: Double
             val toLon: Double
-            if (to != null) {
-                if (to == me && mine != null) {
-                    // 收方是我：用我的网格，避免把「我」定位到呼号前缀归属地
-                    toLat = mine.first
-                    toLon = mine.second
-                } else {
-                    val toLoc = resolve(to, null, gridCache) ?: continue
-                    toLat = toLoc.lat
-                    toLon = toLoc.lon
-                }
+            if (to == me && mine != null) {
+                // 收方是我：用我的网格，避免把「我」定位到呼号前缀归属地
+                toLat = mine.first
+                toLon = mine.second
             } else {
-                // CQ：连到「我」，没有我的网格就跳过
-                val m2 = mine ?: continue
-                toLat = m2.first
-                toLon = m2.second
+                val toLoc = resolve(to, null, gridCache) ?: continue
+                toLat = toLoc.lat
+                toLon = toLoc.lon
             }
             out.add(
                 SignalLink(

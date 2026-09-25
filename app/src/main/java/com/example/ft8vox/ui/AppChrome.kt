@@ -161,7 +161,7 @@ fun Ft8VoxTopBar(
                     )
                     HorizontalDivider()
                     Text(
-                        "模式",
+                        "模式（切换会重建引擎，接收短暂中断）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
@@ -386,6 +386,7 @@ private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
         Text("输入采样率  ${if (status.inputRate > 0) "${status.inputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
         Text("输出采样率  ${if (status.outputRate > 0) "${status.outputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
         Text("输入增益  ${appSettings.inputGainDb} dB", style = MaterialTheme.typography.labelSmall)
+        Text("输出音量  ${appSettings.outputGainDb} dB", style = MaterialTheme.typography.labelSmall)
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Text("VOX", style = MaterialTheme.typography.titleSmall)
         Text(

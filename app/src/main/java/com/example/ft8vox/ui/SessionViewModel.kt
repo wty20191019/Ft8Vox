@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /** 接收会话的非瀑布状态（供状态栏/控制区使用）。 */
 data class ReceiverStatus(
@@ -210,11 +211,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的采集增益（dB），U7c。 */
     private var lastInputGainDb: Int? = null
 
+    /** 最近一次下发给 native 的输出音量（dB），U7c 增补。 */
+    private var lastOutputGainDb: Int? = null
+
     /** 最近一次生效的输出设备 id（U7c）；变化时需重开播放流。 */
     private var lastOutputDeviceId: Int? = null
 
     /** 最近一次生效的输入设备 id（U7c）；变化需重开采集流，运行中提示下次生效。 */
     private var lastInputDeviceId: Int? = null
+
+    /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
+    private var lastSlotOffsetMs: Int? = null
+
+    /**
+     * 引擎代次：每次重建 native 引擎（[start]）都 +1。
+     *
+     * 排程好的发射协程可能在引擎重建**之后**才真正开跑（`txJob.cancel()` 打断不了已经
+     * 开始的 JNI 阻塞写入），此时 `AudioEngine` 已指向新引擎 —— 用代次把这种「跨引擎的
+     * 迟到发射」直接丢弃，避免把旧协议的波形发到新引擎上。
+     */
+    private var engineGen = 0
 
     /** 「含我呼号哔声」提示音（U7d）。 */
     private val alertTone = AlertTone()
@@ -254,15 +270,21 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 holdTxFreq = s.holdTxFreq,
                 autoProgram = s.auto,
-                // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
+                // 协议绑定在 native 引擎上（时隙长度 15s/7.5s 与调制方式），运行中不能直接改：
+                // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
             )
+        }
+        // 运行中改协议 → 重建引擎（接收短暂中断）
+        if (_status.value.running && s.protocol != _status.value.protocol) {
+            restartForProtocol(s.protocol)
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
         applyDecodeParams(s)
         applyVox(s)
         applyAudio(s)
+        applySlotOffset(s)
     }
 
     /** 运行中把「热生效」的解码参数下发给 native（频率范围/OSR 需重启，见 [start]）。 */
@@ -297,7 +319,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 下发音频路由/增益（U7c）。
      *
-     * - 采集增益：热生效；
+     * - 采集增益、输出音量：热生效；
      * - 输出设备：变化时关闭播放流，下次 [armPlayback] 用新设备重开；
      * - 输入设备：需重开采集流，运行中时不打断，提示下次开始接收生效。
      */
@@ -305,6 +327,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (force || s.inputGainDb != lastInputGainDb) {
             lastInputGainDb = s.inputGainDb
             AudioEngine.setInputGain(s.inputGainDb)
+        }
+
+        if (force || s.outputGainDb != lastOutputGainDb) {
+            lastOutputGainDb = s.outputGainDb
+            AudioEngine.setOutputGain(s.outputGainDb)
         }
 
         val outId = AudioDevices.parseId(s.outputDevice)
@@ -331,6 +358,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 下发时隙偏移（热生效，U7「发射偏移」）。
+     *
+     * 影响 native 的采集窗口起点（= 解码 DT 的基准），发射起点由 [planTx] 用同一值平移。
+     * 改在时隙中途时，当前时隙的窗口会错位到下一个网格点生效，属预期。
+     */
+    private fun applySlotOffset(s: AppSettings, force: Boolean = false) {
+        if (!force && s.slotOffsetMs == lastSlotOffsetMs) return
+        lastSlotOffsetMs = s.slotOffsetMs
+        AudioEngine.setSlotOffsetMs(s.slotOffsetMs)
+    }
+
     private fun persist(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepo.update(transform) }
     }
@@ -338,8 +377,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 配置 ----
 
     fun selectProtocol(protocol: Protocol) {
-        if (_status.value.running) return
-        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+        if (_status.value.protocol == protocol) return
+        // 协议不能热切换：只持久化，[applySettings] 检测到差异后会自动重建引擎重启接收
         persist { it.copy(protocolName = protocol.name) }
     }
 
@@ -595,6 +634,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }
             return
         }
+        engineGen++   // 新引擎：作废所有还在路上的发射协程（见 transmit 的 genAtPlan）
 
         wfInfo = AudioEngine.waterfallInfo()
         wfPixels = IntArray(0)
@@ -605,6 +645,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
         applyVox(latestSettings, force = true)
         applyAudio(latestSettings, force = true)
+        applySlotOffset(latestSettings, force = true)
 
         val rate = AudioEngine.startCapture(preferredRate(), inputDeviceId())
         if (rate <= 0) {
@@ -627,8 +668,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         stopTransmit()
-        pollJob?.cancel()
-        pollJob = null
+        stopPollingAndJoin()
         pinnedTxParity = null
         retryCall = null
         retryLeft = 0
@@ -647,6 +687,30 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txing = false,
                 manualTxText = null,
                 qso = qsoEngine.stop(),
+            )
+        }
+    }
+
+    /**
+     * 运行中切换协议（FT8 ⇄ FT4）：**停一下再重建引擎**。
+     *
+     * native monitor 的时隙长度（15 s / 7.5 s）与调制方式在创建时就固定了，没法热改，
+     * 所以只能重启一次采集。[stop] 会顺手关掉「发送总开关」并结束当前 QSO，这里按切换前
+     * 的状态把总开关恢复回来（换协议本身不应该收回「能不能发」的授权）。
+     */
+    private fun restartForProtocol(protocol: Protocol) {
+        val cur = _status.value
+        val txWasOn = cur.txEnabled
+        val wasTxing = cur.txing
+        stop()
+        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+        start()
+        if (!_status.value.running) return
+        if (txWasOn) setTxEnabled(true)
+        _status.update {
+            it.copy(
+                status = "已切换到 ${protocol.name}（重建引擎" +
+                    (if (wasTxing) "，已中止本次发射" else "") + "）",
             )
         }
     }
@@ -823,8 +887,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
         txJob?.cancel()
         val (pttMs, leadMs) = txPreambleParts()
+        val genAtPlan = engineGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (genAtPlan != engineGen) return@launch   // 期间重建过引擎：丢弃
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 _status.update { it.copy(txing = true) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
@@ -859,6 +925,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun outputDeviceId(): Int = AudioDevices.parseId(latestSettings.outputDevice)
 
     // ---- 轮询主循环 ----
+
+    /**
+     * 停止轮询并**等它真正退出** —— 销毁引擎（`AudioEngine.release()` → nativeDestroy
+     * 会 `free` 引擎）之前必须调用。
+     *
+     * 轮询跑在 `Dispatchers.Default`：`cancel()` 只是置标志位，如果它正卡在
+     * `pollDecoded()/state()` 这类 JNI 调用里，取消并不会打断它，而 native 侧的
+     * 播放保护（`tx_enter/tx_wait_idle`）**管不到轮询**。`join()` 通常立刻返回
+     * （最多个位数毫秒），代价可以接受。
+     */
+    private fun stopPollingAndJoin() {
+        val job = pollJob ?: return
+        pollJob = null
+        job.cancel()
+        runBlocking { job.join() }
+    }
 
     private fun startPolling() {
         pollJob?.cancel()
@@ -1148,7 +1230,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 前导（PTT 静音 + 发射前导音）：需要提前 preamble 启动播放，数据才落在时隙起点
         val preambleMs = txPreambleMs().toLong()
-        val plan = planTx(now, slotMs, st.txParity, preambleMs)
+        val plan = planTx(
+            now, slotMs, st.txParity, preambleMs,
+            slotOffsetMs = latestSettings.slotOffsetMs.toLong(),
+        )
 
         // 距数据起点的倒计时（用于 UI）
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
@@ -1163,8 +1248,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         lastTxSlotIndex = plan.targetSlotIndex
         manualInFlight = st.manualTxText != null
+        val genAtPlan = engineGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
-            transmit(text, plan.targetStartMs, effectivePreamble)
+            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan)
         }
     }
 
@@ -1179,16 +1265,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 本次发射的完整前导时长（ms）。 */
     private fun txPreambleMs(): Int = txPreambleParts().let { it.first + it.second }
 
-    /** 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。 */
-    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long) {
+    /**
+     * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
+     *
+     * [genAtPlan] 是排程时的引擎代次：若期间引擎被重建（例如切了协议），**直接丢弃**本次
+     * 发射 —— `txJob.cancel()` 打断不了已经开始的 JNI 阻塞写入，只能用代次判断，否则会
+     * 把上一个协议的波形写到新引擎上。
+     */
+    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long, genAtPlan: Int) {
         val st = _status.value
         val (pttMs, leadMs) = txPreambleParts()
         // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
         val eff = preambleMs.coerceAtLeast(0L)
         val effLead = minOf(leadMs.toLong(), eff).toInt()
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
+
+        if (genAtPlan != engineGen) return
+        val pcm = try {
+            Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+        } catch (e: Exception) {
+            _status.update { it.copy(status = "发射异常: ${e.message}") }
+            return
+        }
+        if (genAtPlan != engineGen) return
+
         try {
-            val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
             if (written <= 0) {
@@ -1295,7 +1396,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        pollJob?.cancel()
+        stopPollingAndJoin()
         txJob?.cancel()
         AudioEngine.stopCapture()
         AudioEngine.release()
@@ -1331,6 +1432,7 @@ internal data class TxPlan(
  * - 否则（我方周期但已等太久）：瞄准下一个我方周期（+2）。
  *
  * 真正决定数据起点的是「播放起点 + 前导」；[TxPlan.targetStartMs] 即该值。
+ * [slotOffsetMs] 非 0 时整个时隙网格（含 native 解码窗口）一起平移，见该参数说明。
  */
 internal fun planTx(
     nowMs: Long,
@@ -1338,25 +1440,35 @@ internal fun planTx(
     txParity: Int,
     preambleMs: Long,
     startWindowMs: Long = TX_START_WINDOW_MS,
+    /**
+     * 整个时隙的偏移（ms，正=推后）：所有时隙边界 = 名义 UTC 边界 + 该值。
+     *
+     * 与 native 采集窗口用同一个值（[AudioEngine.setSlotOffsetMs]），因此「解码窗口」与
+     * 「发射起点」同步平移：把解码卡片显示的「时间差」原样填进来即可同时校准两端。
+     */
+    slotOffsetMs: Long = 0L,
 ): TxPlan {
     require(slotMs > 0) { "slotMs must be positive" }
     val pre = preambleMs.coerceAtLeast(0L)
-    val slotIdx = nowMs / slotMs
+    val off = slotOffsetMs
+    // 在「偏移后的时间轴」上判断：等价于把整个时隙网格平移 off（时隙序号仍是名义 UTC 序号）
+    val shiftedNow = nowMs - off
+    val slotIdx = shiftedNow / slotMs
     val parity = (slotIdx % 2L).toInt()
     if (parity != txParity) {
         // 对方周期：下一个时隙必是我方周期
         val targetIdx = slotIdx + 1
-        val targetStart = targetIdx * slotMs
+        val targetStart = targetIdx * slotMs + off
         return TxPlan(targetIdx, targetStart, targetStart - pre)
     }
-    val posInSlot = nowMs - slotIdx * slotMs
+    val posInSlot = shiftedNow - slotIdx * slotMs
     if (posInSlot + pre <= startWindowMs) {
-        // 我方周期且刚过起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
+        // 我方周期且刚过（偏移后的）起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
         return TxPlan(slotIdx, nowMs + pre, nowMs)
     }
     // 已过太久：下一个我方周期
     val targetIdx = slotIdx + 2
-    val targetStart = targetIdx * slotMs
+    val targetStart = targetIdx * slotMs + off
     return TxPlan(targetIdx, targetStart, targetStart - pre)
 }
 

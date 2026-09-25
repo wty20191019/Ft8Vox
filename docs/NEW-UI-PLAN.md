@@ -65,7 +65,7 @@
 ### U6 设置页（Preference 风格）
 - 6.1 电台（仅 VOX）：VOX 触发方式、延迟 50–1000ms、阈值 −60~−20dB、发射前导音开关+时长、输出声卡、测试音+电平条、PTT 延迟、看门狗。
 - 6.2 音频：输入/输出设备、采样率 44100/48000/96000、输入增益。
-- 6.3 FT8：模式 FT8/FT4（FST4 不做，见 U7 能力表）、发射偏移 0–15s、解码深度（max_candidates / ldpc_iterations / rx_time_osr / rx_freq_osr）、自动序列参数。
+- 6.3 FT8：模式 FT8/FT4（FST4 不做，见 U7 能力表）、时隙偏移 −2.5s–+2.5s（整个时隙一起偏移：解码窗口 + 发射起点；用法见 U7 补记）、解码深度（max_candidates / ldpc_iterations / rx_time_osr / rx_freq_osr）、自动序列参数。
 - 6.4 高亮与提醒：新 CQ 区域 / 新 ITU / 新 DXCC / 新网格 / 新前缀 / 新呼号 / 已通联（删除线·下划线·隐藏）/ 含我呼号哔声 / 末端标记。
 - 6.5 外观：暗/亮、字体小/中/大、恢复布局（~~瀑布配色~~已删除）。
 - 6.6 日志（原「日志/网络」）：ADIF 路径、清空日志（~~CloudLog / LoTW / eQSL~~、~~局域网后台开关~~已删除）。
@@ -82,7 +82,7 @@
 | 高亮与提醒 | 各提醒项接入操作页高亮、哔声、末端标记 | 依赖 U6 设置 |
 | ~~局域网后台~~ | App 内 HTTP 服务、后台地址展示 | **不做**：需前台服务常驻与网络凭据；占位项已删除（见 §收尾：删除三处占位功能） |
 | ~~在线日志~~ | CloudLog / LoTW / eQSL | **不做**：需网络、凭据与安全存储；占位项已删除（同上） |
-| 离线地图瓦片 | 可选；设计本身允许纯色底图 | 数据体积；**暂缓：缺瓦片数据源，维持矢量世界矩形底图** |
+| 离线地图瓦片 | ✅ 已实装（2026-09-26） | 单张 z5 Web Mercator 卫星底图（`assets/map/world_z5.jpg`，4.75 MB，q90），按可见区域流式解码 + ×0.7 暗化；见 §补记：离线卫星底图 |
 
 ## 2. 建议顺序与依赖
 
@@ -116,7 +116,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U7b VOX/PTT native | ✅ | | native 输入电平/VOX 触发判定（音频/静音检测 + 阈值 + 去抖）；发射前导静音 + 前导音（1 kHz），`planTx` 对齐时隙起点；写入看门狗；测试音；状态栏/音频速览显示 VOX 电平；设置页 6.1 除「输出声卡」外全部点亮；JVM 187 + 设备端 26 测试全绿 |
 | U7c 音频路由与增益 | ✅ | | `engine/AudioDevices.kt` 枚举输入/输出设备（系统默认恒为首项）；AAudio `setDeviceId` 选择输入（`nativeStartCapture`）与输出（`nativeStartPlayback`）；`nativeSetInputGain` 采集增益在 DSP 线程热生效（含 VOX 电平，限幅防回绕）；设置页 6.1 输出声卡、6.2 输入设备/输入增益点亮，音频速览显示设备与增益；JVM 191 + 设备端 30 测试全绿 |
 | U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
-| U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：**不做**（占位项已删除）；离线瓦片：暂缓（缺数据源，维持矢量底图）；FST4：**不做**（`ft8_lib` 无该模式） |
+| U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：**不做**（占位项已删除）；离线瓦片：**已实装**（单张 z5 卫星底图，见 §补记：离线卫星底图）；FST4：**不做**（`ft8_lib` 无该模式） |
 | U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发送总开关（收起态条，默认只接收；U9 补记 4 定稿为**纯权限**）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
 | U9 自动程序 | ✅ | | 取代 Call 1st：等级 0 手动 / 1 首先解码 / 2 解码窗口择优 / 3 解码后择优 / 4+ 自动搜索（无可答目标自动 CQ）；策略开关 回答·呼叫已通联 / 优先新呼号 / 报告信息优先 / 最远距离取代最佳信噪比 / 单次通联；顶栏菜单 + 发射抽屉入口 + 设置页面板；窄带过滤按用户决定不做；JVM 全绿 |
 
@@ -142,7 +142,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 ### U4 落地说明（与设计的取舍）
 
-- **底图**：整页单一深色（`#0B0B12`）+ 一层略亮的「世界矩形」，**完全去掉 Maidenhead 网格线与经纬轴**；无任何标记时整块保持空白。
+- **底图**：整页单一深色（`#0B0B12`）+ 一层略亮的「世界矩形」，**完全去掉 Maidenhead 网格线与经纬轴**；无任何标记时整块保持空白。**（2026-09-26 起）**底图升级为离线 Web Mercator 卫星影像，投影随之由等距圆柱改为 Web Mercator；见 §补记：离线卫星底图。
 - **数据层**：新增纯逻辑 `qso/MapModel.kt`（`MapTier` / `GridMarker` / `CallMarker` / `CqFlag` / `SignalLink` 与派生函数）与 `qso/CallLocation.kt`（呼号前缀 → 归属地近似坐标）。旧的地图专用 `SpotBuilder`/`LiveSpot`/`GridIndex`/`GridGranularity` 已删除，测试同步替换为 `MapModelTest`/`CallLocationTest`。
 - **网格标记**：按 **4 字符方格**归并；优先级 红（日志已确认 QSL/LoTW）> 黄（日志已通联）> 蓝（本会话解码，重启清空）。世界视图下按最小像素放大，避免缩成一个点。
 - **呼号标记**：报文无网格时，用呼号前缀映射实体表（`Dxcc`，最长前缀匹配，如 `EA8` > `EA`、`KH6` > `K`）的代表坐标立标；标记后带 `~` 表示「前缀近似」。坐标为实体代表点（非逐条呼号精确到台站）。
@@ -166,9 +166,9 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 - **分组**：按 §6 落地「台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志（原「日志与网络」）/ 关于」共 8 组（「日志与网络」在收尾时改名「日志」，见 §收尾：删除三处占位功能）。§6 未列台站信息（呼号/网格/波段/备注），但它属发射必备且无 CAT，故置于首组并注明「设计外补充」。
 - **组件**：自建 Preference 风格原语——`SettingsGroup`（标题 + 圆角卡）、`PrefRow`（左标题/副标题 + 右控件，`minHeight 56dp`）、`PrefSwitch` / `PrefChoice`(FilterChip) / `PrefDropdown` / `PrefStepper`(`−/值/+`，按钮 48dp) / `PrefText` / `PrefAction` / `PrefInfo` / `PrefNote` / `U7Badge`。
-- **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；发射偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体；~~瀑布配色~~；~~CloudLog/LoTW/eQSL/局域网后台~~（三项已删除，见 §收尾：删除三处占位功能）。`SampleRatePref` 增补 `96000`。
+- **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；时隙偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体；~~瀑布配色~~；~~CloudLog/LoTW/eQSL/局域网后台~~（三项已删除，见 §收尾：删除三处占位功能）。`SampleRatePref` 增补 `96000`。
 - **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC/新 ITU/新 CQ 区域/新前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体（DXCC/ITU/CQ 区域/前缀）→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体（原含瀑布配色，该设置项已删除）。
-- **标记「U7」置灰**：发射偏移。（其余原占位项 —— 瀑布配色、CloudLog/LoTW/eQSL、局域网后台 —— 已按用户要求**删除**，见 §收尾：删除三处占位功能。`Protocol` 仅 FT8/FT4，FST4 已定为**不做**，不再显示占位说明。「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮；**输出声卡、输入设备与增益**已在 **U7c** 点亮；**含我呼号哔声**已在 **U7d** 点亮。）
+- **标记「U7」置灰**：无（原「发射偏移」已实装，见 §U7 补记：时隙偏移）。其余原占位项 —— 瀑布配色、CloudLog/LoTW/eQSL、局域网后台 —— 已按用户要求**删除**，见 §收尾：删除三处占位功能。`Protocol` 仅 FT8/FT4，FST4 已定为**不做**，不再显示占位说明。「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮；**输出声卡、输入设备与增益**已在 **U7c** 点亮；**含我呼号哔声**已在 **U7d** 点亮。
 - **亮色主题的连带改造**：原 UI 直接引用硬编码 `VoxCard/VoxText/VoxOnSurfaceVariant/VoxSurfaceVariant/VoxBackground`，亮色下会失效；已全部改为 `MaterialTheme.colorScheme.{surface,onSurface,onSurfaceVariant,surfaceVariant,background}`，并把选中 Chip / 发送按钮 / 强调文字改用 `primary`。语义色（`barColor` 各高亮、`VoxRxGreen`/`VoxTxRed`/`VoxError`、地图标记、瀑布底层）保持固定，暗色表现不变；地图底图与瀑布图本身仍固定深色（设计如此）。
 - **模拟器验收**：设置页全部 8 组滚动渲染正常；主题切「亮」全局即时生效且**重启后回读一致**；字体切「大」字号明显放大；呼号/网格/波段等旧值回读一致；无崩溃（`logcat` 无 FATAL）。未接后端的项均为禁用态 + `U7` 徽标。
 
@@ -226,7 +226,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **UI**：设置页 6.4「含我呼号哔声」开关点亮。
 - **测试**：JVM `ui/MyCallAlertTest.kt`（开关/空呼号/发给他人/CQ/大小写/批量）7 例。JVM **198/198** 全绿。
 
-> **FST4**：不做。`ft8_lib` 仅含 FT8/FT4 调制解调，FST4 需自研（LDPC/多种符号速率/GFSK），量与风险不匹配，已从模式菜单移除相关占位。**局域网后台 / 在线日志**：不做（分别依赖阶段 9 前台服务与网络凭据），占位设置项与菜单项已删除（见 §收尾：删除三处占位功能）。**离线瓦片**：暂缓，缺瓦片数据源，维持现有矢量世界矩形底图。
+> **FST4**：不做。`ft8_lib` 仅含 FT8/FT4 调制解调，FST4 需自研（LDPC/多种符号速率/GFSK），量与风险不匹配，已从模式菜单移除相关占位。**局域网后台 / 在线日志**：不做（分别依赖阶段 9 前台服务与网络凭据），占位设置项与菜单项已删除（见 §收尾：删除三处占位功能）。**离线瓦片**：已实装为单张 z5 Web Mercator 卫星底图（见 §补记：离线卫星底图）；仍**不做**在线瓦片（无网络依赖、无版权风险）。
 
 ### U8 落地说明：波段多频率 / 自定义 / 自动发射周期
 
@@ -429,5 +429,191 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；模拟器实拍筛选条布局（按钮在最左、空列表时置灰）。
   自动翻页需真机/模拟器有解码输入才能观察（模拟器无音频输入），列入 `REGRESSION.md` B 组。
 
+
+### U7 补记：时隙偏移（整个时隙，发射 + 解码窗口）
+
+用户要求：「实现 U7 发射偏移 —— 应该是让**整个时隙**偏移（手动调整，如果操作页解析的信息
+时间差为 `+1.5` 则在时间偏移里填 `+1.5` 即可校准，这个使用方法写在对应的设置位置）」。
+
+- **口径**：解码卡片的「时间差 DT」= native `out->dt = time_sec - 0.5f`，即对端信号在本机
+  采集窗口内的位置减去名义 0.5s。本机的**时钟偏差 + 声卡时延**会同步体现在两端：收到的信号
+  在窗口里偏晚（DT 正），而我方发射在对端看来也偏了同样的量。因此把 DT **原样填进偏移** =
+  把整个时隙网格平移 —— 解码窗口起点随之移动（DT 读数同步归零），发射起点也一起移动，两端
+  一次校准。正值 = 推后，负值 = 提前（`-1.5s` 就填 `-1500 ms`）。
+- **范围为什么是 ±2500 ms**：`ftx_find_candidates` 的 `time_offset ∈ [-10, +19]` 个符号块，
+  FT8 符号周期 0.16s → 相对窗口起点约 `[-1.6, +3.04]s`，减去名义 0.5s 后 DT 可测范围约
+  `[-2.1, +2.5]s`。FT4 符号周期仅 0.048s → 搜索窗只有约 ±0.5s，所以设置项副标题注明
+  「FT4 偏移过大会解不出」。
+- **设置项**：`AppSettings.slotOffsetMs`（DataStore `slot_offset_ms`，与 `SLOT_OFFSET_LIMIT_MS`
+  一起钳制），**取代**原 `txOffsetMs`（0–15000，`U7` 置灰占位）；`PrefStepper` 新增 `signed`
+  参数显示 `+1500 ms` / `-1500 ms`。用法写在设置项**副标题**里（用户要求）：看操作页解码卡片的
+  「时间差」原样填进来，校到约 0 即可。旧安装包残留的 `tx_offset_ms` 键不再被读取（无害）。
+- **native**（`audio_engine.c`）：`audio_engine_t.slot_offset_ms`（`_Atomic int64_t`）+
+  `nativeSetSlotOffsetMs(handle, ms)`（钳制 ±2500，热生效）；`feed_slot()` 用
+  `utc_now_ms() - slot_offset_ms` 判定时隙边界 → **采集窗口起点整体平移**。上报的
+  `slot_start_ms` 仍是名义 UTC 时隙起点（时隙序号不变），所以 0/1 号显示、「双方相反周期」判定
+  与自动程序解耦于本偏移。改设置在时隙中途时，当前时隙会错位到下一个网格点才稳定（属预期）。
+- **Kotlin**：`AudioEngine.setSlotOffsetMs`（`initialize` 前 no-op）；`SessionViewModel.applySlotOffset`
+  （沿用 `applyVox`/`applyAudio` 的 `force` 模式，`start()` 里对新引擎强制重下发）；
+  `planTx(..., slotOffsetMs)` 在「偏移后的时间轴」上判断、再把起点加回 offset —— 于是目标时隙
+  **序号不变**（`lastTxSlotIndex` 去重、`effectiveTxParity`/`nextSlotParity`/解码时隙奇偶全部
+  保持名义 UTC 口径），只有窗口/起点平移。
+- **验证**：JVM `TxParityAutoTest` 新增 2 例（目标时隙不变且起点整体平移 1500ms；「就地发射」
+  窗口随偏移移动、负偏移则等下一个同周期时隙），**255 例全过**；`:app:assembleDebug`
+  BUILD SUCCESSFUL；模拟器确认设置项可步进（`+0 ms` → `+300 ms` → `-200 ms`，带符号显示）、
+  持久化（DataStore 写出 `slot_offset_ms`）、开启接收后无 `UnsatisfiedLinkError`（`llvm-nm`
+  确认 `Java_..._nativeSetSlotOffsetMs` 已导出）。**校准效果需真机 + 对方电台**，见
+  `REGRESSION.md` A 组「时隙偏移校准」。
+
+
+### 补记：6.3 解码深度各参数的作用说明（设置页）
+
+用户要求「在设置页说明一下解码深度各个参数的作用」。
+
+- **做法**：不改布局原语，直接用 `PrefStepper` 已有的 `subtitle` 给 8 个参数行各加一行作用说明
+  （和「时隙偏移」的用法说明同一模式，说明就贴在对应设置项下方）：
+  * **时间 OSR**：每符号时间细分数（1–4）→ DT 分辨率/弱信号同步，代价是计算量成倍上升；
+  * **频率 OSR**：每 6.25 Hz 频率格细分数（1–4）→ DF 精度/邻近信号分辨；
+  * **最低得分**：Costas 同步门限（4–40）→ 调高更快但易漏弱台；
+  * **LDPC 迭代**：纠错迭代上限（5–60）→ 调高弱信号解码率上升、更慢；
+  * **候选上限**：单时隙同步候选数（20–500）→ 调高给弱台更多名额、更慢；
+  * **单时隙上限**：单时隙最多输出条数（5–100）→ 拥挤波段调大避免已解出的报文被丢弃；
+  * **频率上/下限**：解码搜索与瀑布显示范围（默认 200–3000 Hz）→ 越窄越快，超出不解；
+  * 需重建引擎的三项（时间/频率 OSR、频率范围）在说明里注明「需重开接收生效」。
+- **「解码深度」预设行的副标题**改写为说明：预设一键改下面 6 项（时间/频率 OSR、最低得分、
+  LDPC 迭代、候选上限、单时隙上限），**频率范围不随预设变化**，单项手改后变「自定义」
+  （与 `SettingsViewModel.updateDecode` 的行为一致）。
+- **注意**：Compose 的 `Text` 不解析 Markdown，说明文字里不用 `**加粗**`（会显示成星号）。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（纯文案改动，逻辑与单测未动）。
+
+
+### 补记：地图页 CQ 不画信号连线
+
+用户要求「地图页修改：cq 不要有连线」。
+
+- **原因**：`MapModel.signalLinks` 原先对 CQ 报文（无收方）走的是「连到**我**」的分支，
+  一旦收到多条 CQ，蓝色连线会全部汇聚到本机位置，既挡住地图又传达不了信息。
+  与 `new_ui.md` §4.5「在**各方之间**拉直线」的口径也不一致。
+- **改法**：`signalLinks` 里 `to = parsed.to ?: continue`，即**没有收方的报文直接跳过**；
+  CQ 的位置信息仍由 §4.4 的**红旗**表达，不受影响。「连线」计数随之只统计双方报文。
+- **保留**：`myGrid` 参数仍有意义 —— 收方是「我」时用它定位本机（避免落到呼号前缀归属地）。
+- **测试**：原 `signalLinksCqConnectsToMe`（断言 CQ 连到我）替换为 `signalLinksSkipCqMessages`
+  （CQ → 0 条），原 `signalLinksCqSkippedWithoutMyGrid` 替换为 `signalLinksSkipsCqWithinSameSlot`
+  （同一时隙 CQ + 双方报文 → 只画后者）；255 例全过。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL。
+
+
+### 补记：设置页「输出音量」（发射音频数字衰减）
+
+用户要求「设置页：『输出声卡』下加一个输出音频的音量（增益？）设置」。
+
+- **关键约束 —— 只能衰减**：发射波形由 `jni_bridge.c` 的 `synth_gfsk()` 合成，输出是
+  `sinf(phi)`，**峰值 1.0 ≈ 0 dBFS**，本身已是数字满幅。所以正增益只会削顶、破坏 FT8 频谱
+  （对端直接解不出），设置范围定为 **−30…0 dB**、默认 0（= 原样输出，行为与之前一致）。
+  要更大声只能调电台/声卡的音量 —— 这一点写进了设置项副标题。
+- **生效范围**：`write_blocking()` 是**所有**发射音频的唯一出口（`play_pcm` 的报文/前导音 +
+  `nativePlayTone` 的测试音），故在写入前统一 `apply_output_gain()` 原地乘 `10^(dB/20)`
+  并限幅到 [−1,1]（≤0 dB 不会触发，仅兜底）。这样「测试音」也能用来试音量 —— 正是它本来的用途。
+- **热生效**：`_Atomic int out_gain_db`，改设置后**下一次播放**即生效（不打断本次发射）。
+- **改动清单**：
+  * `AppSettings.kt`：`outputGainDb`（默认 0）+ 顶层 `OUTPUT_GAIN_MIN_DB/MAX_DB` 与 `clampOutputGainDb()`（一处钳制，仓库与引擎共用）；
+  * `SettingsRepository.kt`：key `output_gain_db`（读时钳制）；
+  * `AudioEngine.kt`：`setOutputGain()` + `nativeSetOutputGain`；
+  * `audio_engine.c`：`out_gain_db` 字段、`apply_output_gain()`、`nativeSetOutputGain`（钳 −30..0）；
+  * `SessionViewModel.applyAudio()`：`lastOutputGainDb` 去重下发（`start()` 用 force 重下发）；
+  * `SettingsScreen.kt`：6.1「输出声卡」正下方新增「输出音量」步进器；`AppChrome.kt` 音频速览加一行「输出音量 X dB」。
+- **测试**：新增 `OutputGainTest`（范围常量、钳制、正增益一律回 0）→ **258 例 / 29 suite 全过**；
+  `llvm-nm` 确认 `Java_..._nativeSetOutputGain` 已导出。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL。真机需确认：−12 dB 时「测试音」明显变小、
+  发射报文对方可解（`REGRESSION.md` A 组新增该项）。
+
+
+### 补记：模式切换（FT8 ⇄ FT4）在运行中也能生效
+
+用户反馈「操作页左上角的设置里，模式只能 FT8」。
+
+- **根因**：`selectProtocol()` 开头是 `if (running) return`，而 U8 起「进操作页且已授权即自动
+  `start()`」，所以 App 几乎总是处于接收中 → 在顶栏菜单里点 FT4 被静默忽略，看起来就像
+  「模式只能是 FT8」。设置页 6.3「模式」同因（`applySettings` 里 `protocol = if (cur.running) cur.protocol else s.protocol`）。
+- **为什么不能热切换**：协议决定 native monitor 的**时隙长度（15 s / 7.5 s）与调制方式**，
+  在建引擎（`AudioEngine.initialize(Ft8Config(protocol=…))`）时就固定了，只能重建。
+- **改法（单一规则）**：`selectProtocol()` 退化为「只持久化」；由 `applySettings()` 统一判断
+  —— 若 `running && s.protocol != status.protocol`，调用新增的 `restartForProtocol()`：
+  `stop()` → 更新 `protocol`/`slotMs` → `start()` → 按切换前状态恢复「发送总开关」。
+  这样顶栏菜单与设置页**两个入口**同一条路径，且顺带修掉了「冷启动首帧设置未到就 start()」
+  导致的协议不一致。
+- **副作用（可接受且已写在 UI 提示里）**：接收短暂中断；`stop()` 会结束当前 QSO（换协议本就
+  不该继续）；总开关状态保留（换协议不收回发射授权）；周期锁定按新协议重新对齐。
+- **UI 提示**：顶栏菜单「模式」标题改为「模式（切换会重建引擎，接收短暂中断）」；设置页 6.3
+  「模式」副标题说明「FT8 时隙 15 s、FT4 时隙 7.5 s，运行中切换自动重建引擎（总开关保留）」。
+- **测试**：FT4 时隙长度（7500 ms）与奇偶规则已由 `TxParityAutoTest` / `VoxPlanTest` 覆盖；
+  本次改动是 ViewModel 生命周期行为（依赖 JNI 引擎），故补在 `REGRESSION.md` 的**模拟器**可验证项
+  （协议切换会重建引擎，模拟器能直接看到顶栏变 `· FT4` 与状态提示）。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM 258 例 / 29 suite 全过。
+
+### 补记：修复「运行中切模式直接崩溃」（native use-after-free）
+
+用户反馈上一节做完后「切换直接崩溃」。
+
+- **取证**：真机 crash buffer 显示 8 次 tombstone（今天 20:32–23:37，含旧包 uid 10347 与新包
+  uid 10352，故**不是本次改动引入**），backtrace 一致：
+  `SIGSEGV in libaudioclient AudioTrack::write` ← `libaaudio AudioStreamTrack::write` ←
+  `libft8.so nativePlayTx` ← `AudioEngine.playTx` ← `SessionViewModel.transmit` ← `txTick`。
+- **根因**：`playTx()` 是阻塞 JNI，长时间卡在 `AAudioStream_write`；此时另一线程（`restartForProtocol`
+  的 `stop()`、点「停止发射」、Activity 销毁 `onCleared`）执行 `AAudioStream_close` / `free(引擎)`，
+  写入线程便踩到已释放的 AudioTrack 共享缓冲。`txJob.cancel()` 打断不了已开始的阻塞写。
+- **改法（native，`audio_engine.c`）**：新增 `tx_mutex` / `tx_cond` / `tx_active` / `out_gen`。
+  `write_blocking` 只在持锁时读 `out_stream`，每次写前校验 `out_gen`（单次写超时改 500 ms）；
+  `tx_stop_and_close()` 关流前先 `out_gen+1`；`nativeStartPlayback` 开流也 `out_gen+1` 并在锁内挂流；
+  `nativePlayTx`/`nativePlayTone` 由 `tx_enter`/`tx_leave` 包裹；`nativeDestroy` 先自保
+  `nativeStopCapture` + 关流，再 `tx_wait_idle(3000)`，**超时则泄漏引擎不 free**（宁漏不崩）。
+- **改法（Kotlin）**：`AudioEngine.handle` 加 `@Volatile`，`release()` 先清零句柄再销毁；
+  `SessionViewModel` 新增 `engineGen`（`start()` 时 +1）、`stopPollingAndJoin()`（`stop()`/`onCleared()`
+  `cancel()` 后 `runBlocking { join() }`，因轮询也走 JNI 但不在 native 播放保护内）、
+  `transmit(..., genAtPlan)` / `transmitTest()` 的**代次守卫**（跨引擎迟到发射直接丢弃，
+  不置 `txing` 避免误推进 QSO 状态机）；`Ft8Engine.encode` 移出原 try 单独 catch。
+- **UI 文案**：`restartForProtocol()` 的提示区分是否中止了本次发射
+  （「已切换到 FTx（重建引擎，已中止本次发射）」）。
+- **文档**：新增 `JNI-CONTRACT.md` §6.4（播放/关流的线程安全约定）；`REGRESSION.md` 新增
+  **N 组**（发射中切模式 / 停止发射 / 离开 App 不崩）与模拟器可预演项。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（三 ABI），JVM 258 例 / 29 suite 全过；
+  真机项见 `REGRESSION.md` N 组。
+
+### 补记：地图页离线卫星底图（Web Mercator + BitmapRegionDecoder）
+
+用户提供一张 **z5 世界卫星图**（高德「影像无标注」，中心经纬度 `(0,0)`），要求**离线打包栅格底图**。
+
+- **素材实测**：`app/map/tile-merge/z=5.png` = 8192×8192 **PNG，45.6 MB**。8192² × 4B = **268 MB**
+  无法整图解码（必 OOM）；PNG 无损存卫星照片严重浪费体积。**重编码 JPEG q90 仅 4.75 MB**，肉眼无差。
+  已核对地理配准：中心 `(4096,4096)` = 几内亚湾海面、伦敦点 = 不列颠陆地、上下缘 = 北极洋/南极洲
+  → 标准 **Web Mercator 全世界图**（顶左 `85.05112878°N, 180°W`）。
+- **决策（用户拍板）**：①单文件 + `BitmapRegionDecoder`（不切片）；②底图暗化 **×0.7**；③**仅测试自用**，
+  将来公开版换公有领域影像；④JPEG **q90**。
+- **投影改为 Web Mercator**（`grid/MapProjection.kt`）：世界改为 **1×1 归一化 Mercator 方形**
+  （`u=mercX(lon)`、`v=mercY(lat)`，纬度钳 `±MAX_LAT=85.05112878`），`scale` = 每世界单位的屏幕像素；
+  `fit/fill/zoomBy/panBy/clamped/toGeo` 全部按新投影重写并补 `toScreenUV/toUV/mercX/mercY/latOfV/lonOfU`。
+  `maxScale = max(WORLD_IMAGE_PX*2, fitScale*6)`（允许底图 1:1 再放大 2×）。**标记绘制代码零改动**
+  （仍只调 `toScreen`）。
+- **底图渲染**（新增 `ui/WorldBaseMap.kt`）：首次把 asset 复制到 `cacheDir`（APK 内资产不可随机定位）
+  再开 `BitmapRegionDecoder`；`levelFor(scale)` 用 `inSampleSize = 2^level`（0..5）得到 z0–z5 天然多级；
+  `visibleBlocks()` 反算可见的 512 px 块，`WorldBaseMapState` 在 `Dispatchers.Default` 解码并按 **LRU 16 块**
+  缓存（内存有界，约 16 MB）；块画到画布时**向外取整**避免相邻块 1px 缝。资产缺失/失败**回退原来的纯色世界矩形**。
+- **暗化**：`drawImage` 施加 `ColorFilter.colorMatrix(ColorMatrix().setToScale(0.7,0.7,0.7,1))`。
+- **踩坑（重要）**：`DisposableEffect(baseMap) { onDispose { baseMap?.close() } }` 里若 `baseMap` 是
+  `produceState` 的 **`by` 委托**，`onDispose` 读的是**当前值**而非 effect 创建时的值；key 从
+  `null → state` 变化时旧 effect 的 `onDispose` 会把**刚建好的解码器提前 recycle**，导致
+  `decodeRegion called on recycled region decoder`、底图全黑。改为 `.value` + 局部 `val` 捕获后正常。
+- **踩坑 2（真机暴露）**：LRU 上限（原 16）小于某些缩放下的可见块数（最多约 24）时，**一次 `ensure`
+  内先解码的块会被后解码的挤掉**，而 `needed` 不变又不会触发重解码 → 视口**顶部永久缺一块底图**
+  （真机截图：上半屏只有标记、没有影像）。修法：`ensure` 把「当前视口需要的块」**钉住（pinned）**，
+  淘汰只挑非 pinned 的 LRU，故缓存上限变为 `max(CACHE_LIMIT=24, 当前可见块数)`；命中缓存时 `touch`
+  更新 LRU 顺序。
+- **体积**：APK 由约 13.5 MB → **18.2 MB**（asset 4,977,579 B，PNG/JPEG 默认未压缩存储）。
+- **测试**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM **262 例 / 29 suite** 全过
+  （`MapProjectionTest` 重写为 Mercator 断言，+4 项：极区钳制、墨卡托往返、与等距圆柱的差异、最大缩放覆盖底图）。
+- **模拟器验证**：地图页正确显示卫星底图（非洲/欧洲居中、`MO89` 台站标记与地理位置对齐），无解码告警。
+- **版权与仓库**：高德影像仅本地自用；原始素材目录 `app/map/` 已加入 `.gitignore`（不进仓库），
+  进包的是重编码后的 `app/src/main/assets/map/world_z5.jpg`。公开版应替换为公有领域影像（如 NASA
+  Blue Marble / 夜间灯光，天然深色更配主题）。
 
 
