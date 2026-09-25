@@ -55,10 +55,7 @@ import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.qso.TxMessageKind
 import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.TxScheduler
-import com.example.ft8vox.ui.theme.VoxAccent
 import com.example.ft8vox.ui.theme.VoxError
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
-import com.example.ft8vox.ui.theme.VoxSurfaceVariant
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
@@ -147,7 +144,7 @@ fun TxDrawer(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .background(VoxSurfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .combinedClickable(
                 onClick = { expanded = true },
                 onLongClick = { expanded = true },
@@ -160,7 +157,7 @@ fun TxDrawer(
             "→ ${target ?: "无目标"}",
             style = MaterialTheme.typography.titleMedium,
             fontFamily = FontFamily.Monospace,
-            color = if (target != null) VoxAccent else VoxOnSurfaceVariant,
+            color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
@@ -168,13 +165,13 @@ fun TxDrawer(
             Text(
                 kind?.label ?: "空闲",
                 style = MaterialTheme.typography.labelMedium,
-                color = VoxOnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (status.txArmed) {
                 Text(
                     if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (status.txing) VoxTxRed else VoxOnSurfaceVariant,
+                    color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -190,7 +187,7 @@ fun TxDrawer(
                 onClick = ::primarySend,
                 enabled = status.myCall.isNotEmpty() &&
                     (composeText.isNotBlank() || settings.txQueue.isNotEmpty()),
-                colors = ButtonDefaults.buttonColors(containerColor = VoxAccent),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
                 Text("发送", style = MaterialTheme.typography.labelMedium)
             }
@@ -218,7 +215,7 @@ fun TxDrawer(
                         target ?: "未选择（可点解码卡片选台）",
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = FontFamily.Monospace,
-                        color = if (target != null) VoxAccent else VoxOnSurfaceVariant,
+                        color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                     val (grid, df) = targetInfo()
@@ -270,7 +267,7 @@ fun TxDrawer(
                             Text(
                                 "${composeText.length}/${TxCompose.MAX_TEXT_CHARS}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (composeText.length > TxCompose.MAX_TEXT_CHARS) VoxError else VoxOnSurfaceVariant,
+                                color = if (composeText.length > TxCompose.MAX_TEXT_CHARS) VoxError else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             if (composeText.isNotEmpty()) {
                                 IconButton(onClick = { composeText = "" }) {
@@ -288,7 +285,7 @@ fun TxDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("宏", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                    Text("长按编辑", style = MaterialTheme.typography.labelSmall, color = VoxOnSurfaceVariant)
+                    Text("长按编辑", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 for (r in 0 until 2) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -319,7 +316,7 @@ fun TxDrawer(
                     }
                 }
                 if (settings.txQueue.isEmpty()) {
-                    Text("（空）点「加入队列」排入待发报文", style = MaterialTheme.typography.labelSmall, color = VoxOnSurfaceVariant)
+                    Text("（空）点「加入队列」排入待发报文", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -347,7 +344,7 @@ fun TxDrawer(
                             (composeText.isNotBlank() || settings.txQueue.isNotEmpty())
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (status.txArmed) VoxTxRed else VoxAccent,
+                        containerColor = if (status.txArmed) VoxTxRed else MaterialTheme.colorScheme.primary,
                     ),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 ) {
@@ -387,7 +384,7 @@ fun TxDrawer(
                     if (canSendNow) "当前为我方周期且剩余 >2.5s：点发送将立即发射"
                     else "非我方周期或剩余不足：点发送将排到下一个我方发射周期",
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoxOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -477,7 +474,7 @@ private fun MacroButton(
         modifier = modifier
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(VoxSurfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center,
@@ -506,7 +503,7 @@ private fun QueuePill(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(16.dp))
-                .background(VoxSurfaceVariant)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
                 .combinedClickable(onClick = onLoad, onLongClick = { menu = true })
                 .padding(start = 10.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -547,7 +544,7 @@ private fun MacroEditDialog(
                 Text(
                     "占位符：{call} {mycall} {mygrid} {report}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoxOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },

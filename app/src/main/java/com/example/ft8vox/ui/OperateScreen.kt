@@ -55,15 +55,16 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.WaterfallHeight
+import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.DecodeHighlight
+import com.example.ft8vox.qso.HighlightPrefs
+import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.WorkedIndex
-import com.example.ft8vox.ui.theme.VoxAccent
 import com.example.ft8vox.ui.theme.VoxError
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import java.util.Locale
 
 /**
@@ -143,20 +144,28 @@ fun OperateScreen(
         DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
     }
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
+    val highlightPrefs = HighlightPrefs(
+        newCall = settings.highlightNewCall,
+        newGrid = settings.highlightNewGrid,
+        newEntity = settings.highlightNewEntity || settings.highlightNewPrefix,
+    )
     val rows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,
-        status.txing, status.lastTxText, duplicateKeys,
+        status.txing, status.lastTxText, duplicateKeys, highlightPrefs, settings.workedStyle,
     ) {
         val txText = if (status.txing) status.lastTxText else null
         messages.mapNotNull { m ->
             val p = MessageParser.parse(m.text)
             if (!DecodeFilter.matches(p, filter, worked, status.myCall)) return@mapNotNull null
             val dup = DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys
-            DecodeRow(
-                m,
-                p,
-                DecodeHighlight.classify(p, worked, status.qso.theirCall, status.myCall, dup, txText),
+            val style = DecodeHighlight.classify(
+                p, worked, status.qso.theirCall, status.myCall, dup, txText, highlightPrefs,
             )
+            // 「已通联（隐藏）」时不再显示已通联行
+            if (settings.workedStyle == WorkedStyle.HIDE && style.role == HighlightRole.WORKED) {
+                return@mapNotNull null
+            }
+            DecodeRow(m, p, style)
         }
     }
 
@@ -223,7 +232,7 @@ fun OperateScreen(
                 Text(
                     decodeEmptyHint(status, messages.size, filter.isEmptySelection),
                     style = MaterialTheme.typography.bodySmall,
-                    color = VoxOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 24.dp),
                 )
@@ -254,6 +263,9 @@ fun OperateScreen(
                             onSwipeIgnore = { from?.let { viewModel.ignoreCall(it) } },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
+                            workedStyle = settings.workedStyle,
+                            endMarkMyCall = settings.endMarkMyCall,
+                            endMarkActive = settings.endMarkActive,
                         )
                     }
                 }
@@ -466,7 +478,7 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
                 "${v.toInt()} Hz",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
-                color = VoxOnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -499,8 +511,8 @@ private fun FilterChipRow(
                     )
                 },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = VoxAccent,
-                    selectedLabelColor = Color.White,
+                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                 ),
             )
         }
@@ -508,7 +520,7 @@ private fun FilterChipRow(
             Icon(
                 Icons.Filled.Search,
                 contentDescription = "呼号过滤",
-                tint = if (queryOpen) VoxAccent else VoxOnSurfaceVariant,
+                tint = if (queryOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -140,6 +140,51 @@ class DecodeHighlightTest {
     }
 
     @Test
+    fun highlightPrefsDisableNewGridFallsThroughToNewEntity() {
+        val parsed = MessageParser.parse("W1AW JA1ABC PM95")
+        val style = DecodeHighlight.classify(parsed, prefs = HighlightPrefs(newGrid = false))
+        assertEquals(HighlightRole.NEW_ENTITY, style.role)
+        assertFalse(style.newGrid)
+        assertTrue(style.newPrefix)
+    }
+
+    @Test
+    fun highlightPrefsDisableNewGridAndEntityFallsThroughToNewCall() {
+        val parsed = MessageParser.parse("W1AW JA1ABC PM95")
+        val style = DecodeHighlight.classify(
+            parsed,
+            prefs = HighlightPrefs(newGrid = false, newEntity = false),
+        )
+        assertEquals(HighlightRole.NEW_CALL, style.role)
+        assertTrue(style.newCall)
+        assertFalse(style.newGrid)
+        assertFalse(style.newPrefix)
+    }
+
+    @Test
+    fun highlightPrefsAllDisabledFallsToNormal() {
+        val parsed = MessageParser.parse("W1AW JA1ABC PM95")
+        val style = DecodeHighlight.classify(
+            parsed,
+            prefs = HighlightPrefs(newCall = false, newGrid = false, newEntity = false),
+        )
+        assertEquals(HighlightRole.NORMAL, style.role)
+        assertFalse(style.newCall)
+    }
+
+    @Test
+    fun highlightPrefsDoNotAffectCqOrWorkedPriorities() {
+        val cq = MessageParser.parse("CQ JA1ABC PM95")
+        assertEquals(
+            HighlightRole.CQ,
+            DecodeHighlight.classify(cq, prefs = HighlightPrefs(newCall = false, newGrid = false)).role,
+        )
+        val worked = WorkedIndex(calls = listOf("JA1ABC"))
+        val direct = MessageParser.parse("F4FSY JA1ABC -08")
+        assertEquals(HighlightRole.WORKED, DecodeHighlight.classify(direct, worked).role)
+    }
+
+    @Test
     fun duplicateRowKeysMarksRepeatsExceptOldest() {
         val msgs = listOf(
             decoded("CQ W1AW FN42", slotUtcMs = 3000),

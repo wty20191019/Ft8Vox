@@ -112,6 +112,21 @@ data class DecodeStyle(
     val transmitting: Boolean = false,
 )
 
+/**
+ * 「高亮与提醒」开关（new_ui.md §6.4）。
+ *
+ * 关闭某类后，该类不再作为**最高优先级角色**（顺序回退到下一类）；
+ * 对应的数据标记点也随之隐藏。默认全开，保持既有行为。
+ */
+data class HighlightPrefs(
+    /** 新呼号。 */
+    val newCall: Boolean = true,
+    /** 新网格。 */
+    val newGrid: Boolean = true,
+    /** 新 DXCC / 新前缀（近似）。 */
+    val newEntity: Boolean = true,
+)
+
 /** 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。 */
 object DecodeHighlight {
 
@@ -139,17 +154,23 @@ object DecodeHighlight {
         myCall: String = "",
         duplicate: Boolean = false,
         currentTxText: String? = null,
+        prefs: HighlightPrefs = HighlightPrefs(),
     ): DecodeStyle {
         val from = parsed.from
         val toMe = parsed.addressedTo(myCall)
-        val newGrid = parsed.grid != null && !worked.hasWorkedGrid(parsed.grid)
-        val newPrefix = from != null && !worked.hasWorkedPrefix(from)
+        val rawNewGrid = parsed.grid != null && !worked.hasWorkedGrid(parsed.grid)
+        val rawNewPrefix = from != null && !worked.hasWorkedPrefix(from)
         val workedCall = worked.hasWorkedCall(from)
         val current = from != null &&
             currentQsoCall != null &&
             from.equals(currentQsoCall, ignoreCase = true)
         val transmitting = currentTxText != null &&
             parsed.raw.trim().equals(currentTxText.trim(), ignoreCase = true)
+
+        // 被关闭的高亮类别不参与角色判定，也不显示标记点
+        val newGrid = rawNewGrid && prefs.newGrid
+        val newPrefix = rawNewPrefix && prefs.newEntity
+        val newCall = from != null && !workedCall && prefs.newCall
 
         val role = when {
             transmitting -> HighlightRole.TX
@@ -159,7 +180,7 @@ object DecodeHighlight {
             duplicate -> HighlightRole.DUPLICATE
             newGrid -> HighlightRole.NEW_GRID
             newPrefix -> HighlightRole.NEW_ENTITY
-            from != null -> HighlightRole.NEW_CALL
+            newCall -> HighlightRole.NEW_CALL
             else -> HighlightRole.NORMAL
         }
         return DecodeStyle(
@@ -167,7 +188,7 @@ object DecodeHighlight {
             isCq = parsed.isCq,
             toMe = toMe,
             current = current,
-            newCall = from != null && !workedCall,
+            newCall = newCall,
             newGrid = newGrid,
             newPrefix = newPrefix,
             worked = workedCall,

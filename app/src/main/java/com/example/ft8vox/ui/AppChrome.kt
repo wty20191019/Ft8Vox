@@ -45,7 +45,6 @@ import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.ui.theme.VoxError
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import com.example.ft8vox.ui.theme.VoxRxGreen
 import com.example.ft8vox.ui.theme.VoxTxRed
 import java.util.Locale
@@ -207,7 +206,7 @@ fun TxRxDot(txing: Boolean, running: Boolean, modifier: Modifier = Modifier) {
     val color = when {
         txing -> VoxTxRed
         running -> VoxRxGreen
-        else -> VoxOnSurfaceVariant
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Box(
         modifier = modifier

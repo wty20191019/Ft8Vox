@@ -57,8 +57,6 @@ import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.ui.theme.VoxAccent
-import com.example.ft8vox.ui.theme.VoxCard
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import com.example.ft8vox.ui.theme.VoxRxGreen
 import java.util.Locale
 
@@ -472,7 +470,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = 56.dp)
                 .combinedClickable(onClick = onEdit, onLongClick = { menuOpen = true }),
-            colors = CardDefaults.cardColors(containerColor = VoxCard),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Row(Modifier.fillMaxWidth().padding(8.dp)) {
                 // 左侧确认色条
@@ -481,7 +479,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
                         .width(3.dp)
                         .height(40.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(if (confirmed) VoxRxGreen else VoxCard),
+                        .background(if (confirmed) VoxRxGreen else MaterialTheme.colorScheme.surface),
                 )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
@@ -508,7 +506,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
                         "${entity.band}  ${entity.mode}",
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
-                        color = VoxAccent,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                     Text(
                         QsoTime.isoDateTime(entity.utcMs),
@@ -553,7 +551,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
 @Composable
 private fun StatsPanel(stats: LogStats) {
     Surface(
-        color = VoxCard,
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
     ) {
@@ -615,7 +613,7 @@ private fun BandBarChart(bands: List<Pair<String, Int>>, modifier: Modifier = Mo
                 Text(
                     name,
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoxOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

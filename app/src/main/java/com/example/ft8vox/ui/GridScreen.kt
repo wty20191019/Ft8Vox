@@ -65,9 +65,6 @@ import com.example.ft8vox.qso.GridMarker
 import com.example.ft8vox.qso.MapModel
 import com.example.ft8vox.qso.SignalLink
 import com.example.ft8vox.ui.theme.VoxAccent
-import com.example.ft8vox.ui.theme.VoxBackground
-import com.example.ft8vox.ui.theme.VoxCard
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import kotlin.math.hypot
 
 private val LegendDecoded = Color(0xFF89B4FA)
@@ -205,7 +202,7 @@ fun GridScreen(
     val markersState = rememberUpdatedState(callMarkers)
     val flagsState = rememberUpdatedState(cqFlags)
 
-    Box(modifier = modifier.fillMaxSize().background(VoxBackground)) {
+    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val wPx = with(density) { maxWidth.toPx() }.toDouble()
             val hPx = with(density) { maxHeight.toPx() }.toDouble()
@@ -372,7 +369,7 @@ private fun MapFab(onClick: () -> Unit, content: @Composable () -> Unit) {
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
-            .background(VoxCard.copy(alpha = 0.92f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -400,7 +397,7 @@ private fun MapOverlay(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = VoxCard.copy(alpha = 0.94f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -430,7 +427,7 @@ private fun MapOverlay(
                 Text(
                     "大小=SNR",
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoxOnSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
@@ -438,7 +435,7 @@ private fun MapOverlay(
                 "网格 蓝 $decoded · 黄 $worked · 红 $confirmed｜呼号 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
-                color = VoxOnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp),
             )
 

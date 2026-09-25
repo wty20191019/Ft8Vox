@@ -18,6 +18,40 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     AUTO("自动", 0),
     HZ_48000("48000", 48000),
     HZ_44100("44100", 44100),
+    HZ_96000("96000", 96000),
+}
+
+/** VOX 触发方式（new_ui §6.1；生效依赖 U7 native 能力）。 */
+enum class VoxTrigger(val label: String) {
+    AUDIO("音频检测"),
+    SILENCE("静音检测"),
+}
+
+/** 已通联呼号的呈现方式（new_ui §6.4）。 */
+enum class WorkedStyle(val label: String) {
+    STRIKE("删除线"),
+    UNDERLINE("下划线"),
+    HIDE("隐藏"),
+}
+
+/** 外观主题（new_ui §6.5）。 */
+enum class ThemeMode(val label: String) {
+    DARK("暗"),
+    LIGHT("亮"),
+}
+
+/** 字体档位，作为 sp 的缩放系数（new_ui §6.5）。 */
+enum class FontSize(val label: String, val scale: Float) {
+    SMALL("小", 0.9f),
+    MEDIUM("中", 1f),
+    LARGE("大", 1.15f),
+}
+
+/** 瀑布图配色（new_ui §6.5；渐变在 native 生成，切换依赖 U7）。 */
+enum class WaterfallPalette(val label: String) {
+    CLASSIC("经典"),
+    GRAY("灰度"),
+    CONTRAST("高对比"),
 }
 
 /** 瀑布高度档位。 */
@@ -146,6 +180,68 @@ data class AppSettings(
     val mapCqFlagShowSnr: Boolean = false,
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
+
+    // ---- 电台 / VOX（new_ui §6.1；生效依赖 U7） ----
+    /** VOX 触发方式。 */
+    val voxTrigger: VoxTrigger = VoxTrigger.AUDIO,
+    /** VOX 延迟（ms，50–1000）。 */
+    val voxDelayMs: Int = 300,
+    /** VOX 阈值（dB，−60…−20）。 */
+    val voxThresholdDb: Int = -40,
+    /** 发射前导音开关。 */
+    val txLeadTone: Boolean = false,
+    /** 前导音时长（ms，0–2000）。 */
+    val txLeadToneMs: Int = 200,
+    /** 输出声卡（空 = 系统默认；设备枚举依赖 U7）。 */
+    val outputDevice: String = "",
+    /** PTT 延迟（ms，0–500）。 */
+    val pttDelayMs: Int = 50,
+    /** 看门狗超时（ms，1000–60000）。 */
+    val watchdogMs: Int = 10000,
+
+    // ---- 音频（new_ui §6.2） ----
+    /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
+    val inputDevice: String = "",
+    /** 输入增益（dB，−12…+30；生效依赖 U7）。 */
+    val inputGainDb: Int = 0,
+
+    // ---- FT8（new_ui §6.3） ----
+    /** 发射偏移（ms，0–15000；在一个时隙内后移发射，生效依赖 U7）。 */
+    val txOffsetMs: Int = 0,
+
+    // ---- 高亮与提醒（new_ui §6.4） ----
+    /** 新 CQ 区域（依赖实体表，U7）。 */
+    val highlightNewCqZone: Boolean = true,
+    /** 新 ITU 区域（依赖实体表，U7）。 */
+    val highlightNewItu: Boolean = true,
+    /** 新 DXCC（当前用呼号前缀近似）。 */
+    val highlightNewEntity: Boolean = true,
+    /** 新网格。 */
+    val highlightNewGrid: Boolean = true,
+    /** 新前缀（当前与「新 DXCC」同源近似）。 */
+    val highlightNewPrefix: Boolean = true,
+    /** 新呼号。 */
+    val highlightNewCall: Boolean = true,
+    /** 已通联呼号的呈现方式。 */
+    val workedStyle: WorkedStyle = WorkedStyle.STRIKE,
+    /** 含我呼号时哔声提醒（依赖音频，U7）。 */
+    val beepOnMyCall: Boolean = false,
+    /** 末端红标记：报文含我呼号。 */
+    val endMarkMyCall: Boolean = true,
+    /** 末端蓝标记：当前 QSO 对手。 */
+    val endMarkActive: Boolean = true,
+
+    // ---- 外观（new_ui §6.5） ----
+    val themeMode: ThemeMode = ThemeMode.DARK,
+    val fontSize: FontSize = FontSize.MEDIUM,
+    /** 瀑布图配色（渐变在 native 生成，切换依赖 U7）。 */
+    val waterfallPalette: WaterfallPalette = WaterfallPalette.CLASSIC,
+
+    // ---- 日志 / 网络（new_ui §6.6；在线服务与后台依赖 U7） ----
+    val cloudLogEnabled: Boolean = false,
+    val lotwEnabled: Boolean = false,
+    val eqslEnabled: Boolean = false,
+    val lanServerEnabled: Boolean = false,
 
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,

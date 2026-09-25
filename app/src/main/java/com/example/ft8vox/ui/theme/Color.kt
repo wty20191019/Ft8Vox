@@ -26,6 +26,15 @@ val VoxTxRed = Color(0xFFF44336)
 /** 错误粉。 */
 val VoxError = Color(0xFFF38BA8)
 
+// ---- new_ui.md §6.5 亮色板（深色板的对偶，供「外观 · 亮」使用） ----
+val VoxLightBackground = Color(0xFFF4F4FA)
+val VoxLightCard = Color(0xFFFFFFFF)
+val VoxLightText = Color(0xFF1E1E2E)
+val VoxLightSurfaceVariant = Color(0xFFE7E7F0)
+val VoxLightOnSurfaceVariant = Color(0xFF5A5A6E)
+val VoxLightOutline = Color(0xFFB8B8C8)
+val VoxLightAccent = Color(0xFF3A6FD8)
+
 // ---- 解码卡片左侧色条（new_ui.md §3.3） ----
 val BarNewDecode = Color(0xFF4CAF50) // 绿：新解码
 val BarToMe = Color(0xFF89B4FA) // 蓝：与我有关

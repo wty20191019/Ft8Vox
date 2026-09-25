@@ -48,6 +48,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.QsoTime
+import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Geo
 import com.example.ft8vox.qso.DecodeStyle
@@ -62,11 +63,8 @@ import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarToMe
 import com.example.ft8vox.ui.theme.BarTx
 import com.example.ft8vox.ui.theme.BarWorked
-import com.example.ft8vox.ui.theme.VoxCard
 import com.example.ft8vox.ui.theme.VoxError
-import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import com.example.ft8vox.ui.theme.VoxRxGreen
-import com.example.ft8vox.ui.theme.VoxText
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -110,15 +108,23 @@ fun DecodeCard(
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
     modifier: Modifier = Modifier,
+    workedStyle: WorkedStyle = WorkedStyle.STRIKE,
+    endMarkMyCall: Boolean = true,
+    endMarkActive: Boolean = true,
 ) {
     val msg = row.msg
     val style = row.style
     val from = row.parsed.from
     val callText = from ?: msg.text.substringBefore(' ')
     val bar = barColor(style.role)
-    val textColor = if (style.role == HighlightRole.TX) Color.Black else VoxText
-    val cardBg = if (style.role == HighlightRole.TX) BarTx else VoxCard
+    val textColor = if (style.role == HighlightRole.TX) Color.Black else MaterialTheme.colorScheme.onSurface
+    val cardBg = if (style.role == HighlightRole.TX) BarTx else MaterialTheme.colorScheme.surface
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
+    val workedDecoration = when (workedStyle) {
+        WorkedStyle.STRIKE -> TextDecoration.LineThrough
+        WorkedStyle.UNDERLINE -> TextDecoration.Underline
+        WorkedStyle.HIDE -> null
+    }
 
     val density = androidx.compose.ui.platform.LocalDensity.current
     val maxSwipe = with(density) { 140.dp.toPx() }
@@ -210,21 +216,21 @@ fun DecodeCard(
                             "  ${row.parsed.grid}",
                             style = MaterialTheme.typography.bodyMedium,
                             fontFamily = FontFamily.Monospace,
-                            color = VoxOnSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Text(
                         String.format(Locale.US, "  %+3d dB", msg.snr),
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = FontFamily.Monospace,
-                        color = if (msg.snr >= 0) VoxRxGreen else VoxOnSurfaceVariant,
+                        color = if (msg.snr >= 0) VoxRxGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Box(Modifier.weight(1f))
                     Text(
                         QsoTime.isoTime(msg.slotUtcMs),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
-                        color = VoxOnSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -233,12 +239,13 @@ fun DecodeCard(
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = textColor.copy(alpha = alpha),
-                        textDecoration = if (style.worked) TextDecoration.LineThrough else null,
+                        textDecoration = if (style.worked) workedDecoration else null,
                         maxLines = 1,
                     )
                     Box(Modifier.weight(1f))
-                    // 次级标记：与我有关 ▎ / 新网格 ● / 新实体 ●
-                    if (style.toMe) Marker(VoxError)
+                    // 次级标记：与我有关 ▎ / 正通联 ▎ / 新网格 ● / 新实体 ●
+                    if (style.toMe && endMarkMyCall) Marker(VoxError)
+                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
                     if (style.newGrid) Marker(BarNewGrid)
                     if (style.newPrefix) Marker(BarNewEntity)
                 }
@@ -364,7 +371,7 @@ fun DecodeDetailSheet(
             Text(
                 "呼号 $myCall",
                 style = MaterialTheme.typography.labelSmall,
-                color = VoxOnSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -373,7 +380,7 @@ fun DecodeDetailSheet(
 @Composable
 private fun DetailLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = VoxOnSurfaceVariant, modifier = Modifier.weight(0.4f))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.4f))
         Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(0.6f))
     }
 }
