@@ -782,6 +782,10 @@ static int write_blocking(audio_engine_t* e, const float* buf, int n)
  * 在数据前依次插入 [ptt_silence_ms] 的静音与 [lead_tone_ms] 的单音，
  * 用于在 VOX-only 场景下让电台在 FT8 数据到达前完成键控。调用方需把
  * 播放入口提前 `(ptt_silence_ms + lead_tone_ms)`，数据才落在时隙起点。
+ *
+ * 注意：发射波形遵循 WSJT-X 约定，时隙起点后仍有 0.5 s 保护静音，因此
+ * 前导音结束后到实际 FT8 波形之间会有一段静音；电台 VOX 的释放延时
+ * （hang time）需覆盖该 0.5 s，否则可能中途掉键。
  * 返回写入的帧数（<0 表示失败）。
  */
 static int play_pcm(audio_engine_t* e, const float* data, int len,
