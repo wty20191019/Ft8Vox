@@ -62,7 +62,7 @@ import com.example.ft8vox.ui.theme.VoxTxRed
 /**
  * 发射控制抽屉（new_ui.md §3.4）。
  *
- * 收起态为 56dp 条（目标 / 状态 / 发射开关）；点击条身或「展开」上拉 Bottom Sheet，
+ * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；点击条身或「展开」上拉 Bottom Sheet，
  * 内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -177,13 +177,12 @@ fun TxDrawer(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!status.txEnabled) {
-                Text(
-                    "只接收",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                if (status.txEnabled) "允许发射" else "只接收",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (status.txEnabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (status.txArmed) {
                 Text(
                     if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
@@ -192,15 +191,11 @@ fun TxDrawer(
                 )
             }
         }
-        // 唯一的发射控制（开关）：打开即按默认动作发射（无目标→CQ / 已选目标→应答 /
-        // 有自定义文本或队列→发它），关闭即停发并回到「只接收」。原「发送 CQ」按钮与
-        // 该开关功能重复，已按要求合并为一个开关；展开面板内仍有完整的大发送/停止按钮。
+        // 唯一的发射控制：「发送总开关」——只回答「能不能发」（关 = 只接收，开 = 允许发射），
+        // 自己**不发任何报文**。发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定。
         Switch(
             checked = status.txEnabled,
-            onCheckedChange = { on ->
-                onTxEnabledChange(on)
-                if (on) primarySend()
-            },
+            onCheckedChange = onTxEnabledChange,
         )
     }
 
@@ -392,9 +387,11 @@ fun TxDrawer(
                 Text(
                     when {
                         !status.txEnabled ->
-                            "发射总开关已关：只接收。打开开关即按默认动作发射（无目标→CQ / 有目标→应答），也可在此点发送。"
-                        canSendNow -> "当前为我方周期且剩余 >2.5s：点发送将立即发射"
-                        else -> "非我方周期或剩余不足：点发送将排到下一个我方发射周期"
+                            "发送总开关已关：只接收，不发射任何报文。打开后由「发送」按钮 / 解码卡片手势或自动程序决定发什么。"
+                        status.autoArmed ->
+                            "发送总开关已开，自动程序已启用：选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
+                        canSendNow -> "发送总开关已开；当前为我方周期且剩余 >2.5s：点「发送」将立即发射"
+                        else -> "发送总开关已开；非我方周期或剩余不足：点「发送」将排到下一个我方发射周期"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -438,6 +435,11 @@ fun TxDrawer(
                         ) { Text("启用") }
                     }
                 }
+                Text(
+                    "「发送总开关」只表示允许发射；启用后由自动程序决定选台与整段 QSO 的报文流程。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     autoProgramSummary(status.autoProgram),
                     style = MaterialTheme.typography.labelSmall,

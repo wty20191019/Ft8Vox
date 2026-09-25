@@ -358,13 +358,13 @@ fun OperateScreen(
             text = {
                 Text(
                     buildString {
-                        append("将按「${status.autoProgram.level.label}」自动发射。\n")
+                        append("将按「${status.autoProgram.level.label}」自动发射：选台与整段 QSO 报文流程均由自动程序决定。\n")
                         append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜时隙：自动（下一个 ")
                         append(if (status.txParity == 0) "偶" else "奇")
                         append("）\n")
                         append(
-                            if (status.txEnabled) "发射总开关：已开。\n"
-                            else "发射总开关：关 —— 确认启用时会自动打开。\n",
+                            if (status.txEnabled) "发送总开关：已开（只表示允许发射）。\n"
+                            else "发送总开关：关 —— 确认启用时会自动打开。\n",
                         )
                         if (status.autoProgram.singleQso) {
                             append("「单次通联」已开：一次 QSO 结束后会自动停止。\n")

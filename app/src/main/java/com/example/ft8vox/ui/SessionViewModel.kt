@@ -78,7 +78,12 @@ data class ReceiverStatus(
     /** 当前刻度频率（Hz，已解析；0 表示未知）。 */
     val dialHz: Long = 0L,
     // ---- 发射/QSO ----
-    /** 发射总开关：false=只接收（默认），true=允许发射；仅会话内有效，不持久化。 */
+    /**
+     * 发送总开关：false=只接收（默认），true=允许发射。
+     *
+     * 只回答「能不能发」，自己不发任何报文；发什么由手动发送（抽屉「发送」按钮 / 解码卡片手势）
+     * 或自动程序决定。仅会话内有效，不持久化。
+     */
     val txEnabled: Boolean = false,
     /** 我方发射所在的周期：0=偶数，1=奇数（自动按手机 UTC 时间锁定）。 */
     val txParity: Int = 0,
@@ -167,7 +172,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。
      *
      * 锁定后**一直沿用**，QSO 结束也不清除（否则会按时间重锁导致偶/奇来回跳）。
-     * 仅「关闭发射总开关」「停止发送」「停止接收」会清除。
+     * 仅「关闭发送总开关」「停止发送」「停止接收」会清除。
      */
     private var autoParity: Int? = null
 
@@ -432,8 +437,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 启用自动程序（UI 需先弹防误发确认）。
      *
-     * 自动程序的启用/关闭与「发射总开关」联动：**启用即自动打开总开关**（自动程序全靠它才发得出去），
-     * 总开关此前未锁定时顺带按手机 UTC 时间锁定发射时隙。
+     * **依赖「发送总开关」**：总开关是「能不能发」的唯一权限，自动程序只是「发什么」的策略，
+     * 因此启用时若总开关为关，先 [setTxEnabled] 打开（总开关此前未锁定时顺带按手机 UTC 时间锁定时隙）。
      */
     fun armAutoProgram() {
         val p = _status.value.autoProgram
@@ -451,16 +456,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 关闭自动程序：与「发射总开关」联动，**一并关闭总开关回到只接收**（停发 + 解除时隙锁定 + 清重试记录）。
+     * 关闭自动程序：只停止「自动决定发什么」，**不动「发送总开关」**。
      *
-     * 例外（只解除自动程序、不动总开关）：切到「手动」等级、以及「单次通联」在 QSO 结束后自动停止 ——
-     * 前者可能还有进行中的 QSO，后者还有最后一条报文（RR73/73）待发，关总开关会把它们掐掉。
+     * 反向联动只有一条：关闭总开关（只接收）时会连带解除自动程序 —— 不能发射就没必要挂着自动化。
+     * 这样「切到手动等级」「「单次通联」在 QSO 结束后自动停止」等路径都无需特殊处理：
+     * 它们都只是「自动程序停止」，与发射权限无关。
      */
     fun disarmAutoProgram() {
         retryCall = null
         retryLeft = 0
-        if (_status.value.txEnabled) setTxEnabled(false)
-        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭（发射已关，只接收）") }
+        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭（回到手动，发送总开关不变）") }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -475,11 +480,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun setBand(name: String) = setBandFreq(name, 0L)
 
     /**
-     * 发射总开关（默认关 = 只接收）。
+     * 发送总开关（默认关 = 只接收）：唯一回答「**能不能发**」。
      *
-     * 关闭：立即停发并解除周期锁定；开启：未锁定时按手机 UTC 时间锁定「下一个来得及准备的
-     * 时隙」，随后在下一个我方时隙发射。因不再提供周期设置，用户通过在不同时机开关总开关来
-     * 决定从哪个时隙开始发射。
+     * 它自己**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定，
+     * 见 `TxDrawer` 收起态条与 `armAutoProgram`。
+     *
+     * - 开启：允许发射；总开关此前未锁定时按手机 UTC 时间锁定「下一个来得及准备的时隙」。
+     * - 关闭：立即停发、解除时隙锁定与目标固定，并**连带解除自动程序**（不能发射就没必要挂着自动化）。
+     *
+     * 因不再提供周期设置，用户通过在不同时机重开总开关来换发射时隙。
      */
     fun setTxEnabled(enabled: Boolean) {
         if (!enabled) {
@@ -488,12 +497,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             retryCall = null
             retryLeft = 0
             stopTransmit()
-            _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
+            _status.update { it.copy(txEnabled = false, autoArmed = false, status = "发送已关闭（只接收）") }
             return
         }
         relockAutoParityIfNeeded()
         val p = _status.value.txParity
-        _status.update { it.copy(txEnabled = true, txParity = p, status = "发射已开启（${parityLabel(p)}）") }
+        _status.update { it.copy(txEnabled = true, txParity = p, status = "发送已开启（允许发射，${parityLabel(p)}）") }
     }
 
     /**

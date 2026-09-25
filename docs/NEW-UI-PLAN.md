@@ -117,7 +117,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U7c 音频路由与增益 | ✅ | | `engine/AudioDevices.kt` 枚举输入/输出设备（系统默认恒为首项）；AAudio `setDeviceId` 选择输入（`nativeStartCapture`）与输出（`nativeStartPlayback`）；`nativeSetInputGain` 采集增益在 DSP 线程热生效（含 VOX 电平，限幅防回绕）；设置页 6.1 输出声卡、6.2 输入设备/输入增益点亮，音频速览显示设备与增益；JVM 191 + 设备端 30 测试全绿 |
 | U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
 | U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：**不做**（占位项已删除）；离线瓦片：暂缓（缺数据源，维持矢量底图）；FST4：**不做**（`ft8_lib` 无该模式） |
-| U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发射总开关（收起态条，默认只接收）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
+| U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发送总开关（收起态条，默认只接收；U9 补记 4 定稿为**纯权限**）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
 | U9 自动程序 | ✅ | | 取代 Call 1st：等级 0 手动 / 1 首先解码 / 2 解码窗口择优 / 3 解码后择优 / 4+ 自动搜索（无可答目标自动 CQ）；策略开关 回答·呼叫已通联 / 优先新呼号 / 报告信息优先 / 最远距离取代最佳信噪比 / 单次通联；顶栏菜单 + 发射抽屉入口 + 设置页面板；窄带过滤按用户决定不做；JVM 全绿 |
 
 ### U2 落地说明（与设计的取舍）
@@ -233,7 +233,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **波段多频率（`data/BandPlan.kt`）**：`Band` 新增 `freqs: List<DialFreq>`（每波段收录 FT8 / FT4 及少数 DX/Hound 常用刻度，如 20m = 14.074 FT8 / 14.080 FT4 / 14.090 FT8 DX / 14.095 FT8 Hound）；`dialHz` 仍为首项、作为波段默认。新增 `DialFreq.mhz`（4 位小数，可区分 FT4 的 7.0475）、`Band.containsHz`、`BandPlan.hasFreq` / `resolveDialHz` / `parseFreqMhz` / `MAX_FREQ_HZ`。
 - **自定义波段与频率**：`AppSettings` 新增 `dialHz: Long`（0 = 用波段默认）与派生 `resolvedDialHz`；波段名不再限制为内置表（`SettingsRepository` 只做非空、≤16 字符与频率范围钳制），支持如「试验」+ 13.500 MHz。记录通联改用当前 `dialHz`（`SessionViewModel` 写入 `st.dialHz`），自定义波段的 ADIF 导出为自定义 BAND 名 + 精确 FREQ。
 - **「波段与频率」弹窗（`ui/AppChrome.kt` → `BandFreqDialog`）**：顶栏菜单第一项打开；列出各波段与全部常用频率（点选即切换并关闭），底部「自定义波段与频率…」切换为「波段名 + MHz」输入（校验正数）。设置页「台站」组的「波段与频率」`PrefAction` 复用同一弹窗。
-- **发射总开关（默认关 = 只接收）**：`ReceiverStatus` 新增 `txEnabled`（**仅会话内有效、不持久化**，故每次启动都默认只接收）。开关放在**发射抽屉收起态 56dp 条**上（`Switch`），便于快速开关；关闭时立即停发并解除时隙锁定，开启后 CQ / 应答 / 一次性发射 / 自动程序才允许。总开关关闭时「发送」按钮禁用、防误发弹窗的「确认发射」禁用并给出提示。**自动程序的启用/关闭同样会开关总开关**（见 U9 补记 4）。
+- **发射总开关（默认关 = 只接收，U9 补记 4 起定稿为「发送总开关」= 纯权限）**：`ReceiverStatus` 新增 `txEnabled`（**仅会话内有效、不持久化**，故每次启动都默认只接收）。开关放在**发射抽屉收起态 56dp 条**上（`Switch`），便于快速开关；**它只回答「能不能发」，打开时不发射任何报文**；关闭时立即停发、解除时隙锁定并连带解除自动程序。总开关关闭时「发送」按钮禁用、防误发弹窗的「确认发射」禁用并给出提示。发什么由手动发送或自动程序决定（单向联动细节见 U9 补记 4）。
 - **默认呼叫 CQ**：收起态与抽屉的发送按钮在「无自定义文本、无发送队列、无目标」时默认执行 CQ（走防误发确认弹窗）；已选目标且无文本时默认应答该目标。
 - **时隙固定自动（不再提供设置）**：移除设置页「默认发射周期」与抽屉「偶/奇/自动」三档，`AppSettings.txParity` 与 DataStore `tx_parity` 键一并删除（`ReceiverStatus.txParityMode` 亦移除）。规则 = 纯函数 `nextSlotParity(now, slotMs, leadMs)`：按手机 UTC 时间取**下一个距起点 ≥ 前导余量（前导 + 500 ms）的时隙**（当前时隙来不及就跳到再下一个，即「再下一个时隙发射」）；在打开总开关、进入新 QSO / 一次性发射时锁定，QSO 期间保持不变，**QSO 结束后也保持不变**（不再释放；只有关闭总开关 / 停止发送 / 停止接收才清除，见 U9 补记 3）。用户通过重新开关总开关来切换发射时隙。**例外 = 应答目标**：解码在时隙结束后才到手，按当前时间推算会得到与被应答时隙相同的奇偶，因此应答（手工 `answer` / 自动 `startAutoTarget`）一律按**目标时隙的相反周期**锁定（见 U9 补记 2）。
 - **接线**：`SessionViewModel.setBandFreq` / `setTxEnabled`、`effectiveTxParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证时隙已锁定；`applySettings` 同步 `band / dialHz / 生效 txParity`。
@@ -251,7 +251,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **策略开关（`AutoProgramSettings`）**：回答曾经通联的电台 / 呼叫曾经通联过的电台（Ft8Vox 无跟踪列表，二者合并为 `allowsWorked = 任一开启`，默认**关**，即跳过已通联台）；优先选择新呼号（默认开，排序时新呼号优先）；报告信息优先（默认关，仅作**排序**：发给我方的定向报文优先于 CQ 排队）；最远距离取代最佳信噪比（默认关，选台准则由 `snr` 改为 `Geo` 大圆距离，需填写我的网格）；单次通联（**默认关 ＝ 连续通联**，完成一次 QSO 后自动接续下一台；开启则完成一次即解除）。
 - **决策（`AutoProgramSelector`）**：候选与本时隙解码共用 `DecodeFilter`（忽略名单 / 筛选 chip / 搜索串一致），同呼号去重；`decide()` 返回 `AnswerCq` / `AnswerDirected` / `CallCq` / `None`。
 - **接线**：`SessionViewModel` 以 `ReceiverStatus.autoProgram` + `autoArmed` 取代 `callFirst` / `callFirstArmed`（DataStore 键 `call_first` → `auto_level` 等）；接收时隙结束且无进行中 QSO 时调用 `runAutoProgram`；`startAutoTarget` / `startAutoSearch` 复用原 Call 1st 的时隙锁定与频率跟随逻辑。
-- **UI**：顶栏菜单新增「自动程序」（打开 `AutoProgramDialog`）；发射抽屉「自动序列」区改为「自动程序」行（等级摘要 + 设置… + 启用/关闭，启用走原防误发确认）；设置页 6.3 用 `AutoProgramPanel` 内嵌同一套等级 + 开关。**启用/关闭与「发射总开关」联动**（见 U9 补记 4）。
+- **UI**：顶栏菜单新增「自动程序」（打开 `AutoProgramDialog`）；发射抽屉「自动序列」区改为「自动程序」行（等级摘要 + 设置… + 启用/关闭，启用走原防误发确认）；设置页 6.3 用 `AutoProgramPanel` 内嵌同一套等级 + 开关。**启用/关闭与「发送总开关」单向联动**（见 U9 补记 4）。
 - **测试**：`qso/AutoProgramTest`（等级、自动 CQ、已通联门控、优先新呼号、最远距离、报告优先、定向报文、失败重试、过滤/去重/自呼号）；原 `DecodeFilterTest` 中的 CallFirst 用例移除。JVM 全绿，`:app:assembleDebug` 通过。
 
 ### U9 补记：自动程序以「完成 QSO」为目标（被呼自动应答 / 时隙对应 / 失败续台）
@@ -310,7 +310,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - 新增纯函数 `effectiveTxParity(pinned, locked, now, slotMs, leadMs)`：有**固定周期**（设为目标 / 对齐目标时隙）用固定值；否则**已有锁定周期保持不变**；两者都没有（刚开总开关 / 刚停止接收）才按时间取下一个来得及的时隙。
 - `relockAutoParityIfNeeded()` 改用它（不再无条件按时间重锁），原 `lockAutoParity()` 删除；`setTxEnabled(true)` 复用同一入口。
 - QSO 收尾只做 `pinnedTxParity = null`（解除「目标时隙对应」），`autoParity` **保留** → 下一段 QSO / 自动搜索 CQ 沿用同一周期。
-- 周期被清除的时机收敛为三处：关闭发射总开关、停止发送（`stopTransmit`）、停止接收（`stop`）。
+- 周期被清除的时机收敛为三处：关闭发送总开关、停止发送（`stopTransmit`）、停止接收（`stop`）。
 
 语义：与 WSJT-X / FT8CN 一致 —— 一直用同一周期收发；**只有**下一目标在相反周期时才切换（`pinToTargetSlot` → `oppositeSlotParity`）。
 
@@ -328,21 +328,20 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **验证**：清理后 `WaterfallPalette` / `cloudLogEnabled` / `lotwEnabled` / `eqslEnabled` / `lanServerEnabled` / `lanDialog` 在 `app/` 下已无命中（原 DataStore 键残留值不再读取，无害）；JVM 253 例全绿，`:app:assembleDebug` BUILD SUCCESSFUL。
 - **取舍**：若日后要做这三项，需从零实现（局域网后台需前台服务；日志上传需网络与凭据安全存储），不再保留占位骨架。
 
-### U9 补记 4：自动程序的启用/关闭联动「发射总开关」
+### U9 补记 4：「发送总开关」= 纯权限；怎么 QSO 由自动程序决定
 
-用户要求：「让自动程序的启动关闭也能控制发送总开关」。
+起点是用户的两条要求：先「让自动程序的启动关闭也能控制发送总开关」，随后「有没有更好的方案？把『空闲只接收』的开关改成发送总开关，具体怎么 QSO 由自动程序控制」。
 
-- **语义**：`autoArmed` 与 `txEnabled` 是同一个开关的两面 ——
-  - **启用自动程序**（`armAutoProgram`）：若总开关为关，先 `setTxEnabled(true)`（顺带按 UTC 时间锁定发射时隙），再置 `autoArmed = true`；状态栏同时给出等级与周期。
-  - **关闭自动程序**（`disarmAutoProgram`）：`setTxEnabled(false)` —— 停发、解除时隙锁定、清失败重试记录，回到「只接收」，最后置 `autoArmed = false`。
-- **为什么**：此前「启用自动程序」不碰总开关，总开关默认关，于是启用了自动程序却什么都不发（`runAutoProgram` 首行 `if (!st.txEnabled) return`），必须手动再开总开关，容易误解为「自动程序不工作」。
-- **配套限制**：`armAutoProgram` 增加「呼号非空」校验（与 CQ / 应答 / 一次性发射一致），避免打开总开关却发不出去。
-- **文案**：防误发确认框把原来的「注意：发射总开关当前为『关』，需先打开」改为「发射总开关：关 —— 确认启用时会自动打开」；`AutoProgramDialog` 的说明改为「启用会自动打开发射总开关，关闭会一并关掉」。
-- **例外（只解除自动程序、不动总开关）**：
-  - 等级切到「手动」（`setAutoLevel`）——可能还有进行中的 QSO；
-  - 「单次通联」在 QSO 结束后自动停止 —— 还有最后一条 RR73/73 待发，关总开关会把 `txArmed` 一并清掉，对方收不到收尾报文。
-  这两处保留原行为，待真机确认后再决定是否也联动。
-- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL，JVM 253 例全绿（联动逻辑在 ViewModel，需真机/模拟器手测：见 `REGRESSION.md` E 组联动两条）。
+- **模型（定稿）**：把两件事彻底分开 ——
+  - **能不能发 = `txEnabled`「发送总开关」**（发射抽屉收起态 56dp 条上唯一的控制）：关 = 只接收，开 = 允许发射。**它自己不发任何报文**；早期「打开开关即按默认动作发射（无目标→CQ / 有目标→应答 / 有文本或队列→发它）」的行为**已移除**。
+  - **发什么 = 自动程序**（等级 + 策略 + `QsoEngine` 状态机）：选台、应答、报告 / R 报告 / RR73 的整段流程都由它决定。未启用自动程序时由**手动发送**决定：展开面板的「发送」大按钮、报文类型 / 4×2 宏 / 自定义文本 / 发送队列、以及解码卡片手势（左滑设为目标、详情面板应答）。
+- **联动（单向）**：
+  - **启用自动程序**（`armAutoProgram`）→ 若总开关为关则先 `setTxEnabled(true)`（顺带按 UTC 时间锁定发射时隙），再置 `autoArmed = true`；并增加「呼号非空」校验（与 CQ / 应答 / 一次性发射一致）。
+  - **关闭总开关**（`setTxEnabled(false)`）→ 停发 + 解除时隙锁定 / 目标固定 + **连带 `autoArmed = false`**（不能发射就没必要挂着自动化）。
+  - **关闭自动程序**（`disarmAutoProgram`）→ **不动总开关**（手动发射仍需要这个权限），只清失败重试记忆并回到「手动」。
+- **为何改掉 d74aec4 的对称写法**：那一版让「关闭自动程序」也关总开关，于是立刻需要两个例外 —— 切到「手动」等级（可能还有进行中的 QSO）、「单次通联」在 QSO 结束后自动停止（还有最后一条 RR73/73 待发，关开关会清掉 `txArmed`，对方收不到收尾报文）。例外一多说明模型错了：权限与策略本就该分开；改单向联动后例外自然消失，无需任何特判。
+- **文案**：抽屉收起态第二行显示「允许发射 / 只接收」；展开面板提示按四种状态（开关关 / 自动程序已启用 / 我方周期可立即发 / 需排下一周期）分别说明；自动程序行前加一句「『发送总开关』只表示允许发射；启用后由自动程序决定选台与整段 QSO 的报文流程」；防误发确认框写明「发送总开关：已开（只表示允许发射）」或「关 —— 确认启用时会自动打开」；`AutoProgramDialog` 说明改为「启用会自动打开『发送总开关』；关闭只停止自动化，不影响总开关」；`QsoPanel` 的防误发提示同步改称「发送总开关」。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL，JVM 253 例 / 29 suite 全绿（联动在 ViewModel，无单测覆盖；真机项见 `REGRESSION.md` E / M 组）。
 
 
 
