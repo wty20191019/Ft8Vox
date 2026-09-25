@@ -616,4 +616,36 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   进包的是重编码后的 `app/src/main/assets/map/world_z5.jpg`。公开版应替换为公有领域影像（如 NASA
   Blue Marble / 夜间灯光，天然深色更配主题）。
 
+### 补记：切页性能与动画优化（2026-09-26）
+
+用户反馈「页面切换卡顿、快速切换直接崩溃、能否减少动画」，逐项定位并修复：
+
+- **崩溃根因（native use-after-free）**：底图解码器原先在**每次进入地图页**用 `produceState` 新建，
+  离开时 `DisposableEffect` → `close()` → `decoder.recycle()`；而 `ensure()` 的 `decodeRegion` 跑在
+  `Dispatchers.Default`（阻塞 JNI，协程取消无法打断它）。快速切页时 `recycle()` 与正在执行的
+  `decodeRegion` 并发 → native 崩溃（同类问题此前在音频引擎上出现过）。
+- **卡顿根因 1（重复重建/重解码）**：解码器与块缓存随地图页实例销毁，每次切回都要重新打开图片、
+  重新解码整屏（24 块 512² `drawImage`）。
+- **卡顿根因 2（80ms 全量重绘）**：`GridScreen` 订阅了完整 `session.status`，而接收时该状态
+  **每 ~80ms 更新一次**（`slotProgress` / `voxLevelDb` …），导致整幅地图每 80ms 全量重绘。
+- **卡顿根因 3（常驻无限动画）**：顶栏 `TxRxDot` 的脉动、地图连线相位都用了
+  `rememberInfiniteTransition`，**无论是否需要都按 60fps 重绘**。
+
+**优化**：
+
+1. 底图解码器与块缓存改为**应用级单例** `WorldBaseMapState`（object）：只打开一次、**永不 `recycle()`**，
+   切页不再重建/重解码；`ensure` 用 `Mutex` 串行，解码在后台纯计算、Compose 状态只在持锁线程写；
+   解码器访问统一走 `synchronized`。
+2. `GridScreen` 改用 `derivedStateOf` **只订阅 `myCall` / `myGrid`**，不再随 `status` 高频重绘。
+   实测（模拟器、接收中、地图页 idle 6s）：`GridScreen` 重组次数 **~75 → 1~2**，
+   帧时 50 分位 **28ms → 16ms**，且地图 `Canvas` 不再被状态轮询触发。
+3. `TxRxDot` 仅在 `txing` 时跑脉动动画；地图连线相位**仅在有连线时**才建立无限动画（无连线时为 0）。
+4. 底图绘制 `FilterQuality.Medium` → `Low`，降低每帧绘制开销。
+
+> 说明：`MainShell` 顶栏/底部状态条仍会随 80ms 状态更新重绘（这是「实时 VOX 电平 / 时隙进度」的
+> 设计所需，且开销很小）。优化后**昂贵的整幅地图重绘已与状态轮询解耦**，只有顶底两条状态栏在刷新。
+
+**验证**：模拟器 **25 轮快速切页**（操作/地图/日志/设置循环）进程存活、无 `Fatal`、底图与标记正常；
+`:app:assembleDebug` BUILD SUCCESSFUL，JVM **262 例 / 29 suite** 全过。
+
 

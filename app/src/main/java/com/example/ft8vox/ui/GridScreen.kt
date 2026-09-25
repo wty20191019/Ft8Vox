@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -95,7 +96,11 @@ fun GridScreen(
 
     val entries by log.entries.collectAsState()
     val messages by session.messages.collectAsState()
-    val status by session.status.collectAsState()
+    // 地图只用到 status 的 myCall / myGrid 两个字段。session.status 在接收时约每 80ms 更新一次，
+    // 若整体订阅会让地图整屏重绘（切页卡顿的主因）；derivedStateOf 只在字段真正变化时才让本页失效。
+    val statusState = session.status.collectAsState()
+    val myCall by remember { derivedStateOf { statusState.value.myCall } }
+    val myGrid by remember { derivedStateOf { statusState.value.myGrid } }
 
     // ---- 日志派生：已通联 / 已确认（网格与呼号） ----
     val confirmedEntries = remember(entries) {
@@ -120,36 +125,42 @@ fun GridScreen(
     val gridMarkers = remember(decodedSquares, workedGrids, confirmedGrids) {
         MapModel.gridMarkers(decodedSquares, workedGrids, confirmedGrids)
     }
-    val callMarkers = remember(messages, workedCalls, confirmedCalls, status.myCall, gridCache) {
+    val callMarkers = remember(messages, workedCalls, confirmedCalls, myCall, gridCache) {
         MapModel.callMarkers(
             messages = messages,
             workedCalls = workedCalls,
             confirmedCalls = confirmedCalls,
-            myCall = status.myCall,
+            myCall = myCall,
             windowMs = 0L,
             gridCache = gridCache,
         )
     }
-    val cqFlags = remember(messages, status.myCall, gridCache) {
-        MapModel.cqFlags(messages, myCall = status.myCall, windowMs = 0L, gridCache = gridCache)
+    val cqFlags = remember(messages, myCall, gridCache) {
+        MapModel.cqFlags(messages, myCall = myCall, windowMs = 0L, gridCache = gridCache)
     }
-    val links = remember(messages, status.myCall, status.myGrid, gridCache) {
+    val links = remember(messages, myCall, myGrid, gridCache) {
         MapModel.signalLinks(
             messages = messages,
-            myCall = status.myCall,
-            myGrid = status.myGrid.ifEmpty { null },
+            myCall = myCall,
+            myGrid = myGrid.ifEmpty { null },
             gridCache = gridCache,
         )
     }
 
-    // 连线内容沿通信方向循环运动
-    val transition = rememberInfiniteTransition(label = "map-link")
-    val linkPhase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
-        label = "link-phase",
-    )
+    // 连线内容沿通信方向循环运动。**只在有连线时才跑动画**：无连线（最常见）时不再
+    // 每帧重绘地图，避免持续重绘造成的切页卡顿与耗电。
+    val linkPhase = if (links.isNotEmpty()) {
+        val transition = rememberInfiniteTransition(label = "map-link")
+        val phase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
+            label = "link-phase",
+        )
+        phase
+    } else {
+        0f
+    }
 
     // ---- 交互状态 ----
     var projection by remember { mutableStateOf<MapProjection?>(null) }
@@ -258,7 +269,7 @@ fun GridScreen(
                         callMarkers = callMarkers,
                         cqFlags = cqFlags,
                         links = links,
-                        myGrid = status.myGrid.ifEmpty { null },
+                        myGrid = myGrid.ifEmpty { null },
                         showCqCall = settings.mapCqFlagShowCall,
                         showCqSnr = settings.mapCqFlagShowSnr,
                         showLinkText = settings.mapShowLinkText,
@@ -285,7 +296,7 @@ fun GridScreen(
                 }) { Text("−", style = MaterialTheme.typography.titleLarge) }
                 MapFab(onClick = {
                     val p2 = projection ?: return@MapFab
-                    val c = status.myGrid.ifEmpty { null }?.let { com.example.ft8vox.grid.Maidenhead.center(it) }
+                    val c = myGrid.ifEmpty { null }?.let { com.example.ft8vox.grid.Maidenhead.center(it) }
                         ?: return@MapFab
                     projection = centeredOn(p2, c.first, c.second)
                 }) { Icon(Icons.Filled.Place, contentDescription = "回我的位置") }
@@ -317,7 +328,7 @@ fun GridScreen(
     pendingReply?.let { action ->
         TxConfirmDialog(
             pending = action,
-            status = status,
+            status = statusState.value,
             onConfirm = {
                 pendingReply = null
                 if (action is PendingTx.Reply) confirmReply(action)

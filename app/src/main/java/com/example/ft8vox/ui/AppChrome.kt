@@ -411,13 +411,19 @@ private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
 /** RX/TX 圆点；TX 时红色脉动。 */
 @Composable
 fun TxRxDot(txing: Boolean, running: Boolean, modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "txDot")
-    val pulse by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "txAlpha",
-    )
+    // 只在发射时启动无限动画：待机时不再每帧重绘顶栏（省电、减少切页卡顿）。
+    val pulse = if (txing) {
+        val transition = rememberInfiniteTransition(label = "txDot")
+        val animated by transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+            label = "txAlpha",
+        )
+        animated
+    } else {
+        1f
+    }
     val color = when {
         txing -> VoxTxRed
         running -> VoxRxGreen

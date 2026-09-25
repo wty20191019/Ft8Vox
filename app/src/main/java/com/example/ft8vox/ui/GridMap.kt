@@ -4,9 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -38,8 +36,6 @@ import com.example.ft8vox.qso.MapTier
 import com.example.ft8vox.qso.SignalLink
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 // ---- new_ui.md §4 配色 ----
 private val Ocean = Color(0xFF0B0B12)
@@ -86,18 +82,10 @@ fun GridMap(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    // 注意：必须用 .value 取出再传给 DisposableEffect —— 若用 `by` 委托，onDispose 里读到的
-    // 是「当前」值而非 effect 创建时的值，key 变化时会把刚建好的解码器提前 recycle。
-    val baseMapState = produceState<WorldBaseMapState?>(initialValue = null, context) {
-        value = withContext(Dispatchers.IO) {
-            WorldBaseMap.open(context)?.let { WorldBaseMapState(it) }
-        }
-    }
-    val baseMap = baseMapState.value
-    DisposableEffect(baseMap) {
-        val state = baseMap
-        onDispose { state?.close() }
-    }
+    // 底图解碼器是应用级单例（见 WorldBaseMapState）：只打开一次、永不 recycle，
+    // 切页不再重建解码器 / 重解码整屏，也不会与后台解码竞态崩溃。
+    LaunchedEffect(Unit) { WorldBaseMapState.prepare(context) }
+    val baseMapReady = WorldBaseMapState.ready
 
     val measurer = rememberTextMeasurer()
     val callStyle = remember {
@@ -129,17 +117,16 @@ fun GridMap(
         val hPx = with(density) { maxHeight.toPx() }.toDouble()
 
         // 预取当前视口需要的底图块（缺失的异步解码，画布只画已就绪的）
-        val needed = remember(projection, wPx, hPx, baseMap) {
-            baseMap?.let { WorldBaseMap.visibleBlocks(projection, wPx, hPx) } ?: emptyList()
+        val needed = remember(projection, wPx, hPx, baseMapReady) {
+            if (baseMapReady == true) WorldBaseMap.visibleBlocks(projection, wPx, hPx) else emptyList()
         }
-        LaunchedEffect(needed, baseMap) { baseMap?.ensure(needed) }
+        LaunchedEffect(needed) { WorldBaseMapState.ensure(needed) }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val p = projection
             drawRect(Ocean, size = size)
 
-            val bm = baseMap
-            if (bm == null) {
+            if (baseMapReady != true) {
                 // 无底图：退回纯色世界矩形（仅作空间参照）
                 val wtl = p.toScreen(MapProjection.MAX_LAT, -180.0)
                 val wbr = p.toScreen(-MapProjection.MAX_LAT, 180.0)
@@ -153,7 +140,7 @@ fun GridMap(
                 )
             } else {
                 for (block in WorldBaseMap.visibleBlocks(p, size.width.toDouble(), size.height.toDouble())) {
-                    val img = bm.bitmap(block) ?: continue
+                    val img = WorldBaseMapState.bitmap(block) ?: continue
                     val dim = WorldBaseMap.SIZE shr block.level
                     val x0 = block.bx * WorldBaseMap.BLOCK
                     val y0 = block.by * WorldBaseMap.BLOCK
@@ -173,7 +160,7 @@ fun GridMap(
                         srcSize = IntSize(img.width, img.height),
                         dstOffset = IntOffset(dx, dy),
                         dstSize = IntSize(dw, dh),
-                        filterQuality = FilterQuality.Medium,
+                        filterQuality = FilterQuality.Low,
                         colorFilter = BaseMapDarken,
                     )
                 }
