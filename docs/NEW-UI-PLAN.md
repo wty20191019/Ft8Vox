@@ -113,7 +113,8 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U5 日志页 | ✅ | | 顶栏搜索+波段/模式/日期 chip；表格化卡片（呼号/网格/时间/RST/模式，长按编辑·删除）；底部统计 QSO/DXCC/网格/确认 + 波段柱图；「⋮」菜单新增·导入·导出 ADIF·局域网地址(U7)·清空；JVM 164 测试全绿 |
 | U6 设置页 | ✅ | | Preference 风格 8 组（台站/VOX/音频/FT8/高亮/外观/日志网络/关于）；新增 30+ 设置项落 DataStore；外观「暗/亮」「字体小中大」即时生效；高亮开关接入解码列表；未接后端项标 U7 置灰；JVM 168 测试全绿 |
 | U7a DXCC/ITU 实体表 | ✅ | | `qso/Dxcc.kt`：约 180 个实体（规范名 + 代表坐标 + CQ/ITU 区域）+ 呼号前缀映射（最长前缀优先，含常用呼号区扩展）；日志 DXCC 按实体去重；「新 DXCC / 新 ITU / 新 CQ 区域」开关点亮；JVM 180 测试全绿 |
-| U7 其余能力 | ⏳ | | VOX/PTT、音频路由与增益、FST4、含我呼号哔声、局域网后台、在线日志、离线瓦片 |
+| U7b VOX/PTT native | ✅ | | native 输入电平/VOX 触发判定（音频/静音检测 + 阈值 + 去抖）；发射前导静音 + 前导音（1 kHz），`planTx` 对齐时隙起点；写入看门狗；测试音；状态栏/音频速览显示 VOX 电平；设置页 6.1 除「输出声卡」外全部点亮；JVM 187 + 设备端 26 测试全绿 |
+| U7 其余能力 | ⏳ | | 音频路由与增益、FST4、含我呼号哔声、局域网后台、在线日志、离线瓦片 |
 
 ### U2 落地说明（与设计的取舍）
 
@@ -163,7 +164,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **组件**：自建 Preference 风格原语——`SettingsGroup`（标题 + 圆角卡）、`PrefRow`（左标题/副标题 + 右控件，`minHeight 56dp`）、`PrefSwitch` / `PrefChoice`(FilterChip) / `PrefDropdown` / `PrefStepper`(`−/值/+`，按钮 48dp) / `PrefText` / `PrefAction` / `PrefInfo` / `PrefNote` / `U7Badge`。
 - **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；发射偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体/瀑布配色；CloudLog/LoTW/eQSL/局域网后台。`SampleRatePref` 增补 `96000`。
 - **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC/新 ITU/新 CQ 区域/新前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体（DXCC/ITU/CQ 区域/前缀）→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体/瀑布配色。
-- **标记「U7」置灰**：VOX/PTT 全套、输入设备与增益、输出声卡、测试音、发射偏移、FST4、含我呼号哔声、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。`FST4` 未列入模式 Chip（`Protocol` 仅 FT8/FT4），以副标题「需要 U7」说明。（「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮。）
+- **标记「U7」置灰**：VOX/PTT 的**输出声卡**（设备枚举属「音频路由」项）、输入设备与增益、发射偏移、FST4、含我呼号哔声、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。`FST4` 未列入模式 Chip（`Protocol` 仅 FT8/FT4），以副标题「需要 U7」说明。（「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮。）
 - **亮色主题的连带改造**：原 UI 直接引用硬编码 `VoxCard/VoxText/VoxOnSurfaceVariant/VoxSurfaceVariant/VoxBackground`，亮色下会失效；已全部改为 `MaterialTheme.colorScheme.{surface,onSurface,onSurfaceVariant,surfaceVariant,background}`，并把选中 Chip / 发送按钮 / 强调文字改用 `primary`。语义色（`barColor` 各高亮、`VoxRxGreen`/`VoxTxRed`/`VoxError`、地图标记、瀑布底层）保持固定，暗色表现不变；地图底图与瀑布图本身仍固定深色（设计如此）。
 - **模拟器验收**：设置页全部 8 组滚动渲染正常；主题切「亮」全局即时生效且**重启后回读一致**；字体切「大」字号明显放大；呼号/网格/波段等旧值回读一致；无崩溃（`logcat` 无 FATAL）。未接后端的项均为禁用态 + `U7` 徽标。
 
@@ -178,5 +179,24 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   - `DecodeHighlight` 新增 `newEntity` / `newItu` / `newCqZone` 标记（`newPrefix` 保留为粗口径），任一成立即归入 `NEW_ENTITY` 色条；`DecodeStyle.hasNewEntityMark` 供解码卡片显示棕色标记点；
   - 设置页「新 CQ 区域 / 新 ITU」解除置灰与 `U7` 徽标；`OperateScreen` 逐项传入 `HighlightPrefs`。
 - **测试**：新增 `qso/DxccTest.kt`（实体/区域解析、最长前缀、呼号区归并、表内一致性、区域与坐标范围）、`WorkedIndex` 实体·区域用例、`LogQuery` 实体归并用例、`DecodeHighlight` 新开关回退与 `hasNewEntityMark` 用例；JVM **180/180** 全绿。
+
+### U7b 落地说明：VOX / PTT native
+
+- **背景**：本 App 无 CAT，无法直接控制电台 PTT，只能靠音频序列间接键控。U7b 把设置页 6.1 里原先「仅保存设置值」的参数落成 native 行为。
+- **native（`audio_engine.c`）**：
+  - DSP 线程对原始输入块计算 RMS 电平（dBFS，快攻击/慢释放平滑），按 `vox_trigger`（音频/静音检测）、`vox_threshold_db`、`vox_delay_ms`（去抖）维护 `vox_open`；结果经 `nativeGetState`（索引 10/11）暴露。
+  - `nativePlayTx(pcm, pttSilenceMs, leadToneMs)`：数据前插入前导静音与 1 kHz 前导音（0.6 幅度），供 VOX 抢先键控。
+  - `write_blocking()` 看门狗：实际阈值 = max(`watchdogMs`, 本段音频预期时长 + 3 s)，只作卡死保护，不截断合法整时隙发射。
+  - `nativePlayTone(freqHz, ms)`：测试单音（首尾 10 ms 余弦包络）。
+  - `nativeSetVox(...)` 热下发全部 VOX/PTT 参数。
+- **Kotlin 调度**：新增纯函数 `planTx(now, slotMs, txParity, preambleMs)` 与 `effectivePreambleMs(...)`：
+  - 无前导 → 就地发射（沿用原 1200 ms 起发窗口）；
+  - 有前导 → 提前 `PTT 延迟 + 前导音时长` 启动播放，使 FT8 数据仍落在时隙起点；迟到时按迟到量缩短前导（优先保前导音），迟到超过「前导 + 1200 ms」则放弃本时隙。
+  - `sendNow` / `transmitTest`（立即发）也走 `playTx` 带完整前导。
+- **UI**：
+  - 底部状态条 `VOX -xx dB ●`（触发点亮），音频速览显示电平/状态/触发方式/阈值/前导/看门狗；
+  - 设置页 6.1：VOX 触发/延迟/阈值、发射前导音与时长、测试音（含实时电平条）、PTT 延迟、看门狗全部启用；**输出声卡**保留 `U7`（归「音频路由」项）。
+- **诚实边界**：无 CAT 时无法读取电台真实键控状态，`voxOpen` 仅为**输入音频活动**的近似提示，不参与发射门控；真机 VOX 键控效果需实际电台验证（见 `REGRESSION.md`）。
+- **测试**：新增 JVM `ui/VoxPlanTest.kt`（`planTx` 四种周期/前导组合、缩水前导、电平文案）；设备端 `VoxTxNativeTest.kt`（`playTx` 前导路径写入完成、测试音）。JVM **187/187**、设备端 **26/26** 全绿。
 
 

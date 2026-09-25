@@ -67,6 +67,7 @@ fun MainShell(
         topBar = {
             Ft8VoxTopBar(
                 status = status,
+                appSettings = appSettings,
                 nowMs = nowMs,
                 onBand = session::setBand,
                 onProtocol = session::selectProtocol,
@@ -83,6 +84,8 @@ fun MainShell(
                     qsoCount = stats.total,
                     queueCount = if (status.manualTxText != null) 1 else 0,
                     timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
+                    voxLevelDb = status.voxLevelDb,
+                    voxOpen = status.voxOpen,
                 )
                 NavigationBar {
                     for (t in MainTab.entries) {
@@ -125,7 +128,7 @@ fun MainShell(
                     myGrid = appSettings.myGrid.ifEmpty { null },
                     onOpenSettings = { tab = MainTab.SETTINGS },
                 )
-                MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log)
+                MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
             }
         }
     }

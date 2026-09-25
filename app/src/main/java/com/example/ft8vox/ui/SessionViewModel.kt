@@ -15,6 +15,8 @@ import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.engine.VoxConfig
+import com.example.ft8vox.engine.VoxMode
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.CallFirstSelector
 import com.example.ft8vox.qso.DEFAULT_MACROS
@@ -28,6 +30,7 @@ import com.example.ft8vox.qso.QsoState
 import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
 import com.example.ft8vox.data.settings.CallFirstMode
+import com.example.ft8vox.data.settings.VoxTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -87,6 +90,11 @@ data class ReceiverStatus(
     val callFirstArmed: Boolean = false,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
+    // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
+    /** VOX 判定为已触发。 */
+    val voxOpen: Boolean = false,
+    /** 平滑后的输入电平（dBFS，下限约 -100）。 */
+    val voxLevelDb: Float = -100f,
 )
 
 /**
@@ -145,6 +153,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的解码参数，避免设置流每次发射都重复下发。 */
     private var lastDecodeParams = DecodeParams()
 
+    /** 最近一次下发给 native 的 VOX/PTT 配置；引擎重建后置空以强制重下发。 */
+    private var lastVoxConfig: VoxConfig? = null
+
     init {
         viewModelScope.launch {
             settingsRepo.settings.collect { s ->
@@ -182,6 +193,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
         applyDecodeParams(s)
+        applyVox(s)
     }
 
     /** 运行中把「热生效」的解码参数下发给 native（频率范围/OSR 需重启，见 [start]）。 */
@@ -191,6 +203,27 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         lastDecodeParams = p
         if (_status.value.running) AudioEngine.setDecodeParams(p)
     }
+
+    /**
+     * 把 VOX/PTT 配置下发给 native（热生效）。
+     * 引擎未初始化时 [AudioEngine.setVox] 为无操作；[start] 会用 force 重下发一次。
+     */
+    private fun applyVox(s: AppSettings, force: Boolean = false) {
+        val cfg = voxConfigOf(s)
+        if (!force && cfg == lastVoxConfig) return
+        lastVoxConfig = cfg
+        AudioEngine.setVox(cfg)
+    }
+
+    /** 由设置组装 native 的 VOX/PTT 配置。 */
+    private fun voxConfigOf(s: AppSettings): VoxConfig = VoxConfig(
+        mode = if (s.voxTrigger == VoxTrigger.SILENCE) VoxMode.SILENCE else VoxMode.AUDIO,
+        thresholdDb = s.voxThresholdDb,
+        delayMs = s.voxDelayMs,
+        pttDelayMs = s.pttDelayMs,
+        leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
+        watchdogMs = s.watchdogMs,
+    )
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepo.update(transform) }
@@ -336,6 +369,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         wfPeak = 0
         _waterfall.value = null
 
+        // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
+        applyVox(latestSettings, force = true)
+
         val rate = AudioEngine.startCapture(preferredRate())
         if (rate <= 0) {
             AudioEngine.release()
@@ -472,12 +508,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
 
         txJob?.cancel()
+        val (pttMs, leadMs) = txPreambleParts()
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val st = _status.value
                 val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
-                val written = AudioEngine.play(pcm)
+                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射「$trimmed」（$written 帧）") }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "发射失败: ${e.message}") }
@@ -518,11 +555,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             else "CQ TEST"
         if (!armPlayback()) return
         txJob?.cancel()
+        val (pttMs, leadMs) = txPreambleParts()
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 _status.update { it.copy(txing = true) }
-                val written = AudioEngine.play(pcm)
+                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射测试「$text」（$written 帧）") }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "发射失败: ${e.message}") }
@@ -592,6 +630,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     slotParity = if (s.slotMs > 0) ((s.utcNowMs / s.slotMs) % 2L).toInt() else 0,
                     slotsDecoded = s.slotsDecoded,
                     droppedSamples = s.droppedSamples,
+                    voxOpen = s.voxOpen,
+                    voxLevelDb = s.voxLevelDb,
                 )
             }
 
@@ -731,34 +771,52 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (slotMs <= 0) return
 
         val now = AudioEngine.utcNowMs()
-        val slotIdx = now / slotMs
-        val msIntoSlot = now % slotMs
-        val parity = (slotIdx % 2L).toInt()
 
-        // 距离下一个我方发射时隙的倒计时（用于 UI）
-        val waitMs = if (parity == st.txParity) {
-            maxOf(0L, slotMs - msIntoSlot)
-        } else {
-            slotMs - msIntoSlot + slotMs
-        }
-        _status.update { it.copy(txCountdownMs = waitMs) }
+        // 前导（PTT 静音 + 发射前导音）：需要提前 preamble 启动播放，数据才落在时隙起点
+        val preambleMs = txPreambleMs().toLong()
+        val plan = planTx(now, slotMs, st.txParity, preambleMs)
 
-        if (parity != st.txParity) return
-        if (msIntoSlot > TX_START_WINDOW_MS) return
-        if (slotIdx == lastTxSlotIndex) return
+        // 距数据起点的倒计时（用于 UI）
+        _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
 
-        lastTxSlotIndex = slotIdx
+        if (plan.targetSlotIndex == lastTxSlotIndex) return
+        if (now < plan.startAtMs) return
+
+        // 已晚于计划起点：用缩水的前导补偿，补偿不够则放弃本时隙
+        val lateness = now - plan.startAtMs
+        if (lateness > preambleMs + TX_START_WINDOW_MS) return
+        val effectivePreamble = effectivePreambleMs(preambleMs, lateness)
+
+        lastTxSlotIndex = plan.targetSlotIndex
         manualInFlight = st.manualTxText != null
-        txJob = viewModelScope.launch(Dispatchers.IO) { transmit(text, slotIdx * slotMs) }
+        txJob = viewModelScope.launch(Dispatchers.IO) {
+            transmit(text, plan.targetStartMs, effectivePreamble)
+        }
     }
 
+    /** 设置里的完整前导组成：PTT 前导静音与发射前导音（ms）。 */
+    private fun txPreambleParts(): Pair<Int, Int> {
+        val s = latestSettings
+        val ptt = s.pttDelayMs.coerceAtLeast(0)
+        val lead = if (s.txLeadTone) s.txLeadToneMs.coerceAtLeast(0) else 0
+        return ptt to lead
+    }
+
+    /** 本次发射的完整前导时长（ms）。 */
+    private fun txPreambleMs(): Int = txPreambleParts().let { it.first + it.second }
+
     /** 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。 */
-    private fun transmit(text: String, slotStartMs: Long) {
+    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long) {
         val st = _status.value
+        val (pttMs, leadMs) = txPreambleParts()
+        // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
+        val eff = preambleMs.coerceAtLeast(0L)
+        val effLead = minOf(leadMs.toLong(), eff).toInt()
+        val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
         try {
             val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
-            val written = AudioEngine.play(pcm)
+            val written = AudioEngine.playTx(pcm, effPtt, effLead)
             if (written <= 0) {
                 _status.update { it.copy(status = "发射失败（写入 $written 帧）") }
             }
@@ -767,6 +825,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             _status.update { it.copy(txing = false) }
             txJustFinished = true
+        }
+    }
+
+    /**
+     * 播放测试单音（设置页「测试音」）。采集未启动时会先自动启动以获得输出流。
+     * 独立于 QSO 发射，不武装 TX。
+     */
+    fun playTestTone(freqHz: Int = 1000, durationMs: Int = 2000) {
+        if (!_status.value.running) start()
+        if (!_status.value.running) {
+            _status.update { it.copy(status = "测试音失败：音频未启动") }
+            return
+        }
+        if (!armPlayback()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val written = AudioEngine.playTone(freqHz, durationMs)
+                _status.update {
+                    it.copy(status = if (written > 0) "已播放测试音（$written 帧）" else "测试音失败（$written）")
+                }
+            } catch (e: Exception) {
+                _status.update { it.copy(status = "测试音异常: ${e.message}") }
+            }
         }
     }
 
@@ -837,3 +918,36 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         fun slotMsOf(protocol: Protocol): Int = if (protocol == Protocol.FT4) 7500 else 15000
     }
 }
+
+/** 一次发射的调度结果：目标时隙、数据起点与播放起点。 */
+internal data class TxPlan(
+    /** 目标时隙序号（`UTCms / slotMs`），用于去重。 */
+    val targetSlotIndex: Long,
+    /** 数据（FT8 波形）预定起点，等于目标时隙起点。 */
+    val targetStartMs: Long,
+    /** 播放起点，= 数据起点 − 前导时长。 */
+    val startAtMs: Long,
+)
+
+/**
+ * 计算本次发射的目标时隙与播放起点（纯函数，便于单测）。
+ *
+ * 无前导时就地发射；有前导时需提前 `preambleMs` 启动播放，让前导在
+ * 数据到达前键控 VOX，因此只能瞄准后续的我方周期时隙。
+ */
+internal fun planTx(nowMs: Long, slotMs: Long, txParity: Int, preambleMs: Long): TxPlan {
+    require(slotMs > 0) { "slotMs must be positive" }
+    val slotIdx = nowMs / slotMs
+    val parity = (slotIdx % 2L).toInt()
+    val targetIdx = if (parity == txParity) {
+        if (preambleMs <= 0) slotIdx else slotIdx + 2
+    } else {
+        slotIdx + 1
+    }
+    val targetStart = targetIdx * slotMs
+    return TxPlan(targetIdx, targetStart, targetStart - preambleMs)
+}
+
+/** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
+internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
+    (preambleMs - latenessMs).coerceAtLeast(0L)

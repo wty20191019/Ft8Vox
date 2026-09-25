@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
+import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.ui.theme.VoxError
@@ -81,6 +82,7 @@ fun timeSyncWarning(latestDt: Float?): String? =
 @Composable
 fun Ft8VoxTopBar(
     status: ReceiverStatus,
+    appSettings: AppSettings,
     nowMs: Long,
     onBand: (String) -> Unit,
     onProtocol: (Protocol) -> Unit,
@@ -175,21 +177,38 @@ fun Ft8VoxTopBar(
                     Icon(Icons.Filled.Notifications, contentDescription = "音频 / 电平")
                 }
                 DropdownMenu(expanded = audioOpen, onDismissRequest = { audioOpen = false }) {
-                    AudioQuickPanel(status)
+                    AudioQuickPanel(status, appSettings)
                 }
             }
         }
     }
 }
 
-/** 音频 / VOX 速览（未接后端前显示占位）。 */
+/** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与触发配置）。 */
 @Composable
-private fun AudioQuickPanel(status: ReceiverStatus) {
+private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
     Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
         Text("音频", style = MaterialTheme.typography.titleSmall)
         Text("输入采样率  ${if (status.inputRate > 0) "${status.inputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
         Text("输出采样率  ${if (status.outputRate > 0) "${status.outputRate} Hz" else "--"}", style = MaterialTheme.typography.labelSmall)
-        Text("VOX  未启用（U7 接入）", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        Text("VOX", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            "状态  ${if (!status.running) "未运行" else if (status.voxOpen) "触发" else "空闲"}",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (status.voxOpen) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text("触发  ${appSettings.voxTrigger.label} / ${appSettings.voxThresholdDb} dB", style = MaterialTheme.typography.labelSmall)
+        Text(
+            "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text("看门狗  ${appSettings.watchdogMs} ms", style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -230,6 +249,8 @@ fun BottomStatusBar(
     qsoCount: Int,
     queueCount: Int,
     timeWarning: String?,
+    voxLevelDb: Float = -100f,
+    voxOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -251,7 +272,12 @@ fun BottomStatusBar(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (txing) VoxTxRed else VoxRxGreen,
             )
-            Text("VOX --", style = MaterialTheme.typography.labelSmall)
+            Text(
+                voxLabel(voxLevelDb, voxOpen, running),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (voxOpen) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text("解码 $decodePerMin/min", style = MaterialTheme.typography.labelSmall)
             Text("总数 $decodedTotal", style = MaterialTheme.typography.labelSmall)
             Text("QSO $qsoCount", style = MaterialTheme.typography.labelSmall)
@@ -263,4 +289,11 @@ fun BottomStatusBar(
             }
         }
     }
+}
+
+/** 底部状态条「VOX」文案：电平（dBFS）+ 触发点。 */
+internal fun voxLabel(levelDb: Float, open: Boolean, running: Boolean): String {
+    if (!running) return "VOX --"
+    val lv = if (levelDb <= -99.5f) "--" else "${levelDb.toInt()} dB"
+    return if (open) "VOX $lv ●" else "VOX $lv"
 }

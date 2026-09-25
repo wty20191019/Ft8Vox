@@ -1,5 +1,6 @@
 package com.example.ft8vox.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -57,7 +59,7 @@ import com.example.ft8vox.data.settings.WaterfallPalette
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-
+import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，new_ui.md §6）。
  *
@@ -68,10 +70,12 @@ import com.example.ft8vox.grid.Maidenhead
 fun SettingsScreen(
     settings: SettingsViewModel,
     log: LogViewModel,
+    session: SessionViewModel,
     modifier: Modifier = Modifier,
 ) {
     val app by settings.settings.collectAsState()
     val entries by log.entries.collectAsState()
+    val sessionStatus by session.status.collectAsState()
 
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -149,26 +153,27 @@ fun SettingsScreen(
 
         // ---------- 6.1 电台（仅 VOX） ----------
         SettingsGroup("电台（仅 VOX）") {
-            PrefNote("VOX 触发与 PTT 由 native 实现，下列参数在 U7 接通后生效；当前仅保存设置值。")
+            PrefNote(
+                "无 CAT：App 无法直接控制 PTT，只能靠「前导静音 + 前导音」让电台 VOX 抢先键控，" +
+                    "再把 FT8 数据对准时隙起点。VOX 电平与触发状态由 native 依据输入音频估算，仅作提示。"
+            )
             PrefChoice(
                 title = "VOX 触发",
+                subtitle = "音频检测：有声视为触发；静音检测：无声视为空闲",
                 options = VoxTrigger.entries,
                 selected = app.voxTrigger,
                 onSelect = { v -> settings.update { it.copy(voxTrigger = v) } },
                 label = { it.label },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefStepper(
                 title = "VOX 延迟",
+                subtitle = "状态翻转去抖时长",
                 value = app.voxDelayMs,
                 range = 50..1000,
                 step = 50,
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(voxDelayMs = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefStepper(
@@ -177,8 +182,6 @@ fun SettingsScreen(
                 range = -60..-20,
                 unit = " dB",
                 onChange = { v -> settings.update { it.copy(voxThresholdDb = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefSwitch(
@@ -186,8 +189,6 @@ fun SettingsScreen(
                 subtitle = "发射前先放一段单音，让 VOX 抢先触发",
                 checked = app.txLeadTone,
                 onCheckedChange = { v -> settings.update { it.copy(txLeadTone = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefStepper(
@@ -197,13 +198,12 @@ fun SettingsScreen(
                 step = 50,
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(txLeadToneMs = v) } },
-                enabled = false,
-                badge = "U7",
+                enabled = app.txLeadTone,
             )
             PrefDivider()
             PrefDropdown(
                 title = "输出声卡",
-                subtitle = "设备枚举依赖 U7；当前使用系统默认输出",
+                subtitle = "设备枚举与路由属「音频路由」U7 项；当前使用系统默认输出",
                 options = listOf(""),
                 selected = "",
                 onSelect = { v -> settings.update { it.copy(outputDevice = v) } },
@@ -214,33 +214,30 @@ fun SettingsScreen(
             PrefDivider()
             PrefAction(
                 title = "测试音",
-                subtitle = "发送单音并显示电平条",
+                subtitle = "发送 1 kHz 单音（2 s），用于 VOX 键控与音量联调",
                 buttonLabel = "播放",
-                onClick = {},
-                enabled = false,
-                badge = "U7",
+                onClick = { session.playTestTone() },
             )
+            VoxLevelRow(sessionStatus)
             PrefDivider()
             PrefStepper(
                 title = "PTT 延迟",
+                subtitle = "数据前插入的静音，留给声卡路由/电台起键",
                 value = app.pttDelayMs,
                 range = 0..500,
                 step = 10,
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(pttDelayMs = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefStepper(
                 title = "看门狗超时",
+                subtitle = "发射写入卡死保护；实际会抬高到本次发射时长以上，不会截断合法发射",
                 value = app.watchdogMs,
                 range = 1000..60000,
                 step = 1000,
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(watchdogMs = v) } },
-                enabled = false,
-                badge = "U7",
             )
         }
 
@@ -930,6 +927,48 @@ private fun PrefAction(
     PrefRow(title, subtitle, badge, trailing = {
         OutlinedButton(onClick = onClick, enabled = enabled) { Text(buttonLabel) }
     })
+}
+
+/**
+ * VOX 输入电平条（6.1「测试音」下方）。
+ *
+ * 电平来自 native 对输入音频的估算，-60 dB 为满格基准；触发时条色用强调色。
+ */
+@Composable
+private fun VoxLevelRow(status: ReceiverStatus) {
+    val run = status.running
+    val db = status.voxLevelDb
+    val label = when {
+        !run -> "未运行"
+        db <= -99.5f -> "--"
+        else -> "${db.toInt()} dB"
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 6.dp)) {
+        Text(
+            "VOX 电平  $label${if (run && status.voxOpen) "  （触发）" else ""}",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (run && status.voxOpen) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val frac = if (run) ((db + 60f) / 60f).coerceIn(0f, 1f) else 0f
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            if (frac > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(frac)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (status.voxOpen) MaterialTheme.colorScheme.primary else VoxRxGreen),
+                )
+            }
+        }
+    }
 }
 
 /** 改一项高级解码参数：自动钳制并标记为「自定义」预设。 */

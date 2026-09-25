@@ -1,5 +1,30 @@
 package com.example.ft8vox.engine
 
+/** VOX 触发方式（对应设置页「VOX 触发」；无 CAT 时用于输入电平判定）。 */
+enum class VoxMode {
+    /** 音频检测：输入电平 ≥ 阈值视为触发/有信号。 */
+    AUDIO,
+
+    /** 静音检测：输入电平 < 阈值视为静音/空闲。 */
+    SILENCE,
+}
+
+/**
+ * VOX / PTT 配置（U7b）。
+ *
+ * 无 CAT 时 App 无法控制电台 PTT，只能通过发射音频序列间接键控：
+ * [pttDelayMs] 前导静音 + [leadToneMs] 前导音先让电台 VOX 动作，
+ * 随后 FT8 数据落在时隙起点。[watchdogMs] 为发射写入的卡死保护。
+ */
+data class VoxConfig(
+    val mode: VoxMode = VoxMode.AUDIO,
+    val thresholdDb: Int = -40,
+    val delayMs: Int = 300,
+    val pttDelayMs: Int = 0,
+    val leadToneMs: Int = 0,
+    val watchdogMs: Int = 10_000,
+)
+
 /** 实时音频引擎的状态快照（对应 native 的 audio_engine_t 统计字段）。 */
 data class AudioState(
     /** 采集流是否在运行（native running）。 */
@@ -14,6 +39,10 @@ data class AudioState(
     val utcNowMs: Long,
     val droppedSamples: Long,
     val slotsDecoded: Long,
+    /** VOX 判定为已触发（基于输入电平近似，仅作提示）。 */
+    val voxOpen: Boolean,
+    /** 平滑后的输入电平（dBFS，下限约 -100）。 */
+    val voxLevelDb: Float,
 ) {
     /** 当前时隙已采集比例 0..1。 */
     val slotProgress: Float
@@ -127,6 +156,37 @@ object AudioEngine {
     fun play(pcm: FloatArray): Int =
         if (handle != 0L) nativePlay(handle, pcm) else -1
 
+    /**
+     * 播放发射 PCM，带 PTT 前导静音与发射前导音；返回写入帧数。
+     *
+     * 前导会把数据整体推后 `pttSilenceMs + leadToneMs`，因此调用方必须
+     * 相应提前播放起点，FT8 数据才能落在时隙起点。
+     */
+    fun playTx(pcm: FloatArray, pttSilenceMs: Int = 0, leadToneMs: Int = 0): Int =
+        if (handle != 0L) nativePlayTx(handle, pcm, pttSilenceMs, leadToneMs) else -1
+
+    /** 播放一段测试单音（VOX 键控/音量联调），返回写入帧数。 */
+    fun playTone(freqHz: Int = 1000, durationMs: Int = 2000): Int =
+        if (handle != 0L) nativePlayTone(handle, freqHz, durationMs) else -1
+
+    /**
+     * 下发 VOX / PTT 配置（热生效）。需先 [initialize]；未初始化时静默忽略。
+     * 参数会按设置页范围做一次钳制。
+     */
+    fun setVox(config: VoxConfig) {
+        if (handle == 0L) return
+        val mode = if (config.mode == VoxMode.SILENCE) 1 else 0
+        nativeSetVox(
+            handle,
+            mode,
+            config.thresholdDb.coerceIn(-60, -20),
+            config.delayMs.coerceIn(0, 2000),
+            config.pttDelayMs.coerceIn(0, 500),
+            config.leadToneMs.coerceIn(0, 2000),
+            config.watchdogMs.coerceIn(1000, 60_000),
+        )
+    }
+
     /** 读取当前状态快照。 */
     fun state(): AudioState? {
         if (handle == 0L) return null
@@ -142,6 +202,8 @@ object AudioEngine {
             utcNowMs = v[7],
             droppedSamples = v[8],
             slotsDecoded = v[9],
+            voxOpen = v[10] != 0L,
+            voxLevelDb = v[11] / 10f,
         )
     }
 
@@ -178,6 +240,22 @@ object AudioEngine {
     private external fun nativeStartPlayback(handle: Long, preferredRate: Int): Int
     private external fun nativeStopPlayback(handle: Long)
     private external fun nativePlay(handle: Long, pcm: FloatArray): Int
+    private external fun nativePlayTx(
+        handle: Long,
+        pcm: FloatArray,
+        pttSilenceMs: Int,
+        leadToneMs: Int,
+    ): Int
+    private external fun nativePlayTone(handle: Long, freqHz: Int, durationMs: Int): Int
+    private external fun nativeSetVox(
+        handle: Long,
+        trigger: Int,
+        thresholdDb: Int,
+        delayMs: Int,
+        pttDelayMs: Int,
+        leadToneMs: Int,
+        watchdogMs: Int,
+    )
     private external fun nativeGetState(handle: Long): LongArray
     private external fun nativeUtcNowMs(): Long
     private external fun nativeResample(input: FloatArray, inRate: Int, outRate: Int): FloatArray?

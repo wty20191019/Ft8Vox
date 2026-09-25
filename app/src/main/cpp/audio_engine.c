@@ -43,6 +43,13 @@
 // 允许在时隙起点后多久开始采集（毫秒）；超过则丢弃等下一个时隙
 #define ALIGN_TOLERANCE_MS 200
 
+// 发射前导音：键控 VOX 用的单音（落在 SSB 通带内）与幅度
+#define LEAD_TONE_HZ 1000
+#define LEAD_TONE_AMP 0.6f
+
+// VOX 电平下限（dBFS），低于视为静音
+#define VOX_LEVEL_FLOOR_DB (-100.0f)
+
 // -----------------------------------------------------------------------------
 // 线程安全的 SPSC 环形缓冲（float）
 // -----------------------------------------------------------------------------
@@ -253,6 +260,20 @@ typedef struct
     _Atomic int64_t slots_decoded;
     _Atomic int64_t fed_samples;
     _Atomic int64_t last_slot;
+
+    // ---- VOX / PTT 配置（Kotlin 热设置，见 nativeSetVox） ----
+    _Atomic int vox_trigger;       ///< 0=音频检测（有声触发） 1=静音检测（无声触发）
+    _Atomic int vox_threshold_db;  ///< 触发门限（dBFS）
+    _Atomic int vox_delay_ms;      ///< 状态翻转去抖时长（ms）
+    _Atomic int ptt_delay_ms;      ///< 前导静音（ms，为声卡路由切换留时间）
+    _Atomic int lead_tone_ms;      ///< 发射前导音时长（ms，0=关）
+    _Atomic int watchdog_ms;       ///< 单次发射写入看门狗（ms，native 会抬高到发射时长以上）
+
+    // ---- VOX 运行状态（dsp 线程写，任意线程读） ----
+    _Atomic int vox_level_db_x10;  ///< 平滑后的输入电平（dBFS × 10）
+    _Atomic int vox_open;          ///< 1=VOX 判定为已触发
+    _Atomic int vox_candidate;     ///< 去抖中的候选状态
+    _Atomic int64_t vox_change_ms; ///< 候选状态最近一次变化时刻
 } audio_engine_t;
 
 static int64_t utc_now_ms(void)
@@ -340,6 +361,60 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
     }
 }
 
+/// 计算一块样本的 RMS 电平（dBFS，低于下限返回 [VOX_LEVEL_FLOOR_DB]）。
+static float block_level_db(const float* x, int n)
+{
+    if (n <= 0)
+        return VOX_LEVEL_FLOOR_DB;
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i)
+        sum += (double)x[i] * (double)x[i];
+    double rms = sqrt(sum / (double)n);
+    if (rms < 1e-5)
+        return VOX_LEVEL_FLOOR_DB;
+    float db = 20.0f * log10f((float)rms);
+    return db < VOX_LEVEL_FLOOR_DB ? VOX_LEVEL_FLOOR_DB : db;
+}
+
+/**
+ * 用最新输入块更新 VOX 电平与状态（仅 dsp 线程调用）。
+ *
+ * 无 CAT 时 App 无法读取电台真实的 PTT/VOX 键控状态，这里用**输入音频电平**
+ * 近似判定信道是否活动，仅供状态栏/音频速览显示，不参与发射门控：
+ *  - 音频检测：电平 ≥ 阈值 视为「触发/有信号」；
+ *  - 静音检测：电平 < 阈值 视为「静音/空闲」；
+ * 候选状态需持续 [vox_delay_ms] 才翻转，避免抖动。
+ */
+static void update_vox(audio_engine_t* e, const float* x, int n)
+{
+    float db = block_level_db(x, n);
+    float prev = (float)atomic_load(&e->vox_level_db_x10) / 10.0f;
+    // 快攻击、慢释放，避免电平条抖动
+    float a = (db > prev) ? 0.6f : 0.15f;
+    float sm = prev + a * (db - prev);
+    if (sm < VOX_LEVEL_FLOOR_DB)
+        sm = VOX_LEVEL_FLOOR_DB;
+    atomic_store(&e->vox_level_db_x10, (int)lroundf(sm * 10.0f));
+
+    int trigger = atomic_load(&e->vox_trigger);
+    int thr = atomic_load(&e->vox_threshold_db);
+    int delay = atomic_load(&e->vox_delay_ms);
+    int desired = (trigger == 1) ? (sm < (float)thr) : (sm >= (float)thr);
+
+    int64_t now = utc_now_ms();
+    if (desired != atomic_load(&e->vox_candidate))
+    {
+        atomic_store(&e->vox_candidate, desired);
+        atomic_store(&e->vox_change_ms, now);
+        return;
+    }
+    if (atomic_load(&e->vox_open) != desired &&
+        (now - atomic_load(&e->vox_change_ms)) >= delay)
+    {
+        atomic_store(&e->vox_open, desired);
+    }
+}
+
 static void* dsp_thread_fn(void* arg)
 {
     audio_engine_t* e = (audio_engine_t*)arg;
@@ -355,6 +430,7 @@ static void* dsp_thread_fn(void* arg)
             continue;
         }
         int rn = resampler_process(&e->cap_rs, raw, (int)n, rs, RS_CHUNK);
+        update_vox(e, raw, (int)n);
         feed_slot(e, rs, rn);
     }
     return NULL;
@@ -390,6 +466,18 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     e->slot_ms = (protocol == 1) ? (int)(FT4_SLOT_TIME * 1000) : (int)(FT8_SLOT_TIME * 1000);
     e->slot_samples = ftx_session_slot_samples(e->session);
     pthread_mutex_init(&e->res_mutex, NULL);
+
+    // VOX / PTT 默认值（随后由 Kotlin 下发覆盖）
+    atomic_store(&e->vox_trigger, 0);
+    atomic_store(&e->vox_threshold_db, -40);
+    atomic_store(&e->vox_delay_ms, 300);
+    atomic_store(&e->ptt_delay_ms, 0);
+    atomic_store(&e->lead_tone_ms, 0);
+    atomic_store(&e->watchdog_ms, 10000);
+    atomic_store(&e->vox_level_db_x10, (int)(VOX_LEVEL_FLOOR_DB * 10.0f));
+    atomic_store(&e->vox_open, 0);
+    atomic_store(&e->vox_candidate, 0);
+    atomic_store(&e->vox_change_ms, 0);
     return (jlong)(intptr_t)e;
 }
 
@@ -655,10 +743,111 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(JNIEnv* env, jobje
     e->out_stream = NULL;
 }
 
-/// 播放一段 12 kHz PCM（内部重采样到输出采样率），返回写入的帧数。
+/// 阻塞写入浮点样本，带看门狗；返回写入的帧数。
+///
+/// 看门狗只作「卡死保护」：若音频设备异常导致写入远超本段音频的播放时长
+/// （预期时长 + 3 s），则中止写循环，避免发射协程永久阻塞。合法发射
+/// （FT8 整时隙约 15 s）不会被截断，因此实际生效阈值会按需抬高。
+static int write_blocking(audio_engine_t* e, const float* buf, int n)
+{
+    int64_t expected_ms =
+        (e->out_rate > 0) ? (int64_t)((double)n * 1000.0 / (double)e->out_rate) : 0;
+    int64_t wd = (int64_t)atomic_load(&e->watchdog_ms);
+    if (wd < expected_ms + 3000)
+        wd = expected_ms + 3000;
+    int64_t deadline = utc_now_ms() + wd;
+
+    int written = 0;
+    while (written < n)
+    {
+        int32_t w = AAudioStream_write(e->out_stream, buf + written, n - written, 1000000000LL);
+        if (w < 0)
+        {
+            LOGE("write failed: %s", AAudio_convertResultToText(w));
+            break;
+        }
+        written += w;
+        if (utc_now_ms() > deadline)
+        {
+            LOGW("tx watchdog abort: %d/%d frames (wd=%lld ms)", written, n, (long long)wd);
+            break;
+        }
+    }
+    return written;
+}
+
+/**
+ * 播放一段 12 kHz 发射 PCM（内部重采样到输出采样率）。
+ *
+ * 在数据前依次插入 [ptt_silence_ms] 的静音与 [lead_tone_ms] 的单音，
+ * 用于在 VOX-only 场景下让电台在 FT8 数据到达前完成键控。调用方需把
+ * 播放入口提前 `(ptt_silence_ms + lead_tone_ms)`，数据才落在时隙起点。
+ * 返回写入的帧数（<0 表示失败）。
+ */
+static int play_pcm(audio_engine_t* e, const float* data, int len,
+                    int ptt_silence_ms, int lead_tone_ms)
+{
+    resampler_t rs;
+    resampler_init(&rs, WORK_RATE, e->out_rate);
+
+    if (ptt_silence_ms < 0)
+        ptt_silence_ms = 0;
+    if (lead_tone_ms < 0)
+        lead_tone_ms = 0;
+    int pre = (int)((double)(ptt_silence_ms + lead_tone_ms) * (double)e->out_rate / 1000.0);
+    if (pre < 0)
+        pre = 0;
+    int ptt_n = (int)((double)ptt_silence_ms * (double)e->out_rate / 1000.0);
+    if (ptt_n > pre)
+        ptt_n = pre;
+
+    int out_cap = (int)((double)len * (double)e->out_rate / (double)WORK_RATE) + pre + 8;
+    float* out = (float*)calloc((size_t)out_cap, sizeof(float));
+    if (out == NULL)
+        return -1;
+
+    // 前导音：紧接在前导静音之后，直到数据开始
+    double step = 2.0 * M_PI * (double)LEAD_TONE_HZ / (double)e->out_rate;
+    double phase = 0.0;
+    for (int i = ptt_n; i < pre; ++i)
+    {
+        out[i] = LEAD_TONE_AMP * (float)sin(phase);
+        phase += step;
+    }
+
+    int out_n = pre;
+    out_n += resampler_process(&rs, data, len, out + out_n, out_cap - out_n);
+
+    int written = write_blocking(e, out, out_n);
+    free(out);
+    return written;
+}
+
+// 前置声明：nativePlay 委托给带前导的 nativePlayTx
+JNIEXPORT jint JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativePlayTx(
+    JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm,
+    jint ptt_silence_ms, jint lead_tone_ms);
+
+/// 播放一段 12 kHz PCM（无前导），返回写入的帧数。
 JNIEXPORT jint JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativePlay(
     JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm)
+{
+    return Java_com_example_ft8vox_engine_AudioEngine_nativePlayTx(
+        env, thiz, handle, pcm, 0, 0);
+}
+
+/**
+ * 播放一段 12 kHz 发射 PCM，带 PTT 前导静音与发射前导音。
+ * @param ptt_silence_ms 数据前的静音时长（ms）
+ * @param lead_tone_ms   数据前的单音时长（ms，0=关）
+ * @return 写入的帧数（<0 表示失败）
+ */
+JNIEXPORT jint JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativePlayTx(
+    JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm,
+    jint ptt_silence_ms, jint lead_tone_ms)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
     if (e == NULL || e->out_stream == NULL || pcm == NULL)
@@ -673,32 +862,84 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePlay(
     if (data == NULL)
         return -1;
 
-    resampler_t rs;
-    resampler_init(&rs, WORK_RATE, e->out_rate);
-    int out_cap = (int)((double)len * (double)e->out_rate / (double)WORK_RATE) + 8;
-    float* out = (float*)malloc((size_t)out_cap * sizeof(float));
-    int out_n = 0;
-    if (out != NULL)
-        out_n = resampler_process(&rs, data, len, out, out_cap);
+    int written = play_pcm(e, data, (int)len, ptt_silence_ms, lead_tone_ms);
 
     (*env)->ReleaseFloatArrayElements(env, pcm, data, JNI_ABORT);
-
-    int written = 0;
-    if (out != NULL)
-    {
-        while (written < out_n)
-        {
-            int32_t w = AAudioStream_write(e->out_stream, out + written, out_n - written, 1000000000LL);
-            if (w < 0)
-            {
-                LOGE("write failed: %s", AAudio_convertResultToText(w));
-                break;
-            }
-            written += w;
-        }
-        free(out);
-    }
     return written;
+}
+
+/**
+ * 播放一段测试单音（用于 VOX 键控/音量联调）。
+ * @param freq_hz     单音频率（Hz）
+ * @param duration_ms 时长（ms）
+ * @return 写入的帧数（<0 表示失败）
+ */
+JNIEXPORT jint JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativePlayTone(
+    JNIEnv* env, jobject thiz, jlong handle, jint freq_hz, jint duration_ms)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL || e->out_stream == NULL)
+        return -1;
+    if (freq_hz <= 0 || duration_ms <= 0 || e->out_rate <= 0)
+        return 0;
+
+    int n = (int)((double)e->out_rate * (double)duration_ms / 1000.0);
+    if (n <= 0)
+        return 0;
+    float* buf = (float*)calloc((size_t)n, sizeof(float));
+    if (buf == NULL)
+        return -1;
+
+    double step = 2.0 * M_PI * (double)freq_hz / (double)e->out_rate;
+    double phase = 0.0;
+    // 首尾各 10 ms 余弦包络，避免爆音
+    int ramp = (int)(0.01 * e->out_rate);
+    if (ramp > n / 2)
+        ramp = n / 2;
+    for (int i = 0; i < n; ++i)
+    {
+        double env = 1.0;
+        if (ramp > 0)
+        {
+            if (i < ramp)
+                env = (1.0 - cos(M_PI * (double)i / (double)ramp)) / 2.0;
+            else if (i >= n - ramp)
+                env = (1.0 - cos(M_PI * (double)(n - 1 - i) / (double)ramp)) / 2.0;
+        }
+        buf[i] = 0.5f * (float)(env * sin(phase));
+        phase += step;
+    }
+
+    int written = write_blocking(e, buf, n);
+    free(buf);
+    return written;
+}
+
+/**
+ * 下发 VOX / PTT 配置（热生效）。
+ * @param trigger       0=音频检测 1=静音检测
+ * @param threshold_db  触发门限（dBFS）
+ * @param delay_ms      状态翻转去抖（ms）
+ * @param ptt_delay_ms  发射前导静音（ms）
+ * @param lead_tone_ms  发射前导音时长（ms，0=关）
+ * @param watchdog_ms   发射写入看门狗（ms）
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetVox(
+    JNIEnv* env, jobject thiz, jlong handle,
+    jint trigger, jint threshold_db, jint delay_ms,
+    jint ptt_delay_ms, jint lead_tone_ms, jint watchdog_ms)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    atomic_store(&e->vox_trigger, trigger == 1 ? 1 : 0);
+    atomic_store(&e->vox_threshold_db, threshold_db);
+    atomic_store(&e->vox_delay_ms, delay_ms < 0 ? 0 : delay_ms);
+    atomic_store(&e->ptt_delay_ms, ptt_delay_ms < 0 ? 0 : ptt_delay_ms);
+    atomic_store(&e->lead_tone_ms, lead_tone_ms < 0 ? 0 : lead_tone_ms);
+    atomic_store(&e->watchdog_ms, watchdog_ms < 0 ? 0 : watchdog_ms);
 }
 
 // -----------------------------------------------------------------------------
@@ -708,7 +949,7 @@ JNIEXPORT jlongArray JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject thiz, jlong handle)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    jlong values[10] = { 0 };
+    jlong values[12] = { 0 };
     if (e != NULL)
     {
         values[0] = atomic_load(&e->running) ? 1 : 0;
@@ -721,10 +962,12 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject t
         values[7] = utc_now_ms();
         values[8] = atomic_load(&e->dropped);
         values[9] = atomic_load(&e->slots_decoded);
+        values[10] = atomic_load(&e->vox_open) ? 1 : 0;
+        values[11] = atomic_load(&e->vox_level_db_x10);
     }
-    jlongArray result = (*env)->NewLongArray(env, 10);
+    jlongArray result = (*env)->NewLongArray(env, 12);
     if (result != NULL)
-        (*env)->SetLongArrayRegion(env, result, 0, 10, values);
+        (*env)->SetLongArrayRegion(env, result, 0, 12, values);
     return result;
 }
 

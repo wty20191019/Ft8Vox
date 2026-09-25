@@ -107,7 +107,10 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 | `startPlayback(preferredRate = 48000): Int` | 以阻塞写模式打开 AAudio 播放流；返回设备实际采样率，负数为错误码 |
 | `stopPlayback()` | 关闭播放流 |
 | `play(pcm: FloatArray): Int` | 播放一个时隙的 12 kHz PCM（内部重采样到输出采样率），返回写入帧数 |
-| `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间） |
+| `playTx(pcm: FloatArray, pttSilenceMs = 0, leadToneMs = 0): Int` | 发射播放：在数据前插入 `pttSilenceMs` 静音与 `leadToneMs` 单音（前导音），带看门狗写入；返回写入帧数 |
+| `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音（VOX 键控/音量联调），返回写入帧数 |
+| `setVox(config: VoxConfig)` | 下发 VOX/PTT 配置（热生效，见 6.1） |
+| `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
 `startCapture` 错误码：`-1` 未初始化、`-2` 无法创建 stream builder、`-3` 打开输入流失败、`-4` DSP 线程创建失败、`-5` 启动输入流失败。
@@ -122,12 +125,30 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 - **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。
 - **waterfall 行流**：每处理完一个 monitor block，将 `time_osr` 行（取 `freq_sub=0`）写入 native 环形缓冲；
   FT8 下约每 80 ms 一行。Kotlin 侧用 `pollWaterfall()` 拉取，若落后太多则自动丢弃被覆盖的旧行。
-- **发射时序（Kotlin 侧调度，不新增 native 线程）**：`play()` 是阻塞写，由 Kotlin 轮询线程按时隙触发：
+- **发射时序（Kotlin 侧调度，不新增 native 线程）**：`playTx()` 是阻塞写，由 Kotlin 轮询线程按时隙触发：
   1. 操作者确认（防误发）后先 `startPlayback()` 建好播放流，避免发射瞬间才建流而错过时隙；
-  2. 每 80 ms 检查一次，仅当「当前时隙奇偶 == 我方发射周期」且处于时隙起点后 **1200 ms** 内、
-     且该时隙尚未发射过时才调用 `play()`；同一时隙绝不重复写；
-  3. 发射波形自带 0.5 s 前导静音，用于吸收「上一接收时隙解码完成 → 决定本轮报文」的数百毫秒延迟；
-  4. 其余时间不向播放流写数据（保持静音）；`stopPlayback()` 可中止进行中的阻塞写，用于紧急停止。
+  2. 每 80 ms 检查一次，计算目标发射时隙与播放起点（见 6.1）：无前导时就地在「当前时隙奇偶 == 我方发射周期」且起点后 **1200 ms** 内发射；有前导时提前 `PTT 延迟 + 前导音时长` 启动，使 FT8 数据仍落在时隙起点。同一时隙绝不重复写；
+  3. 迟到时按迟到量缩短前导（`effectivePreambleMs`）以保持数据对齐；迟到超过 `前导 + 1200 ms` 则放弃本时隙；
+  4. 发射波形自带 0.5 s 前导静音，用于吸收「上一接收时隙解码完成 → 决定本轮报文」的数百毫秒延迟；
+  5. 其余时间不向播放流写数据（保持静音）；`stopPlayback()` 可中止进行中的阻塞写，用于紧急停止。
+
+### 6.1 VOX / PTT（U7b）
+
+无 CAT 时 App 无法直接控制电台 PTT，只能通过发射音频序列间接键控。`VoxConfig` 字段：
+
+| 字段 | 默认 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| `mode` | `AUDIO` | `AUDIO` / `SILENCE` | 电平判定口径：音频检测 / 静音检测 |
+| `thresholdDb` | -40 | -60..-20 | 触发门限（dBFS） |
+| `delayMs` | 300 | 0..2000 | 候选状态翻转去抖时长 |
+| `pttDelayMs` | 0 | 0..500 | 数据前的前导静音（留给声卡路由/电台起键） |
+| `leadToneMs` | 0 | 0..2000 | 数据前的前导单音（1 kHz），用于抢先键控 VOX |
+| `watchdogMs` | 10000 | 1000..60000 | 发射写入看门狗（卡死保护） |
+
+- **VOX 电平/触发**：native 在 DSP 线程对原始输入块计算 RMS 电平（快攻击/慢释放平滑），按 `mode`/`thresholdDb`/`delayMs` 维护 `voxOpen`。无 CAT 无法读取电台真实键控状态，该状态仅为**输入音频活动的近似**，用于状态栏与音频速览显示，**不参与发射门控**（发射仍按时隙）。
+- **前导与对齐**：`playTx()` 把 `pttDelayMs` 静音与 `leadToneMs` 单音插在数据之前；调用方（`planTx`）相应提前播放起点，保证数据落在时隙起点。
+- **看门狗**：`write_blocking()` 以「本段音频预期播放时长 + 3 s」为实际阈值（不低于 `watchdogMs`），避免截断合法的整时隙发射；仅在音频设备卡死时中止写循环。
+- `nativeGetState` 返回 12 个 `Long`：索引 0–9 同前，`[10]=vox_open`、`[11]=vox_level_db×10`。
 
 ## 7. 调试接口
 
@@ -156,4 +177,4 @@ SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音�
 - ~~大块 PCM 用 `FloatArray` 还是 Direct `ByteBuffer`~~ → **已定稿：`FloatArray`**（阶段 2 采用，`GetFloatArrayElements` 读取，块间无拷贝）。若后续实测发现拷贝开销明显，再评估 Direct `ByteBuffer`。
 - ~~重采样算法（native 自写 vs 轻量库）~~ → **已定稿：native 自写**（阶段 4：4 阶 Butterworth 抗混叠 + 线性插值，无第三方依赖）。
 - 是否提供 native → Kotlin 的增量解码回调（当前采用拉取模型，暂不需要）。
-- 设备路由选择（内置 / USB / 蓝牙）与音频模式（`MODE_IN_COMMUNICATION`）留待阶段 5–6。
+- 设备路由选择（内置 / USB / 蓝牙）与音频模式（`MODE_IN_COMMUNICATION`）：属 U7「音频路由与增益」项，尚未接通；当前使用系统默认输入/输出。VOX/PTT 前导与电平已在 U7b 接通（见 6.1）。
