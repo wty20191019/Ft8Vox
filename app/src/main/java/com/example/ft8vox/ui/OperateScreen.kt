@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.example.ft8vox.SessionService
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
@@ -133,6 +135,22 @@ fun OperateScreen(
     // 进入操作页且已授权时自动开始接收（水位图不再提供 ▶ 按钮）
     LaunchedEffect(permissionGranted) {
         if (permissionGranted && !status.running) viewModel.start()
+    }
+
+    // 通知权限（Android 13+）：前台服务通知需要它才可见；拒绝时服务照常运行，只是不显示通知
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        // 首次运行时服务可能已先启动（通知被系统拦下），授权后补贴一次
+        if (granted) SessionService.refresh(context)
+    }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     fun copyToClipboard(text: String) {

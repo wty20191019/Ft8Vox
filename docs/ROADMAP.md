@@ -294,7 +294,7 @@ com/example/ft8vox/
 >     命中同一通联时按 `QsoMerge` **合并**（QSL/LoTW 确认状态与缺失字段补齐，已有非空值不覆盖），而非直接丢弃——
 >     否则导入 LoTW 确认报告会整份被跳过，「确认」永远不亮；
 >     导出用 `CreateDocument("application/octet-stream")`——用 `text/plain` 会被 DocumentsUI 强制追加 `.txt`，把 `.adi` 变成 `.adi.txt`。
->   - **已知取舍**：打开 SAF 文件选择器会让 Activity 进入后台，`onStop` 会停止接收（阶段 9 上前台服务后消除）。
+>   - **已知取舍**：打开 SAF 文件选择器会让 Activity 进入后台；**阶段 9 前台服务已实装，接收不再中断**（见阶段 9）。
 >   - **验证**：`assembleDebug` 通过；JVM 单测 62 项全过（新增 ADIF/Maidenhead/QsoTime/BandPlan/日志筛选统计）；
 >     instrumented 20 项全过（新增 6 项 Room 仓库集成测试：增删改查、导入去重、导出往返、已通联索引）；
 >     模拟器实测：四 Tab 切换不打断接收（切页时「已解码时隙」持续增长）、设置持久化（杀进程重启后呼号/网格仍在）、
@@ -374,7 +374,14 @@ com/example/ft8vox/
 
 ### 阶段 9：稳定性与性能（MVP 之后）
 
-- 前台服务保证息屏续跑；省电与发热优化。
+> 进度：
+> - **前台服务（后台保活）已实装**：`SessionService`（`microphone` 类型前台服务 + 常驻通知，含「停止接收」动作）。
+>   会话状态仍由 `SessionViewModel` 持有，服务只负责「进入前台 + 通知」；两者同进程，用 `SessionServiceBridge`
+>   的两个 Flow 单向通信（文案下行、停止请求上行）。`MainActivity.onStop` 不再停会话；服务随会话启停，
+>   用 `START_NOT_STICKY`，进程被杀后不空跑。Android 13+ 在操作页申请 `POST_NOTIFICATIONS`，授权后
+>   `SessionService.refresh()` 补发首条通知（否则首次运行时通知会被系统拦下且不自动补发）。
+>   **已知限制**：返回键退出（Activity 销毁 → ViewModel `onCleared`）仍会停止接收；切后台 / 息屏 / SAF 选择器不受影响。
+> - 前台服务保证息屏续跑；省电与发热优化。
 - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。
 - 真机机型矩阵验证（尤其 USB 音频与重采样路径）。

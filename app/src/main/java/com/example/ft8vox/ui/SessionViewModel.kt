@@ -3,6 +3,8 @@ package com.example.ft8vox.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ft8vox.SessionService
+import com.example.ft8vox.SessionServiceBridge
 import com.example.ft8vox.container
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.log.QsoComment
@@ -232,6 +234,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var engineGen = 0
 
+    /** 前台服务是否已启动（阶段 9：后台保活）。 */
+    private var serviceOn = false
+
+    /**
+     * 临时抑制前台服务的启停。
+     *
+     * [restartForProtocol] 内部会成对调用 `stop()` + `start()`，若照常同步服务会「停服务→
+     * 起服务」造成通知闪烁，故这一小段窗口内跳过服务同步，结束后统一收口一次。
+     */
+    private var serviceSuppressed = false
+
     /** 「含我呼号哔声」提示音（U7d）。 */
     private val alertTone = AlertTone()
 
@@ -249,6 +262,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     grids = list.mapNotNull { it.theirGrid },
                 )
             }
+        }
+        // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
+        viewModelScope.launch {
+            SessionServiceBridge.stopRequests.collect { stop() }
         }
     }
 
@@ -612,6 +629,37 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _messages.value = emptyList()
     }
 
+    // ---- 前台服务（阶段 9：后台保活） ----
+
+    /**
+     * 让前台服务的启停与会话运行状态保持一致。
+     *
+     * 服务负责两件事：以 `microphone` 类型进入前台（Android 14+ 后台访问麦克风的前提），
+     * 以及在通知栏常驻会话状态。会话开始/停止时调用；[serviceSuppressed] 期间跳过。
+     */
+    private fun syncService() {
+        if (serviceSuppressed) return
+        if (_status.value.running) {
+            if (!serviceOn) {
+                try {
+                    SessionService.start(getApplication<Application>())
+                    serviceOn = true
+                } catch (e: Exception) {
+                    // Android 12+ 从后台启动前台服务会被系统拒绝；此时保持应用内接收，不让异常上抛
+                    _status.update { it.copy(status = "前台服务启动失败：${e.message}") }
+                }
+            }
+        } else if (serviceOn) {
+            SessionService.stop(getApplication<Application>())
+            serviceOn = false
+        }
+    }
+
+    /** 把当前会话状态推给前台服务通知（`StateFlow` 只在文案变化时才真正刷新通知）。 */
+    private fun publishServiceStatus() {
+        SessionServiceBridge.statusText.value = serviceStatusText(_status.value)
+    }
+
     // ---- 采集 ----
 
     fun start() {
@@ -664,6 +712,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         startPolling()
+        syncService()
+        publishServiceStatus()
     }
 
     fun stop() {
@@ -689,6 +739,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 qso = qsoEngine.stop(),
             )
         }
+        // 只用停服务收口：不要在这里推送「已停止」文案，否则通知会在服务销毁前被重贴成僵尸通知
+        syncService()
     }
 
     /**
@@ -702,9 +754,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val cur = _status.value
         val txWasOn = cur.txEnabled
         val wasTxing = cur.txing
-        stop()
-        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
-        start()
+        // 抑制服务启停：这段 stop()/start() 是原子的，服务无需跟着停一下
+        serviceSuppressed = true
+        try {
+            stop()
+            _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+            start()
+        } finally {
+            serviceSuppressed = false
+        }
+        syncService()
+        publishServiceStatus()
         if (!_status.value.running) return
         if (txWasOn) setTxEnabled(true)
         _status.update {
@@ -1022,6 +1082,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 5) 发射调度
         txTick()
+
+        // 6) 前台服务通知（文案不变时 StateFlow 不会重复刷新）
+        publishServiceStatus()
     }
 
     /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
@@ -1401,6 +1464,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AudioEngine.stopCapture()
         AudioEngine.release()
         alertTone.release()
+        SessionService.stop(getApplication<Application>())
+        serviceOn = false
         super.onCleared()
     }
 
@@ -1538,6 +1603,28 @@ internal fun effectiveTxParity(
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =
     if (parity == TX_PARITY_ODD) "奇数周期" else "偶数周期"
+
+/**
+ * 前台服务通知的副标题（纯函数，便于单测，阶段 9）。
+ *
+ * 形如 `接收中 · FT8 · 20m · 解码 12`；发射中时以「发射中」开头并附当前对手呼号。
+ * 未运行（服务本应已停止，仅作兜底）时只返回「已停止」。
+ */
+internal fun serviceStatusText(st: ReceiverStatus): String {
+    val head = when {
+        st.txing -> "发射中"
+        st.running -> "接收中"
+        else -> "已停止"
+    }
+    if (!st.running) return head
+    return buildString {
+        append(head)
+        append(" · ").append(st.protocol.name)
+        if (st.band.isNotEmpty()) append(" · ").append(st.band)
+        append(" · 解码 ").append(st.decodedTotal)
+        if (st.qso.active) st.qso.theirCall?.let { append(" · ").append(it) }
+    }
+}
 
 /**
  * 「含我呼号哔声」判定（纯函数，便于单测，U7d）。

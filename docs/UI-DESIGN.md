@@ -33,7 +33,7 @@
 - AGP 9 内置 Kotlin 编译，KSP 需要 `android.disallowKotlinSourceSets=false` 才能注册生成代码目录。
 - ADIF 的长度字段是 **UTF-8 字节数**，不是字符数；中文备注必须按字节解析/生成。
 - SAF 导出若用 `text/plain`，文件名会被追加 `.txt`；应使用 `application/octet-stream` 保留 `.adi`。
-- 打开 SAF 会让 Activity 进后台并触发 `onStop` → 停止接收（阶段 9 上前台服务后解决）。
+- 打开 SAF 会让 Activity 进后台；前台服务（阶段 9）已实装，接收不再中断。
 
 7c / 7d 落地时相对本文档的偏差（有意为之，此处备案）：
 
