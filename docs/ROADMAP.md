@@ -380,7 +380,9 @@ com/example/ft8vox/
 >   的两个 Flow 单向通信（文案下行、停止请求上行）。`MainActivity.onStop` 不再停会话；服务随会话启停，
 >   用 `START_NOT_STICKY`，进程被杀后不空跑。Android 13+ 在操作页申请 `POST_NOTIFICATIONS`，授权后
 >   `SessionService.refresh()` 补发首条通知（否则首次运行时通知会被系统拦下且不自动补发）。
->   **已知限制**：返回键退出（Activity 销毁 → ViewModel `onCleared`）仍会停止接收；切后台 / 息屏 / SAF 选择器不受影响。
+>   **返回键**：接收中改为「退到后台继续接收」（`MainShell` 的 `BackHandler` + `moveTaskToBack`，并弹一条短提示），
+>   未接收时保持默认行为退出；底部抽屉 / 弹窗打开时返回键仍先收起它们（各自独立窗口）。
+>   **已知限制**：通知权限被拒时前台服务通知不可见（服务照常运行），需在系统设置里开启。
 > - 前台服务保证息屏续跑；省电与发热优化。
 - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。

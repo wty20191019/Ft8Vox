@@ -1,5 +1,10 @@
 package com.example.ft8vox.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +28,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import com.example.ft8vox.qso.AutoLevel
 
 /**
@@ -66,6 +72,15 @@ fun MainShell(
     val messages by session.messages.collectAsState()
     val stats by log.stats.collectAsState()
     val nowMs = rememberUtcNowMs()
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+
+    // 返回键：接收中「退到后台继续接收」（由前台服务保活），未接收时保持默认行为（退出）。
+    // Compose 的 BackHandler 只在没有弹窗 / 底部抽屉（各自独立窗口）消费返回键时才会触发。
+    BackHandler(enabled = status.running) {
+        activity?.moveTaskToBack(true)
+        Toast.makeText(context, "已退到后台继续接收，可在通知栏「停止接收」", Toast.LENGTH_SHORT).show()
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -174,4 +189,14 @@ internal fun requestAutoLevel(
 ) {
     if (level.enabled && !status.autoProgram.level.enabled) onNeedConfirm(level)
     else session.setAutoLevel(level)
+}
+
+/** 取宿主 Activity（Compose 的 `LocalContext` 可能是被包装过的 Context）。 */
+private fun Context.findActivity(): Activity? {
+    var ctx: Context? = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }
