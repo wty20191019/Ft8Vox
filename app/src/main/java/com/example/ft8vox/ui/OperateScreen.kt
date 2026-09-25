@@ -79,6 +79,7 @@ fun OperateScreen(
     onOpenSettings: () -> Unit,
     onOpenMap: (String?) -> Unit,
     onOpenLog: () -> Unit,
+    onOpenAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -96,7 +97,7 @@ fun OperateScreen(
     }
     var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
     var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
-    var confirmCallFirst by remember { mutableStateOf(false) }
+    var confirmAuto by remember { mutableStateOf(false) }
     var queryOpen by rememberSaveable { mutableStateOf(false) }
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 发射抽屉当前目标（点选解码行 / 滑呼 / 详情「呼叫」设置）
@@ -297,9 +298,9 @@ fun OperateScreen(
             onStopTx = { viewModel.stopTransmit() },
             onTxEnabledChange = { viewModel.setTxEnabled(it) },
             onHoldTxChange = { viewModel.setHoldTxFreq(it) },
-            onSetCallFirst = { viewModel.setCallFirst(it) },
-            onArmCallFirst = {
-                if (status.callFirstArmed) viewModel.disarmCallFirst() else confirmCallFirst = true
+            onOpenAutoProgram = onOpenAutoProgram,
+            onArmAutoProgram = {
+                if (status.autoArmed) viewModel.disarmAutoProgram() else confirmAuto = true
             },
             onMacrosChange = { viewModel.setMacros(it) },
             onEnqueue = { viewModel.enqueueTx(it) },
@@ -342,32 +343,37 @@ fun OperateScreen(
         )
     }
 
-    if (confirmCallFirst) {
+    if (confirmAuto) {
         AlertDialog(
-            onDismissRequest = { confirmCallFirst = false },
-            title = { Text("启用 Call 1st") },
+            onDismissRequest = { confirmAuto = false },
+            title = { Text("启用自动程序") },
             text = {
                 Text(
                     buildString {
-                        append("将按「${status.callFirst.label}」自动应答满足条件的 CQ。\n")
+                        append("将按「${status.autoProgram.level.label}」自动发射。\n")
                         append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜时隙：自动（下一个 ")
                         append(if (status.txParity == 0) "偶" else "奇")
                         append("）\n")
                         if (!status.txEnabled) append("注意：发射总开关当前为「关」，需先打开。\n")
-                        append("一次 QSO 结束后会自动停止，请确认电台已就绪。")
+                        if (status.autoProgram.singleQso) {
+                            append("「单次通联」已开：一次 QSO 结束后会自动停止。\n")
+                        } else {
+                            append("「单次通联」已关：将连续自动通联，直到手动关闭。\n")
+                        }
+                        append("请确认电台已就绪。")
                     },
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        confirmCallFirst = false
-                        viewModel.armCallFirst()
+                        confirmAuto = false
+                        viewModel.armAutoProgram()
                     },
                 ) { Text("确认启用") }
             },
             dismissButton = {
-                TextButton(onClick = { confirmCallFirst = false }) { Text("取消") }
+                TextButton(onClick = { confirmAuto = false }) { Text("取消") }
             },
         )
     }

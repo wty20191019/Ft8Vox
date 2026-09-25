@@ -22,7 +22,12 @@ import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.VoxConfig
 import com.example.ft8vox.engine.VoxMode
 import com.example.ft8vox.engine.WaterfallInfo
-import com.example.ft8vox.qso.CallFirstSelector
+import com.example.ft8vox.qso.AutoDecision
+import com.example.ft8vox.qso.AutoLevel
+import com.example.ft8vox.qso.AutoProgramSelector
+import com.example.ft8vox.qso.AutoProgramSettings
+import com.example.ft8vox.qso.AutoTarget
+import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
@@ -33,7 +38,6 @@ import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
 import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
-import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.VoxTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -92,10 +96,10 @@ data class ReceiverStatus(
     // ---- JTDX 风格操作（阶段 7c） ----
     /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
     val holdTxFreq: Boolean = false,
-    /** Call 1st 自动应答策略（来自设置）。 */
-    val callFirst: CallFirstMode = CallFirstMode.OFF,
-    /** Call 1st 是否已武装（需用户确认；QSO 结束后自动解除）。 */
-    val callFirstArmed: Boolean = false,
+    /** 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。 */
+    val autoProgram: AutoProgramSettings = AutoProgramSettings(),
+    /** 自动程序是否已启用（需用户确认；按「单次通联」在 QSO 结束后自动解除）。 */
+    val autoArmed: Boolean = false,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
     // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
@@ -213,8 +217,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
                 ),
                 holdTxFreq = s.holdTxFreq,
-                callFirst = s.callFirst,
-                callFirstArmed = if (s.callFirst == CallFirstMode.OFF) false else cur.callFirstArmed,
+                autoProgram = s.auto,
+                autoArmed = if (s.auto.level == AutoLevel.MANUAL) false else cur.autoArmed,
                 // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
@@ -325,11 +329,21 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(holdTxFreq = value) }
     }
 
-    fun setCallFirst(mode: CallFirstMode) {
+    /** 设置自动程序等级；切到「手动」时立即解除启用。 */
+    fun setAutoLevel(level: AutoLevel) {
         _status.update {
-            it.copy(callFirst = mode, callFirstArmed = if (mode == CallFirstMode.OFF) false else it.callFirstArmed)
+            it.copy(
+                autoProgram = it.autoProgram.copy(level = level),
+                autoArmed = if (level == AutoLevel.MANUAL) false else it.autoArmed,
+            )
         }
-        persist { it.copy(callFirst = mode) }
+        persist { it.copy(auto = it.auto.copy(level = level)) }
+    }
+
+    /** 改一项自动程序策略开关。 */
+    fun setAutoOption(transform: (AutoProgramSettings) -> AutoProgramSettings) {
+        _status.update { it.copy(autoProgram = transform(it.autoProgram)) }
+        persist { it.copy(auto = transform(it.auto)) }
     }
 
     fun setFilterTags(tags: Set<DecodeFilterTag>) {
@@ -378,18 +392,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(txQueue = emptyList()) }
     }
 
-    /** 武装 Call 1st（UI 需先弹防误发确认）。 */
-    fun armCallFirst() {
-        val mode = _status.value.callFirst
-        if (mode == CallFirstMode.OFF) {
-            _status.update { it.copy(status = "请先选择 Call 1st 策略") }
+    /** 启用自动程序（UI 需先弹防误发确认）。 */
+    fun armAutoProgram() {
+        val p = _status.value.autoProgram
+        if (p.level == AutoLevel.MANUAL) {
+            _status.update { it.copy(status = "请先选择自动程序等级") }
             return
         }
-        _status.update { it.copy(callFirstArmed = true, status = "Call 1st 已启用（${mode.label}）") }
+        _status.update { it.copy(autoArmed = true, status = "自动程序已启用（${p.level.label}）") }
     }
 
-    fun disarmCallFirst() {
-        _status.update { it.copy(callFirstArmed = false, status = "Call 1st 已关闭") }
+    fun disarmAutoProgram() {
+        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭") }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -508,7 +522,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                callFirstArmed = false,
+                autoArmed = false,
                 qso = qsoEngine.stop(),
             )
         }
@@ -655,7 +669,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                callFirstArmed = false,
+                autoArmed = false,
                 qso = p,
                 txCountdownMs = 0,
                 status = "已停止发射",
@@ -776,8 +790,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     val batch = pendingDecodes.toList()
                     if (st.qso.active) {
                         applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
-                    } else if (st.callFirstArmed) {
-                        autoCallFirst(batch)
+                    } else if (st.autoArmed) {
+                        runAutoProgram(batch)
                     }
                 }
                 pendingDecodes = mutableListOf()
@@ -799,8 +813,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(
                 qso = p,
                 status = "QSO：${p.description}",
-                // 一次自动 QSO 结束即解除 Call 1st，避免无限自动呼叫
-                callFirstArmed = if (finished) false else it.callFirstArmed,
+                // 「单次通联」开启时，一次 QSO 结束即解除自动程序，避免无限自动呼叫
+                autoArmed = if (finished && it.autoProgram.singleQso) false else it.autoArmed,
             )
         }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
@@ -826,33 +840,63 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Call 1st：从本时隙解码中挑一个 CQ 自动应答（需已武装）。 */
-    private fun autoCallFirst(batch: List<DecodeResult>) {
+    /**
+     * 自动程序：在「无进行中 QSO」时，按策略选台并自动应答 / 自动发 CQ。
+     *
+     * 等级 4+ 在无可答目标时自动发 CQ（自动搜索）；其余等级保持待命。
+     */
+    private fun runAutoProgram(batch: List<DecodeResult>) {
         val st = _status.value
         if (!st.txEnabled) return
-        val cand = CallFirstSelector.pick(
+        val decision = AutoProgramSelector.decide(
             messages = batch,
-            mode = st.callFirst,
+            program = st.autoProgram,
             filter = currentFilter(),
             worked = _worked.value,
             myCall = st.myCall,
-        ) ?: return
+            myGrid = st.myGrid,
+        )
+        when (decision) {
+            is AutoDecision.AnswerCq -> startAutoTarget(decision.target)
+            is AutoDecision.AnswerReport -> startAutoTarget(decision.target)
+            AutoDecision.CallCq -> startAutoSearch()
+            AutoDecision.None -> Unit
+        }
+    }
+
+    /** 自动应答选中的目标（对方的 CQ，或对方直接发来的信号报告）。 */
+    private fun startAutoTarget(t: AutoTarget) {
+        val st = _status.value
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
 
         lastTxSlotIndex = -1L
         val hold = st.holdTxFreq
-        val v = clampFreq(cand.df)
+        val v = clampFreq(t.df)
         _status.update {
             it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
         }
         if (!hold) persist { it.copy(selectedFreqHz = v) }
 
-        val p = qsoEngine.answer(cand.call, cand.grid)
+        val p = if (t.kind == AutoTargetKind.REPORT && t.report != null) {
+            qsoEngine.respondToReport(t.call, t.report, t.snr)
+        } else {
+            qsoEngine.answer(t.call, t.grid)
+        }
         if (!p.active) return
         _status.update {
-            it.copy(qso = p, txArmed = true, status = "Call 1st：应答 ${cand.call}")
+            it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
         }
+    }
+
+    /** 自动搜索：无可答目标时自动发 CQ（等级 4+）。 */
+    private fun startAutoSearch() {
+        if (!canOperate) return
+        relockAutoParityIfNeeded()
+        if (!armPlayback()) return
+        lastTxSlotIndex = -1L
+        val p = qsoEngine.startCq()
+        _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：搜索中（CQ）") }
     }
 
     /** 由设置构造显示过滤条件（操作页与 Call 1st 共用）。 */

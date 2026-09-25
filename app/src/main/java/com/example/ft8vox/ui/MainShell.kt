@@ -56,6 +56,7 @@ fun MainShell(
     // 从操作页双击解码行跳地图时，要定位的呼号（与序号配合，便于重复触发）
     var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
+    var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
@@ -72,6 +73,7 @@ fun MainShell(
                 onBandFreq = session::setBandFreq,
                 onProtocol = session::selectProtocol,
                 onOpenSettings = { tab = MainTab.SETTINGS },
+                onAutoProgram = { autoDialogOpen = true },
             )
         },
         bottomBar = {
@@ -112,6 +114,7 @@ fun MainShell(
                         tab = MainTab.MAP
                     },
                     onOpenLog = { tab = MainTab.LOG },
+                    onOpenAutoProgram = { autoDialogOpen = true },
                 )
                 MainTab.MAP -> GridScreen(
                     log = log,
@@ -131,5 +134,15 @@ fun MainShell(
                 MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
             }
         }
+    }
+
+    if (autoDialogOpen) {
+        AutoProgramDialog(
+            program = status.autoProgram,
+            armed = status.autoArmed,
+            onSetLevel = session::setAutoLevel,
+            onOption = session::setAutoOption,
+            onDismiss = { autoDialogOpen = false },
+        )
     }
 }

@@ -118,6 +118,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
 | U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：本轮不做；离线瓦片：暂缓（缺数据源，维持矢量底图）；FST4：**不做**（`ft8_lib` 无该模式） |
 | U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发射总开关（收起态条，默认只接收）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
+| U9 自动程序 | ✅ | | 取代 Call 1st：等级 0 手动 / 1 首先解码 / 2 解码窗口择优 / 3 解码后择优 / 4+ 自动搜索（无可答目标自动 CQ）；策略开关 回答·呼叫已通联 / 优先新呼号 / 报告信息优先 / 最远距离取代最佳信噪比 / 单次通联；顶栏菜单 + 发射抽屉入口 + 设置页面板；窄带过滤按用户决定不做；JVM 全绿 |
 
 ### U2 落地说明（与设计的取舍）
 
@@ -238,5 +239,20 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **接线**：`SessionViewModel.setBandFreq` / `setTxEnabled`、`lockAutoParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证时隙已锁定；`applySettings` 同步 `band / dialHz / 生效 txParity`。
 - **测试**：`BandPlanTest` 增补（每波段 ≥2 频率、首项 = 默认、频率在波段内、`resolveDialHz`、`parseFreqMhz`、`DialFreq.mhz`）；`ui/TxParityAutoTest`（下一时隙奇偶、前导余量跳过、边界、零时隙回退、文案）。JVM 全绿，`:app:assembleDebug` 通过。
 - **模拟器实测**：顶栏弹窗列出多频率且切换生效（20m → 80m，3.573 生效）、自定义波段/频率表单可用；收起态条上的发射开关与「发送 CQ」按钮、抽屉「只接收」态符合预期。发射时序 / 自动周期与真实电台的配合需真机验证（见 `REGRESSION.md`）。
+
+### U9 落地说明：自动程序（取代 Call 1st）
+
+- **背景**：按 FT8CN「自动程序」菜单实现整套自动应答 / 自动搜索策略；用户确认采用「自动化递进」语义、**完全并入并取代 Call 1st**、**不做**「接收频率自动窄带过滤」。
+- **等级（`qso/AutoProgram.kt` → `AutoLevel`）**：
+  - `0 手动选择`：不自动应答（等价原 Call 1st 关）。
+  - `1 呼叫首先解码`：取本时隙**最先解码到**的候选（不做排序）。
+  - `2 解码至发射间隔期间` / `3 直到解码结束`：在整批解码中**择优**（最强信噪比 / 最远距离）。Ft8Vox 解码按接收时隙整批返回，故 2/3 语义一致，差异仅保留在菜单文案。
+  - `4+ 自动搜索及自动回应别人的CQ信息`：在择优基础上，**无可答目标时自动发 CQ**（自动搜索）。
+- **策略开关（`AutoProgramSettings`）**：回答曾经通联的电台 / 呼叫曾经通联过的电台（Ft8Vox 无跟踪列表，二者合并为 `allowsWorked = 任一开启`，默认**关**，即跳过已通联台）；优先选择新呼号（默认开，排序时新呼号优先）；报告信息优先（默认关，把发给我且带信号报告的定向报文纳入候选并优先处理，经 `QsoEngine.respondToReport` 从「已收报告」阶段进入应答方）；最远距离取代最佳信噪比（默认关，选台准则由 `snr` 改为 `Geo` 大圆距离，需填写我的网格）；单次通联（默认开，完成一次 QSO 后自动解除；关闭则连续自动通联）。
+- **决策（`AutoProgramSelector`）**：候选与本时隙解码共用 `DecodeFilter`（忽略名单 / 筛选 chip / 搜索串一致），同呼号去重；`decide()` 返回 `AnswerCq` / `AnswerReport` / `CallCq` / `None`。
+- **接线**：`SessionViewModel` 以 `ReceiverStatus.autoProgram` + `autoArmed` 取代 `callFirst` / `callFirstArmed`（DataStore 键 `call_first` → `auto_level` 等）；接收时隙结束且无进行中 QSO 时调用 `runAutoProgram`；`startAutoTarget` / `startAutoSearch` 复用原 Call 1st 的时隙锁定与频率跟随逻辑。
+- **UI**：顶栏菜单新增「自动程序」（打开 `AutoProgramDialog`）；发射抽屉「自动序列」区改为「自动程序」行（等级摘要 + 设置… + 启用/关闭，启用走原防误发确认）；设置页 6.3 用 `AutoProgramPanel` 内嵌同一套等级 + 开关。
+- **测试**：`qso/AutoProgramTest`（等级、自动 CQ、已通联门控、优先新呼号、最远距离、报告优先、过滤/去重/自呼号）；原 `DecodeFilterTest` 中的 CallFirst 用例移除。JVM 全绿，`:app:assembleDebug` 通过。
+
 
 

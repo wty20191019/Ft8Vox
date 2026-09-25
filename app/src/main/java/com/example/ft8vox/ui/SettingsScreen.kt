@@ -46,7 +46,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
@@ -385,12 +384,16 @@ fun SettingsScreen(
                 onCheckedChange = { v -> settings.update { s -> s.copy(holdTxFreq = v) } },
             )
             PrefDivider()
-            PrefChoice(
-                title = "Call 1st 自动应答",
-                options = CallFirstMode.entries,
-                selected = app.callFirst,
-                onSelect = { m -> settings.update { s -> s.copy(callFirst = m) } },
-                label = { it.label },
+            Text(
+                "自动程序",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            AutoProgramPanel(
+                program = app.auto,
+                armed = false,
+                onSetLevel = { lv -> settings.update { s -> s.copy(auto = s.auto.copy(level = lv)) } },
+                onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
             )
             PrefDivider()
             PrefStepper(

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DecodeFilterTag
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -59,7 +60,13 @@ private object Keys {
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val holdTxFreq = booleanPreferencesKey("hold_tx_freq")
-    val callFirst = stringPreferencesKey("call_first")
+    val autoLevel = stringPreferencesKey("auto_level")
+    val autoAnswerWorked = booleanPreferencesKey("auto_answer_worked")
+    val autoCallWorked = booleanPreferencesKey("auto_call_worked")
+    val autoPreferNewCall = booleanPreferencesKey("auto_prefer_new_call")
+    val autoReportPriority = booleanPreferencesKey("auto_report_priority")
+    val autoFarthestOverSnr = booleanPreferencesKey("auto_farthest_over_snr")
+    val autoSingleQso = booleanPreferencesKey("auto_single_qso")
     val maxRetries = intPreferencesKey("max_retries")
     val cqOnly = booleanPreferencesKey("cq_only")
     val excludeWorked = booleanPreferencesKey("exclude_worked")
@@ -144,7 +151,15 @@ private fun Preferences.toAppSettings(): AppSettings {
         protocolName = this[Keys.protocolName] ?: defaults.protocolName,
         selectedFreqHz = this[Keys.selectedFreqHz] ?: defaults.selectedFreqHz,
         holdTxFreq = this[Keys.holdTxFreq] ?: defaults.holdTxFreq,
-        callFirst = enumOr(Keys.callFirst, defaults.callFirst),
+        auto = AutoProgramSettings(
+            level = enumOr(Keys.autoLevel, defaults.auto.level),
+            answerWorked = this[Keys.autoAnswerWorked] ?: defaults.auto.answerWorked,
+            callWorked = this[Keys.autoCallWorked] ?: defaults.auto.callWorked,
+            preferNewCall = this[Keys.autoPreferNewCall] ?: defaults.auto.preferNewCall,
+            reportPriority = this[Keys.autoReportPriority] ?: defaults.auto.reportPriority,
+            farthestOverSnr = this[Keys.autoFarthestOverSnr] ?: defaults.auto.farthestOverSnr,
+            singleQso = this[Keys.autoSingleQso] ?: defaults.auto.singleQso,
+        ),
         maxRetries = (this[Keys.maxRetries] ?: defaults.maxRetries).coerceIn(1, 20),
         filterTags = readFilterTags(this, defaults.filterTags),
         callFilter = this[Keys.callFilter] ?: defaults.callFilter,
@@ -210,7 +225,13 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.protocolName] = protocolName
     prefs[Keys.selectedFreqHz] = selectedFreqHz
     prefs[Keys.holdTxFreq] = holdTxFreq
-    prefs[Keys.callFirst] = callFirst.name
+    prefs[Keys.autoLevel] = auto.level.name
+    prefs[Keys.autoAnswerWorked] = auto.answerWorked
+    prefs[Keys.autoCallWorked] = auto.callWorked
+    prefs[Keys.autoPreferNewCall] = auto.preferNewCall
+    prefs[Keys.autoReportPriority] = auto.reportPriority
+    prefs[Keys.autoFarthestOverSnr] = auto.farthestOverSnr
+    prefs[Keys.autoSingleQso] = auto.singleQso
     prefs[Keys.maxRetries] = maxRetries
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter

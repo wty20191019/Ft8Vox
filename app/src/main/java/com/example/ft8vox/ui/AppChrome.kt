@@ -97,6 +97,7 @@ fun Ft8VoxTopBar(
     onBandFreq: (String, Long) -> Unit,
     onProtocol: (Protocol) -> Unit,
     onOpenSettings: () -> Unit,
+    onAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -152,6 +153,13 @@ fun Ft8VoxTopBar(
                         )
                     }
                     HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("自动程序　${status.autoProgram.level.shortLabel}") },
+                        onClick = {
+                            menuOpen = false
+                            onAutoProgram()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("设置") },
                         onClick = {

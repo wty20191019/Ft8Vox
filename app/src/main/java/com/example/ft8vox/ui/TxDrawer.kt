@@ -49,8 +49,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
-import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.engine.DecodeResult
+import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.qso.TxMessageKind
@@ -80,8 +80,8 @@ fun TxDrawer(
     onStopTx: () -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
     onHoldTxChange: (Boolean) -> Unit,
-    onSetCallFirst: (CallFirstMode) -> Unit,
-    onArmCallFirst: () -> Unit,
+    onOpenAutoProgram: () -> Unit,
+    onArmAutoProgram: () -> Unit,
     onMacrosChange: (List<String>) -> Unit,
     onEnqueue: (String) -> Unit,
     onRemoveQueued: (Int) -> Unit,
@@ -415,7 +415,7 @@ fun TxDrawer(
 
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-                // 7) 自动序列（Hold Tx / Call 1st）；发射周期固定为「自动」
+                // 7) 自动序列（Hold Tx / 自动程序）；发射周期固定为「自动」
                 Text("自动序列", style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(
@@ -431,24 +431,31 @@ fun TxDrawer(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Call 1st", style = MaterialTheme.typography.labelMedium)
-                    for (m in CallFirstMode.entries) {
-                        FilterChip(
-                            selected = status.callFirst == m,
-                            onClick = { onSetCallFirst(m) },
-                            label = { Text(m.label, style = MaterialTheme.typography.labelSmall) },
-                        )
-                    }
-                    if (status.callFirstArmed) {
-                        OutlinedButton(onClick = onArmCallFirst) { Text("关闭") }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("自动程序", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        status.autoProgram.level.shortLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    OutlinedButton(onClick = onOpenAutoProgram) { Text("设置…") }
+                    if (status.autoArmed) {
+                        OutlinedButton(onClick = onArmAutoProgram) { Text("关闭") }
                     } else {
                         OutlinedButton(
-                            onClick = onArmCallFirst,
-                            enabled = status.callFirst != CallFirstMode.OFF,
+                            onClick = onArmAutoProgram,
+                            enabled = status.autoProgram.level.enabled,
                         ) { Text("启用") }
                     }
                 }
+                Text(
+                    autoProgramSummary(status.autoProgram),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

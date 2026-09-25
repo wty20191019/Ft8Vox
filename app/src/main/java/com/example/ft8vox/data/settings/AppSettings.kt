@@ -3,19 +3,13 @@ package com.example.ft8vox.data.settings
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterTag
 
 /** 发射时隙奇偶：0=偶数周期，1=奇数周期（具体时隙由「自动」按手机 UTC 时间锁定）。 */
 const val TX_PARITY_EVEN = 0
 const val TX_PARITY_ODD = 1
-
-/** Call 1st 自动应答策略。 */
-enum class CallFirstMode(val label: String) {
-    OFF("关"),
-    STRONGEST("最强 CQ"),
-    FIRST("首个 CQ"),
-}
 
 /** 设备采样率偏好（0 表示自动选择）。 */
 enum class SampleRatePref(val label: String, val hz: Int) {
@@ -158,8 +152,8 @@ data class AppSettings(
     val selectedFreqHz: Int = 1500,
     /** 锁定发射频率（应答时不跟随对方频率）。 */
     val holdTxFreq: Boolean = false,
-    /** Call 1st 自动应答策略。 */
-    val callFirst: CallFirstMode = CallFirstMode.OFF,
+    /** 自动程序（等级 + 策略；对应 FT8CN「自动程序」菜单）。 */
+    val auto: AutoProgramSettings = AutoProgramSettings(),
     /** 自动序列最大重试次数。 */
     val maxRetries: Int = 6,
 

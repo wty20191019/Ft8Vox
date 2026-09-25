@@ -153,9 +153,33 @@ class QsoEngine(private var maxRetries: Int = 6) {
         return progress()
     }
 
+    /**
+     * 对方直接发来信号报告（未经我应答）：以应答方身份从「已收报告」阶段进入 QSO。
+     *
+     * 用于自动程序的「报告信息优先」：对方发 `<myCall> <theirCall> <report>` 时，
+     * 我直接回 `R<报告>` 并等待对方 RR73。
+     *
+     * @param theirReport 对方给我的信号报告
+     * @param snr 本次解码的信噪比（作为我发给对方的报告）
+     */
+    fun respondToReport(call: String, theirReport: Int, snr: Int): QsoProgress {
+        require(canOperate) { "未配置呼号" }
+        val their = call.trim().uppercase()
+        if (their.isEmpty() || their == myCall) return progress()
+        role = QsoRole.RESPONDER
+        state = QsoState.WAIT_RR73
+        theirCall = their
+        theirGrid = null
+        reportReceived = theirReport
+        reportSent = reportFromSnr(snr)
+        retries = 0
+        logEntry = null
+        txText = "$their $myCall R${MessageParser.formatReport(reportSent!!)}"
+        return progress()
+    }
+
     /** 中止当前 QSO。 */
-    fun stop(): QsoProgress {
-        role = QsoRole.NONE
+    fun stop(): QsoProgress {        role = QsoRole.NONE
         state = QsoState.IDLE
         theirCall = null
         theirGrid = null
