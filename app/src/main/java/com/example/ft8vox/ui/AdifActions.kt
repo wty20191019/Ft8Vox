@@ -8,6 +8,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -19,19 +20,28 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * ADIF 导入 / 导出按钮组（日志页与设置页共用）。
+ * 由按钮或下拉菜单触发的 ADIF 导入 / 导出动作。
+ *
+ * 拆成回调对象是为了让调用方自由决定入口形态（按钮组或「⋮」菜单）。
+ */
+class AdifActions(
+    val import: () -> Unit,
+    val export: () -> Unit,
+)
+
+/**
+ * 创建 ADIF 导入 / 导出动作（日志页与设置页共用）。
  *
  * 通过系统文件选择器（SAF）读写，不需要存储权限。
  * 注意：打开选择器会让 Activity 进入后台，[com.example.ft8vox.MainActivity.onStop] 会停止接收。
  */
 @Composable
-fun AdifActionRow(
+fun rememberAdifActions(
     log: LogViewModel,
     myCall: String,
     myGrid: String?,
     onStatus: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
+): AdifActions {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val status by rememberUpdatedState(onStatus)
@@ -80,18 +90,36 @@ fun AdifActionRow(
         }
     }
 
+    return remember(importLauncher, exportLauncher) {
+        AdifActions(
+            import = {
+                importLauncher.launch(arrayOf("text/*", "application/octet-stream", "*/*"))
+            },
+            export = {
+                exportLauncher.launch("ft8vox_${QsoTime.date(QsoTime.nowUtcMs())}.adi")
+            },
+        )
+    }
+}
+
+/** ADIF 导入 / 导出按钮组（设置页用；日志页把同样动作收进「⋮」菜单）。 */
+@Composable
+fun AdifActionRow(
+    log: LogViewModel,
+    myCall: String,
+    myGrid: String?,
+    onStatus: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val actions = rememberAdifActions(log, myCall, myGrid, onStatus)
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        OutlinedButton(
-            onClick = { importLauncher.launch(arrayOf("text/*", "application/octet-stream", "*/*")) },
-        ) {
+        OutlinedButton(onClick = actions.import) {
             Text("导入 ADIF")
         }
-        OutlinedButton(
-            onClick = { exportLauncher.launch("ft8vox_${QsoTime.date(QsoTime.nowUtcMs())}.adi") },
-        ) {
+        OutlinedButton(onClick = actions.export) {
             Text("导出 ADIF")
         }
     }

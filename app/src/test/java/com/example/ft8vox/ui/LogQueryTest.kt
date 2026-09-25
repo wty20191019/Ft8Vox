@@ -76,6 +76,8 @@ class LogQueryTest {
         assertEquals(2, stats.uniqueCalls)
         assertEquals(2, stats.uniqueGrids)
         assertEquals(1, stats.confirmed)
+        // DXCC 近似：JA1ABC→日本、W1AW→美国
+        assertEquals(2, stats.uniqueEntities)
         // 波段按频率从低到高排序：40m 在 20m 之前
         assertEquals(listOf("40m" to 1, "20m" to 3), stats.byBand)
         assertEquals(3, stats.byMode.first { it.first == "FT8" }.second)

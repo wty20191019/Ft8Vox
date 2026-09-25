@@ -1,31 +1,44 @@
 package com.example.ft8vox.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,15 +49,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.qso.MessageParser
+import com.example.ft8vox.ui.theme.VoxAccent
+import com.example.ft8vox.ui.theme.VoxCard
+import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
+import com.example.ft8vox.ui.theme.VoxRxGreen
 import java.util.Locale
 
-/** 日志页：统计、筛选、列表、补录/编辑、ADIF 导入导出。 */
+/**
+ * 日志页（new_ui.md §5）。
+ *
+ * 顶部搜索 + 波段 / 模式 / 日期筛选；表格化卡片列表（呼号 / 网格 / 时间 / RST / 模式）；
+ * 长按卡片编辑或删除；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；
+ * 「⋮」菜单里放新增、导入 / 导出 ADIF、局域网后台地址（U7）与清空日志。
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LogScreen(
     log: LogViewModel,
@@ -60,29 +85,74 @@ fun LogScreen(
     var editing by remember { mutableStateOf<QsoEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var clearDialog by remember { mutableStateOf(false) }
+    var lanDialog by remember { mutableStateOf(false) }
+
+    val adif = rememberAdifActions(log, myCall, myGrid) { statusText = it }
 
     Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
-        Text("日志", style = MaterialTheme.typography.titleLarge)
-
-        StatsCard(stats)
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(onClick = { creating = true }) { Text("补录") }
-            AdifActionRow(
-                log = log,
-                myCall = myCall,
-                myGrid = myGrid,
-                onStatus = { statusText = it },
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("日志", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "共 ${stats.total} 条",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
             )
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("新增通联") },
+                        onClick = {
+                            menuOpen = false
+                            creating = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("导入 ADIF") },
+                        onClick = {
+                            menuOpen = false
+                            adif.import()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("导出 ADIF") },
+                        onClick = {
+                            menuOpen = false
+                            adif.export()
+                        },
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("局域网后台地址（U7）") },
+                        onClick = {
+                            menuOpen = false
+                            lanDialog = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("清空日志") },
+                        onClick = {
+                            menuOpen = false
+                            clearDialog = true
+                        },
+                    )
+                }
+            }
         }
+
+        SearchRow(filter = filter, onChange = log::setFilter)
+        FilterChips(filter = filter, onChange = log::setFilter)
+
         if (myCall.isEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "未设置呼号，导入的记录会缺少 MY_CALL。",
+                    "未设置呼号，新记录会缺少 MY_CALL。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -93,10 +163,12 @@ fun LogScreen(
             Text(it, style = MaterialTheme.typography.labelSmall)
         }
 
-        FilterRow(filter = filter, onChange = log::setFilter)
-
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        Text("显示 ${entries.size} / 共 ${stats.total} 条", style = MaterialTheme.typography.labelMedium)
+        Text(
+            "显示 ${entries.size} / 共 ${stats.total} 条",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         if (entries.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -108,13 +180,19 @@ fun LogScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(entries, key = { it.id }) { entity ->
-                    LogRow(entity = entity, onClick = { editing = entity })
+                    LogCard(
+                        entity = entity,
+                        onEdit = { editing = entity },
+                        onDelete = { log.delete(entity) },
+                    )
                 }
             }
         }
+
+        StatsPanel(stats)
     }
 
     if (creating) {
@@ -146,175 +224,400 @@ fun LogScreen(
             onDismiss = { editing = null },
         )
     }
-}
 
-@Composable
-private fun StatsCard(stats: LogStats) {
-    var expanded by remember { mutableStateOf(true) }
-    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("统计", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else "展开") }
-            }
-            if (expanded) {
+    if (clearDialog) {
+        AlertDialog(
+            onDismissRequest = { clearDialog = false },
+            title = { Text("清空日志") },
+            text = { Text("将删除全部 ${stats.total} 条通联记录，且不可撤销。建议先导出 ADIF。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        clearDialog = false
+                        log.clearAll { statusText = "已清空日志" }
+                    },
+                ) { Text("删除全部") }
+            },
+            dismissButton = { TextButton(onClick = { clearDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (lanDialog) {
+        AlertDialog(
+            onDismissRequest = { lanDialog = false },
+            title = { Text("局域网后台地址") },
+            text = {
                 Text(
-                    "通联 ${stats.total}｜呼号 ${stats.uniqueCalls}｜网格 ${stats.uniqueGrids}｜已确认 ${stats.confirmed}",
+                    "U7 提供：App 内 HTTP 服务与局域网访问地址，需前台服务常驻。当前版本未启用。",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (stats.byBand.isNotEmpty()) {
-                    Text(
-                        "波段  " + stats.byBand.joinToString("  ") { "${it.first} ${it.second}" },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-                if (stats.byMode.isNotEmpty()) {
-                    Text(
-                        "模式  " + stats.byMode.joinToString("  ") { "${it.first} ${it.second}" },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-        }
+            },
+            confirmButton = { TextButton(onClick = { lanDialog = false }) { Text("知道了") } },
+        )
     }
 }
 
+/** 搜索框 + 清除按钮。 */
 @Composable
-private fun FilterRow(filter: LogFilter, onChange: (LogFilter) -> Unit) {
+private fun SearchRow(filter: LogFilter, onChange: (LogFilter) -> Unit) {
+    OutlinedTextField(
+        value = filter.query,
+        onValueChange = { onChange(filter.copy(query = it)) },
+        placeholder = { Text("搜索呼号 / 网格") },
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        trailingIcon = {
+            if (filter.query.isNotEmpty()) {
+                IconButton(onClick = { onChange(filter.copy(query = "")) }) {
+                    Icon(Icons.Filled.Close, contentDescription = "清除搜索")
+                }
+            }
+        },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** 波段 / 模式 / 日期筛选 chip（触摸高度对齐 48dp）。 */
+@Composable
+private fun FilterChips(filter: LogFilter, onChange: (LogFilter) -> Unit) {
     var bandMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
-    // 日期输入用本地文本，解析成功才写回筛选条件（避免半截输入被反复解析）
-    var fromText by remember { mutableStateOf("") }
-    var toText by remember { mutableStateOf("") }
+    var dateDialog by remember { mutableStateOf(false) }
+    val hasFilter = filter.band != null || filter.mode != null ||
+        filter.fromMs != null || filter.toMs != null
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = filter.query,
-                onValueChange = { onChange(filter.copy(query = it)) },
-                label = { Text("呼号/网格") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box {
+            FilterChip(
+                selected = filter.band != null,
+                onClick = { bandMenu = true },
+                label = { Text(filter.band ?: "波段") },
+                modifier = Modifier.height(48.dp),
             )
-            Box {
-                TextButton(onClick = { bandMenu = true }) { Text(filter.band ?: "全部波段") }
-                DropdownMenu(expanded = bandMenu, onDismissRequest = { bandMenu = false }) {
+            DropdownMenu(expanded = bandMenu, onDismissRequest = { bandMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("全部波段") },
+                    onClick = {
+                        bandMenu = false
+                        onChange(filter.copy(band = null))
+                    },
+                )
+                for (b in BandPlan.bands) {
                     DropdownMenuItem(
-                        text = { Text("全部波段") },
+                        text = { Text(b.name) },
                         onClick = {
                             bandMenu = false
-                            onChange(filter.copy(band = null))
+                            onChange(filter.copy(band = b.name))
                         },
                     )
-                    for (b in BandPlan.bands) {
-                        DropdownMenuItem(
-                            text = { Text(b.name) },
-                            onClick = {
-                                bandMenu = false
-                                onChange(filter.copy(band = b.name))
-                            },
-                        )
-                    }
-                }
-            }
-            Box {
-                TextButton(onClick = { modeMenu = true }) { Text(filter.mode ?: "全部模式") }
-                DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("全部模式") },
-                        onClick = {
-                            modeMenu = false
-                            onChange(filter.copy(mode = null))
-                        },
-                    )
-                    for (m in listOf("FT8", "FT4")) {
-                        DropdownMenuItem(
-                            text = { Text(m) },
-                            onClick = {
-                                modeMenu = false
-                                onChange(filter.copy(mode = m))
-                            },
-                        )
-                    }
                 }
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = fromText,
-                onValueChange = {
-                    fromText = it
-                    onChange(filter.copy(fromMs = QsoTime.parseUtc(it, "000000")))
-                },
-                label = { Text("起始日期") },
-                placeholder = { Text("YYYY-MM-DD") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
+        Box {
+            FilterChip(
+                selected = filter.mode != null,
+                onClick = { modeMenu = true },
+                label = { Text(filter.mode ?: "模式") },
+                modifier = Modifier.height(48.dp),
             )
-            OutlinedTextField(
-                value = toText,
-                onValueChange = {
-                    toText = it
-                    onChange(filter.copy(toMs = QsoTime.parseUtc(it, "235959")))
+            DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("全部模式") },
+                    onClick = {
+                        modeMenu = false
+                        onChange(filter.copy(mode = null))
+                    },
+                )
+                for (m in listOf("FT8", "FT4")) {
+                    DropdownMenuItem(
+                        text = { Text(m) },
+                        onClick = {
+                            modeMenu = false
+                            onChange(filter.copy(mode = m))
+                        },
+                    )
+                }
+            }
+        }
+        FilterChip(
+            selected = filter.fromMs != null || filter.toMs != null,
+            onClick = { dateDialog = true },
+            label = { Text(dateLabel(filter)) },
+            modifier = Modifier.height(48.dp),
+        )
+        if (hasFilter) {
+            FilterChip(
+                selected = false,
+                onClick = { onChange(LogFilter()) },
+                label = { Text("清除") },
+                leadingIcon = { Icon(Icons.Filled.Close, contentDescription = null, Modifier.size(16.dp)) },
+                modifier = Modifier.height(48.dp),
+            )
+        }
+    }
+
+    if (dateDialog) {
+        DateRangeDialog(
+            filter = filter,
+            onApply = {
+                onChange(filter.copy(fromMs = it.first, toMs = it.second))
+                dateDialog = false
+            },
+            onClear = {
+                onChange(filter.copy(fromMs = null, toMs = null))
+                dateDialog = false
+            },
+            onDismiss = { dateDialog = false },
+        )
+    }
+}
+
+/** 日期区间对话框（UTC 日期，闭区间）。 */
+@Composable
+private fun DateRangeDialog(
+    filter: LogFilter,
+    onApply: (Pair<Long?, Long?>) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var fromText by remember { mutableStateOf(filter.fromMs?.let { QsoTime.isoDate(it) } ?: "") }
+    var toText by remember { mutableStateOf(filter.toMs?.let { QsoTime.isoDate(it) } ?: "") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("日期范围（UTC）") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = fromText,
+                    onValueChange = { fromText = it },
+                    label = { Text("起始 YYYY-MM-DD") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = toText,
+                    onValueChange = { toText = it },
+                    label = { Text("结束 YYYY-MM-DD") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val from = fromText.trim().let { t ->
+                        if (t.isEmpty()) null else QsoTime.parseUtc(t, "000000")
+                    }
+                    val to = toText.trim().let { t ->
+                        if (t.isEmpty()) null else QsoTime.parseUtc(t, "235959")
+                    }
+                    if (fromText.isNotBlank() && from == null) {
+                        error = "起始日期格式不正确"
+                        return@Button
+                    }
+                    if (toText.isNotBlank() && to == null) {
+                        error = "结束日期格式不正确"
+                        return@Button
+                    }
+                    if (from != null && to != null && from > to) {
+                        error = "起始日期不能晚于结束日期"
+                        return@Button
+                    }
+                    onApply(from to to)
                 },
-                label = { Text("结束日期") },
-                placeholder = { Text("YYYY-MM-DD") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
+            ) { Text("确定") }
+        },
+        dismissButton = {
+            Row {
+                if (filter.fromMs != null || filter.toMs != null) {
+                    TextButton(onClick = onClear) { Text("清除") }
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
+    )
+}
+
+private fun dateLabel(filter: LogFilter): String {
+    val from = filter.fromMs
+    val to = filter.toMs
+    return when {
+        from != null && to != null -> "${QsoTime.isoDate(from)}~${QsoTime.isoDate(to)}"
+        from != null -> "${QsoTime.isoDate(from)} 起"
+        to != null -> "至 ${QsoTime.isoDate(to)}"
+        else -> "日期"
+    }
+}
+
+/** 表格化卡片：呼号 / 网格 / 时间 / RST / 模式。长按弹出编辑、删除。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val confirmed = entity.qslRcvd == "Y" || entity.lotwRcvd == "Y"
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Box {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 56.dp)
+                .combinedClickable(onClick = onEdit, onLongClick = { menuOpen = true }),
+            colors = CardDefaults.cardColors(containerColor = VoxCard),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(8.dp)) {
+                // 左侧确认色条
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (confirmed) VoxRxGreen else VoxCard),
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(entity.theirCall, style = MaterialTheme.typography.titleMedium)
+                        if (confirmed) {
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "✔",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = VoxRxGreen,
+                            )
+                        }
+                    }
+                    Text(
+                        entity.theirGrid ?: "----",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        "${entity.band}  ${entity.mode}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = VoxAccent,
+                    )
+                    Text(
+                        QsoTime.isoDateTime(entity.utcMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        String.format(
+                            Locale.US,
+                            "收 %s / 发 %s",
+                            entity.reportReceived?.let { MessageParser.formatReport(it) } ?: "--",
+                            entity.reportSent?.let { MessageParser.formatReport(it) } ?: "--",
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = { Text("编辑") },
+                onClick = {
+                    menuOpen = false
+                    onEdit()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("删除") },
+                onClick = {
+                    menuOpen = false
+                    onDelete()
+                },
+            )
+        }
+    }
+}
+
+/** 底部常驻统计：QSO / DXCC / 网格 / 确认 + 波段柱图。 */
+@Composable
+private fun StatsPanel(stats: LogStats) {
+    Surface(
+        color = VoxCard,
+        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth()) {
+                StatCell("QSO", stats.total.toString(), Modifier.weight(1f))
+                StatCell("DXCC", stats.uniqueEntities.toString(), Modifier.weight(1f))
+                StatCell("网格", stats.uniqueGrids.toString(), Modifier.weight(1f))
+                StatCell("确认", stats.confirmed.toString(), Modifier.weight(1f))
+            }
+            if (stats.byBand.isNotEmpty()) {
+                BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(64.dp).padding(top = 8.dp))
+            }
+            Text(
+                "DXCC 按呼号前缀近似（U7 精确实体表）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
     }
 }
 
 @Composable
-private fun LogRow(entity: QsoEntity, onClick: () -> Unit) {
-    val confirmed = entity.qslRcvd == "Y" || entity.lotwRcvd == "Y"
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 3.dp, horizontal = 4.dp),
+private fun StatCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/** 波段柱图：每根柱高按条数比例，可横向滚动。 */
+@Composable
+private fun BandBarChart(bands: List<Pair<String, Int>>, modifier: Modifier = Modifier) {
+    val max = bands.maxOf { it.second }.coerceAtLeast(1)
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Bottom,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                QsoTime.isoDateTime(entity.utcMs),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${entity.band}  ${entity.mode}",
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                entity.theirCall + (entity.theirGrid?.let { " ($it)" } ?: ""),
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                String.format(
-                    Locale.US,
-                    "收 %s / 发 %s%s",
-                    entity.reportReceived?.let { MessageParser.formatReport(it) } ?: "--",
-                    entity.reportSent?.let { MessageParser.formatReport(it) } ?: "--",
-                    if (confirmed) "  ✔" else "",
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-            )
+        for ((name, count) in bands) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    "$count",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Box(
+                    modifier = Modifier
+                        .width(18.dp)
+                        .height((6 + 26 * count / max).dp)
+                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        .background(VoxAccent),
+                )
+                Text(
+                    name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VoxOnSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -393,7 +696,7 @@ private fun QsoEditDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Box {
-                        OutlinedButton(onClick = { bandMenu = true }) { Text("波段 $band") }
+                        TextButton(onClick = { bandMenu = true }) { Text("波段 $band") }
                         DropdownMenu(expanded = bandMenu, onDismissRequest = { bandMenu = false }) {
                             for (b in BandPlan.bands) {
                                 DropdownMenuItem(
