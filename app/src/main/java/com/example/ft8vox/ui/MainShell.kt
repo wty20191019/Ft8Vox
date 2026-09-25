@@ -1,6 +1,7 @@
 package com.example.ft8vox.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -22,23 +23,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 
-/** 底部导航的四个页面。 */
+/**
+ * 底部导航的四个页面（new_ui.md §2：操作 / 地图 / 日志 / 设置）。
+ */
 enum class MainTab(val label: String) {
     OPERATE("操作"),
+    MAP("地图"),
     LOG("日志"),
-    GRID("网格"),
     SETTINGS("设置"),
 }
 
 private fun MainTab.icon(): ImageVector = when (this) {
     MainTab.OPERATE -> Icons.Filled.Home
+    MainTab.MAP -> Icons.Filled.Place
     MainTab.LOG -> Icons.AutoMirrored.Filled.List
-    MainTab.GRID -> Icons.Filled.Place
     MainTab.SETTINGS -> Icons.Filled.Settings
 }
 
 /**
- * 应用主壳：底部四页导航。
+ * 应用主壳（new_ui.md §0/§1/§2/§7）：固定顶栏 + 底部状态条 + 底部四页导航。
  *
  * 三个 ViewModel 都是 Activity 作用域，切换页面不会重建，因此接收与 QSO 流程不中断。
  */
@@ -51,18 +54,42 @@ fun MainShell(
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.OPERATE) }
     val appSettings by settings.settings.collectAsState()
+    val status by session.status.collectAsState()
+    val messages by session.messages.collectAsState()
+    val stats by log.stats.collectAsState()
+    val nowMs = rememberUtcNowMs()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        topBar = {
+            Ft8VoxTopBar(
+                status = status,
+                nowMs = nowMs,
+                onBand = session::setBand,
+                onProtocol = session::selectProtocol,
+                onOpenSettings = { tab = MainTab.SETTINGS },
+            )
+        },
         bottomBar = {
-            NavigationBar {
-                for (t in MainTab.entries) {
-                    NavigationBarItem(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        icon = { Icon(t.icon(), contentDescription = t.label) },
-                        label = { Text(t.label) },
-                    )
+            Column {
+                BottomStatusBar(
+                    running = status.running,
+                    txing = status.txing,
+                    decodePerMin = decodesPerMinute(messages, nowMs),
+                    decodedTotal = status.decodedTotal,
+                    qsoCount = stats.total,
+                    queueCount = if (status.manualTxText != null) 1 else 0,
+                    timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
+                )
+                NavigationBar {
+                    for (t in MainTab.entries) {
+                        NavigationBarItem(
+                            selected = tab == t,
+                            onClick = { tab = t },
+                            icon = { Icon(t.icon(), contentDescription = t.label) },
+                            label = { Text(t.label) },
+                        )
+                    }
                 }
             }
         },
@@ -74,16 +101,16 @@ fun MainShell(
                     settings = appSettings,
                     onOpenSettings = { tab = MainTab.SETTINGS },
                 )
+                MainTab.MAP -> GridScreen(
+                    log = log,
+                    session = session,
+                    onOpenLog = { tab = MainTab.LOG },
+                )
                 MainTab.LOG -> LogScreen(
                     log = log,
                     myCall = appSettings.myCall,
                     myGrid = appSettings.myGrid.ifEmpty { null },
                     onOpenSettings = { tab = MainTab.SETTINGS },
-                )
-                MainTab.GRID -> GridScreen(
-                    log = log,
-                    session = session,
-                    onOpenLog = { tab = MainTab.LOG },
                 )
                 MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log)
             }

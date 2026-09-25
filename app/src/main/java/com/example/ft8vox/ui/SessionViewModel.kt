@@ -52,6 +52,8 @@ data class ReceiverStatus(
     val slotParity: Int = 0,
     val slotsDecoded: Long = 0,
     val droppedSamples: Long = 0,
+    /** 本会话累计解码条数（new_ui 底部状态条「总数」）。 */
+    val decodedTotal: Long = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
     val myCall: String = "",
@@ -306,7 +308,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         _status.update {
-            it.copy(running = true, inputRate = rate, status = "接收中（设备采样率 $rate Hz）")
+            it.copy(
+                running = true,
+                inputRate = rate,
+                status = "接收中（设备采样率 $rate Hz）",
+                decodedTotal = 0,
+            )
         }
         startPolling()
     }
@@ -492,6 +499,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val decoded = AudioEngine.pollDecoded()
         if (decoded.isNotEmpty()) {
             _messages.update { current -> (decoded + current).take(200) }
+            _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
             // 发给我的报文自动把 RX 跟过去（便于瀑布绿线指示当前对手）
             val my = _status.value.myCall
