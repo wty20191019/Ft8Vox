@@ -66,6 +66,16 @@ SNR 估算口径（对齐 WSJT-X `ft8b.f90`）：按解码出的音调序列取�
 其中 FT8 的 `ref = −27.0 dB`（与 WSJT-X 一致），FT4 暂无对照常数、按噪声带宽换算 `10·log10(binHz/2500)`。结果下限为 −24 dB。
 （直接取 `sig/noise` 会把噪声算成信号，弱信号会明显偏高 1~3 dB。）
 
+**实测校核（合成信号，含 1920 点单符号匹配谱对照）**：以「真值」`SNR = P_tone/(N0·2500)` 为准，
+本实现（噪声取全带均值）在 −20..+10 dB 区间**偏低约 0.8~1.1 dB**；WSJT-X 的 `xsnr` 支路（单符号矩形窗 + `mod(tone+4,7)` 单 bin 噪声）偏低约 0.6 dB。
+即两者口径一致，本实现不存在系统性偏高。若真机对比仍偏高，优先排查**采集链路**而非公式：
+① AAudio 采集预设（见 §6，已强制 `UNPROCESSED`，避免系统降噪把噪声底压掉）；
+② `fMin/fMax` 设得比实际音频通带更宽时，全带噪声均值会被安静频段拉低 → SNR 虚高。
+
+> WSJT-X 另有一条默认支路：`xsnr2 = xsig/xbase/3.0e6 − 1`（`xbase=10^(0.1*(sbase−40))`，
+> `sbase` 为 `baseline.f90` 拟合的**局部**噪声基线），源码中 `if(.not.nagain) xsnr=xsnr2`，
+> 即默认显示的是 `xsnr2`。本项目未复刻该支路（常数随版本变动，且与 `xsnr` 应为同一物理量）。
+
 说明：呼号哈希表由 **native 侧管理**（去重、老化），不通过 JNI 回调，避免频繁跨语言调用。
 
 ### 4.1 可调解码参数（`DecodeParams` ↔ `ftx_decode_params_t`）
@@ -123,6 +133,10 @@ SNR 估算口径（对齐 WSJT-X `ft8b.f90`）：按解码出的音调序列取�
 
 - **采集**：请求 `preferredRate`（优先 48 kHz），native 重采样到 12 kHz。
   降采样先过 **4 阶 Butterworth 低通**（截止约 `0.35 × outRate`，抗混叠），再线性插值；升采样直接线性插值。
+- **采集预设（绕开系统语音处理）**：AAudio 输入预设默认就是 `VOICE_RECOGNITION`（部分机型带降噪/AGC），
+  会压低噪声底（SNR 虚高）并吞掉弱信号。故按 `UNPROCESSED → VOICE_RECOGNITION → GENERIC` 依次回退，
+  成功即用（日志打印实际预设）。`setInputPreset` 自 API 28 才提供，minSdk 26/27 上用 `dlopen` 解析符号，
+  解析不到则保持系统默认。
 - **时隙调度**：按 UTC 对齐（FT8 = 15 s，FT4 = 7.5 s）。仅在时隙起点后 200 ms 内开始采集，累积满 `slot_samples` 后解码；若跨入下个时隙则先解码已采集部分并重新对齐。
 - **线程**：AAudio 回调只写入无锁 SPSC 环形缓冲（不分配、不加锁）；DSP 线程负责重采样与解码。
 - **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。

@@ -58,8 +58,15 @@ object WaterfallColors {
     /** 预计算的 256 级渐变查找表：rampLut[i] 对应 t = i/255。 */
     val rampLut: IntArray = IntArray(256) { ramp(it / 255f) }
 
-    /** 动态范围：峰值向下 35 dB（mag 为 2*dB 步进，故 70 个 mag 单位）。 */
-    const val DYNAMIC_RANGE = 70
+    /**
+     * 动态范围上限：峰值向下 60 dB（mag 为 0.5 dB 步进，故 120 个 mag 单位）。
+     *
+     * 弱台常比本地强台低 40~60 dB，范围太窄就会被压成黑色而"看不见"。
+     */
+    const val MAX_SPAN = 120
+
+    /** 动态范围下限：至少覆盖 25 dB，避免噪声纹理占满整条色带。 */
+    const val MIN_SPAN = 50
 
     private fun ramp(t: Float): Int {
         for (i in 0 until stops.size - 1) {

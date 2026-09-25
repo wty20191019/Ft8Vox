@@ -11,6 +11,7 @@
 
 #include <aaudio/AAudio.h>
 #include <android/log.h>
+#include <dlfcn.h>
 
 #include <common/monitor.h>
 #include <ft8/constants.h>
@@ -527,6 +528,25 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject th
 // -----------------------------------------------------------------------------
 // 采集
 // -----------------------------------------------------------------------------
+
+/// AAudioStreamBuilder_setInputPreset 自 API 28 起提供；为了在 minSdk 26/27 上
+/// 也能安全调用，这里用 dlopen 解析符号（老系统上返回 NULL，则退回系统默认预设）。
+typedef void (*ft8vox_set_input_preset_fn)(AAudioStreamBuilder*, aaudio_input_preset_t);
+
+static ft8vox_set_input_preset_fn resolve_set_input_preset(void)
+{
+    static ft8vox_set_input_preset_fn fn = NULL;
+    static int tried = 0;
+    if (!tried)
+    {
+        tried = 1;
+        void* lib = dlopen("libaaudio.so", RTLD_NOW | RTLD_LOCAL);
+        if (lib != NULL)
+            fn = (ft8vox_set_input_preset_fn)dlsym(lib, "AAudioStreamBuilder_setInputPreset");
+    }
+    return fn;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeStartCapture(
     JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate, jint device_id)
@@ -540,24 +560,51 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStartCapture(
     ring_init(&e->cap_ring, CAP_RING_CAP);
     resampler_init(&e->cap_rs, preferred_rate, WORK_RATE);
 
-    AAudioStreamBuilder* builder = NULL;
-    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
-    {
-        ring_free(&e->cap_ring);
-        return -2;
-    }
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-    AAudioStreamBuilder_setChannelCount(builder, 1);
-    AAudioStreamBuilder_setSampleRate(builder, preferred_rate);
-    // U7c：指定输入设备（AudioManager 的设备 id）；<=0 表示系统默认
-    if (device_id > 0)
-        AAudioStreamBuilder_setDeviceId(builder, device_id);
-    AAudioStreamBuilder_setDataCallback(builder, capture_callback, e);
+    // FT8/FT4 是纯数据信号，必须绕开系统的语音处理链路（降噪 / AGC / 高通）。
+    // 否则：噪声底被压掉 → 解出的 SNR 虚高；弱信号被当作噪声抑制掉 → 瀑布上看不见。
+    // UNPROCESSED 并非所有机型都支持，按 UNPROCESSED → VOICE_RECOGNITION → GENERIC
+    // 依次回退（VOICE_RECOGNITION 在各平台上通常不做 AGC）。
+    static const aaudio_input_preset_t kInputPresets[] = {
+        AAUDIO_INPUT_PRESET_UNPROCESSED,
+        AAUDIO_INPUT_PRESET_VOICE_RECOGNITION,
+        AAUDIO_INPUT_PRESET_GENERIC,
+    };
+    const size_t kInputPresetCount = sizeof(kInputPresets) / sizeof(kInputPresets[0]);
 
-    aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &e->in_stream);
-    AAudioStreamBuilder_delete(builder);
+    aaudio_result_t r = AAUDIO_ERROR_INTERNAL;
+    for (size_t pi = 0; pi < kInputPresetCount; ++pi)
+    {
+        AAudioStreamBuilder* builder = NULL;
+        if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
+        {
+            ring_free(&e->cap_ring);
+            return -2;
+        }
+        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
+        AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+        AAudioStreamBuilder_setChannelCount(builder, 1);
+        AAudioStreamBuilder_setSampleRate(builder, preferred_rate);
+        // setInputPreset 自 API 28 起提供；API 26/27 上解析不到则退回系统默认预设
+        ft8vox_set_input_preset_fn set_preset = resolve_set_input_preset();
+        if (set_preset != NULL)
+            set_preset(builder, kInputPresets[pi]);
+        // U7c：指定输入设备（AudioManager 的设备 id）；<=0 表示系统默认
+        if (device_id > 0)
+            AAudioStreamBuilder_setDeviceId(builder, device_id);
+        AAudioStreamBuilder_setDataCallback(builder, capture_callback, e);
+
+        r = AAudioStreamBuilder_openStream(builder, &e->in_stream);
+        AAudioStreamBuilder_delete(builder);
+        if (r == AAUDIO_OK)
+        {
+            LOGI("capture input preset = %d", (int)kInputPresets[pi]);
+            break;
+        }
+        LOGW("open input stream failed (preset %d): %s", (int)kInputPresets[pi],
+             AAudio_convertResultToText(r));
+        e->in_stream = NULL;
+    }
     if (r != AAUDIO_OK)
     {
         LOGE("open input stream failed: %s", AAudio_convertResultToText(r));

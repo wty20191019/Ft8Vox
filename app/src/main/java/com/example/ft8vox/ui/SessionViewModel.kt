@@ -152,6 +152,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var wfPixels = IntArray(0)
     private var wfPeak = 0
 
+    /** 瀑布噪声底估计（mag 单位，0.5 dB/单位），-1 表示尚未初始化。 */
+    private var wfFloor = -1
+
     private var lastSlotsDecoded = 0L
     private var pendingDecodes = mutableListOf<DecodeResult>()
     private var lastTxSlotIndex = -1L
@@ -564,6 +567,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         wfInfo = AudioEngine.waterfallInfo()
         wfPixels = IntArray(0)
         wfPeak = 0
+        wfFloor = -1
         _waterfall.value = null
 
         // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
@@ -1185,15 +1189,32 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         val startRow = WF_ROWS - shift
 
-        // 自适应强度：跟踪滚动峰值，按固定动态范围拉伸，避免不同增益下过黑/过亮
+        // 自适应强度：底部锚定「噪声底」（帧内 10 分位，抗强信号），顶部由滚动峰值
+        // 决定，跨度钳制在 [MIN_SPAN, MAX_SPAN]。这样本地强台出现时，比它低 40~60 dB
+        // 的弱台仍落在色带内，而不是被整体压成黑色。
+        val hist = IntArray(256)
         var batchMax = 0
         for (v in data) {
             val u = v.toInt() and 0xFF
+            hist[u]++
             if (u > batchMax) batchMax = u
         }
+        val pctTarget = (data.size / 10).coerceAtLeast(1)
+        var acc = 0
+        var p10 = 0
+        for (i in 0..255) {
+            acc += hist[i]
+            if (acc >= pctTarget) {
+                p10 = i
+                break
+            }
+        }
+        // 慢速平滑，避免底色随强台闪烁
+        wfFloor = if (wfFloor < 0) p10 else (wfFloor * 7 + p10) / 8
         wfPeak = maxOf(batchMax, wfPeak - 4)
-        val floor = (wfPeak - WaterfallColors.DYNAMIC_RANGE).coerceAtLeast(0)
-        val span = (wfPeak - floor).coerceAtLeast(30)
+        val floor = wfFloor
+        val span = (wfPeak - floor + 12)
+            .coerceIn(WaterfallColors.MIN_SPAN, WaterfallColors.MAX_SPAN)
         val invSpan = 255f / span
 
         val lut = WaterfallColors.rampLut

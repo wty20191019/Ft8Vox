@@ -38,6 +38,7 @@ find_library(AAUDIO_LIB aaudio)
 target_link_libraries(ft8
     android
     log
+    dl
     m
     ${AAUDIO_LIB}
 )
