@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,7 @@ import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Geo
 import com.example.ft8vox.qso.DecodeStyle
+import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
 import com.example.ft8vox.ui.theme.BarCq
@@ -92,7 +95,8 @@ private val SwipeCallGreen = Color(0xFF2E7D32)
 private val SwipeIgnoreGray = Color(0xFF455A64)
 
 /**
- * 解码卡片（new_ui.md §3.3）：左侧色条 + 呼号/网格/信噪比/时间 + 报文。
+ * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
+ * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
  * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 呼叫；右滑 → 忽略。
  */
@@ -111,6 +115,10 @@ fun DecodeCard(
     workedStyle: WorkedStyle = WorkedStyle.STRIKE,
     endMarkMyCall: Boolean = true,
     endMarkActive: Boolean = true,
+    /** 当前协议的时隙长度（ms），用于换算行首「时隙（1/0）」。 */
+    slotMs: Int = 15000,
+    /** 我方网格，用于第二行距离；为空则不显示距离。 */
+    myGrid: String = "",
 ) {
     val msg = row.msg
     val style = row.style
@@ -125,6 +133,15 @@ fun DecodeCard(
         WorkedStyle.UNDERLINE -> TextDecoration.Underline
         WorkedStyle.HIDE -> null
     }
+    // 时隙（1/0）：按解码时隙起点落在第几个槽位取奇偶；离线（无时间）显示 --
+    val slotLabel = if (msg.slotUtcMs > 0 && slotMs > 0) {
+        ((msg.slotUtcMs / slotMs) % 2).toString()
+    } else {
+        "--"
+    }
+    // 发送方实体（DXCC）与距离
+    val entity = from?.let { Dxcc.resolve(it)?.name }
+    val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
 
     val density = androidx.compose.ui.platform.LocalDensity.current
     val maxSwipe = with(density) { 140.dp.toPx() }
@@ -204,50 +221,85 @@ fun DecodeCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
+                // 第一行：时隙（1/0）· 信号 · 时间差 · 信息文本
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        callText,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (style.toMe) VoxError else textColor,
-                        maxLines = 1,
+                        slotLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
                     )
-                    if (row.parsed.grid != null) {
-                        Text(
-                            "  ${row.parsed.grid}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                     Text(
-                        String.format(Locale.US, "  %+3d dB", msg.snr),
-                        style = MaterialTheme.typography.bodyMedium,
+                        String.format(Locale.US, "%+3d dB", msg.snr),
+                        style = MaterialTheme.typography.labelMedium,
                         fontFamily = FontFamily.Monospace,
                         color = if (msg.snr >= 0) VoxRxGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp),
                     )
-                    Box(Modifier.weight(1f))
+                    Text(
+                        String.format(Locale.US, "%+.1fs", msg.dt),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                    Text(
+                        annotatedMessage(msg.text, myCall),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = textColor.copy(alpha = alpha),
+                        textDecoration = if (style.worked) workedDecoration else null,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp).weight(1f),
+                    )
+                    // 次级标记：与我有关 ▎ / 正通联 ▎ / 新网格 ● / 新实体 ●
+                    if (style.toMe && endMarkMyCall) Marker(VoxError)
+                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
+                    if (style.newGrid) Marker(BarNewGrid)
+                    if (style.hasNewEntityMark) Marker(BarNewEntity)
+                }
+                // 第二行：发送方实体 · 距离 · 解析的 UTC 时间
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            callText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (style.toMe) VoxError else textColor,
+                            maxLines = 1,
+                        )
+                        if (!entity.isNullOrEmpty()) {
+                            Text(
+                                "  $entity",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (distKm != null) {
+                            Text(
+                                String.format(Locale.US, "  %.0f km", distKm),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     Text(
                         QsoTime.isoTime(msg.slotUtcMs),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        annotatedMessage(msg.text, myCall),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = textColor.copy(alpha = alpha),
-                        textDecoration = if (style.worked) workedDecoration else null,
-                        maxLines = 1,
-                    )
-                    Box(Modifier.weight(1f))
-                    // 次级标记：与我有关 ▎ / 正通联 ▎ / 新网格 ● / 新实体 ●
-                    if (style.toMe && endMarkMyCall) Marker(VoxError)
-                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
-                    if (style.newGrid) Marker(BarNewGrid)
-                    if (style.hasNewEntityMark) Marker(BarNewEntity)
                 }
             }
         }

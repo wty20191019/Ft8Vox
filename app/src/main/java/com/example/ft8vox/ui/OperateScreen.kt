@@ -278,6 +278,8 @@ fun OperateScreen(
                             workedStyle = settings.workedStyle,
                             endMarkMyCall = settings.endMarkMyCall,
                             endMarkActive = settings.endMarkActive,
+                            slotMs = status.slotMs,
+                            myGrid = status.myGrid,
                         )
                     }
                 }
