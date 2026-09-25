@@ -487,4 +487,20 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（纯文案改动，逻辑与单测未动）。
 
 
+### 补记：地图页 CQ 不画信号连线
+
+用户要求「地图页修改：cq 不要有连线」。
+
+- **原因**：`MapModel.signalLinks` 原先对 CQ 报文（无收方）走的是「连到**我**」的分支，
+  一旦收到多条 CQ，蓝色连线会全部汇聚到本机位置，既挡住地图又传达不了信息。
+  与 `new_ui.md` §4.5「在**各方之间**拉直线」的口径也不一致。
+- **改法**：`signalLinks` 里 `to = parsed.to ?: continue`，即**没有收方的报文直接跳过**；
+  CQ 的位置信息仍由 §4.4 的**红旗**表达，不受影响。「连线」计数随之只统计双方报文。
+- **保留**：`myGrid` 参数仍有意义 —— 收方是「我」时用它定位本机（避免落到呼号前缀归属地）。
+- **测试**：原 `signalLinksCqConnectsToMe`（断言 CQ 连到我）替换为 `signalLinksSkipCqMessages`
+  （CQ → 0 条），原 `signalLinksCqSkippedWithoutMyGrid` 替换为 `signalLinksSkipsCqWithinSameSlot`
+  （同一时隙 CQ + 双方报文 → 只画后者）；255 例全过。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL。
+
+
 
