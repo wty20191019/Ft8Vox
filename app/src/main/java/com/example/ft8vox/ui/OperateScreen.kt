@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,6 +36,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -129,6 +129,11 @@ fun OperateScreen(
         }
     }
 
+    // 进入操作页且已授权时自动开始接收（水位图不再提供 ▶ 按钮）
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted && !status.running) viewModel.start()
+    }
+
     fun copyToClipboard(text: String) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("FT8 消息", text))
@@ -191,7 +196,6 @@ fun OperateScreen(
             waterfall = waterfall,
             status = status,
             settings = settings,
-            onToggleRunning = { if (status.running) viewModel.stop() else request(null) },
             onSelectFrequency = { viewModel.selectFrequency(it) },
             onLongPress = { hz ->
                 viewModel.selectFrequency(hz)
@@ -237,7 +241,11 @@ fun OperateScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .then(
+                            if (!status.running) Modifier.clickable { request(null) } else Modifier,
+                        ),
                 )
             } else {
                 LazyColumn(
@@ -387,7 +395,6 @@ private fun WaterfallBox(
     waterfall: WaterfallFrame?,
     status: ReceiverStatus,
     settings: AppSettings,
-    onToggleRunning: () -> Unit,
     onSelectFrequency: (Int) -> Unit,
     onLongPress: (Int) -> Unit,
 ) {
@@ -410,21 +417,6 @@ private fun WaterfallBox(
             txing = status.txing,
             onLongPress = onLongPress,
         )
-
-        // 顶部浮条（仅保留接收开关；增益/噪抑/带宽原为占位，已移除）
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .background(Color(0x99000000))
-                .padding(horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OverlayButton(
-                text = if (status.running) "❚❚" else "▶",
-                enabled = true,
-                onClick = onToggleRunning,
-            )
-        }
 
         // 参考电平（右上）
         Text(
@@ -456,22 +448,6 @@ private fun WaterfallBox(
                 modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp),
             )
         }
-    }
-}
-
-/** 浮条上的小按钮（44dp 触摸高度）。 */
-@Composable
-private fun OverlayButton(text: String, enabled: Boolean, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.heightIn(min = 44.dp),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (enabled) Color.White else Color(0x66FFFFFF),
-        )
     }
 }
 
@@ -548,7 +524,7 @@ fun decodeEmptyHint(
     filterEmptySelection: Boolean = false,
 ): String = when {
     filterEmptySelection -> "请至少开启一个筛选"
-    !status.running -> "未开始接收：点水位图左上角「▶」开始"
+    !status.running -> "未开始接收：点此授权并开始接收"
     decodedTotal == 0 -> "等待解码…\n（未接天线 / 无音频输入时不会出现解码）"
     else -> "没有符合当前筛选条件的解码消息"
 }
