@@ -343,5 +343,16 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **文案**：抽屉收起态第二行显示「允许发射 / 只接收」；展开面板提示按四种状态（开关关 / 自动程序已启用 / 我方周期可立即发 / 需排下一周期）分别说明；自动程序行前加一句「『发送总开关』只表示允许发射；启用后由自动程序决定选台与整段 QSO 的报文流程」；防误发确认框写明「发送总开关：已开（只表示允许发射）」或「关 —— 确认启用时会自动打开」；`AutoProgramDialog` 说明改为「启用会自动打开『发送总开关』；关闭只停止自动化，不影响总开关」；`QsoPanel` 的防误发提示同步改称「发送总开关」。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL，JVM 253 例 / 29 suite 全绿（联动在 ViewModel，无单测覆盖；真机项见 `REGRESSION.md` E / M 组）。
 
+### U9 补记 5：顶栏「发射时隙 + 待发/发射中报文」指示
+
+用户要求：顶部状态栏里加「发射时隙」和「正在发送的文本内容」，且**接收时隙不显示**。
+
+- **位置**：顶栏中间第二行（`14.074000 MHz · FT8`）之后追加，形如 `14.074000 MHz · FT8 · 奇时隙 发射中 CQ DX0ABC`。
+- **显示条件**：`status.running && status.txEnabled && status.slotParity == status.txParity` —— 正在接收（`running`）＋ 允许发射 ＋ 当前时隙就是我方发射周期。接收时隙、关闭发送总开关、未开始接收时整段不显示。
+- **文本来源**：`manualTxText`（一次性发射）→ `qso.txText`（QSO 待发报文）→ 发射中再回退到 `lastTxText`（刚发出的那条，因为 `QsoEngine.onTransmitted()` 会把 DONE/FAILED 的 `txText` 清空）。
+- **配色/排版**：发射中 = `VoxTxRed`（红），待发/仅时隙 = `colorScheme.primary`（强调蓝）；没有待发报文时只显示 `· 奇时隙`。用 `buildAnnotatedString` + `SpanStyle` 做单行混色，`maxLines = 1` + 省略号；颜色须在组合体里先取好（`MaterialTheme` 不能在非组合 lambda 内调用）。
+- **实现**：`AppChrome.kt` 的 `Ft8VoxTopBar`；无新增状态字段（全部由 `ReceiverStatus` 现有字段推导，`slotParity` 由轮询每帧刷新）。
+- **验证**：模拟器实测通过 —— 13:50:44（接收时隙）无指示，13:50:51 / 13:50:58（我方奇周期）显示 `14.074000 MHz · FT8 · 奇时隙`；`:app:assembleDebug` BUILD SUCCESSFUL。真机项见 `REGRESSION.md` M 组。
+
 
 

@@ -47,7 +47,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
@@ -109,6 +113,20 @@ fun Ft8VoxTopBar(
     } else {
         "--.------"
     }
+
+    // 发射时隙指示：**只在我方发射时隙显示**（接收时隙不显示）——
+    // 追加在「MHz · 协议」之后，形如「· 偶时隙 发射中 CQ DX0ABC」：
+    //   发射中 = 红色，待发/仅时隙 = 强调蓝；文本优先取引擎里待发的报文，发射中则回退到「刚发出的那条」。
+    val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
+    val pendingTxText = status.manualTxText?.takeIf { it.isNotBlank() }
+        ?: status.qso.txText?.takeIf { it.isNotBlank() }
+    val txText = if (status.txing) {
+        pendingTxText ?: status.lastTxText?.takeIf { it.isNotBlank() }
+    } else {
+        pendingTxText
+    }
+    // 发射中红色、待发/仅时隙用强调蓝（在组合体里取色，`buildAnnotatedString` 内不能调 @Composable）
+    val txSlotColor = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.primary
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -180,9 +198,25 @@ fun Ft8VoxTopBar(
                     fontFamily = FontFamily.Monospace,
                 )
                 Text(
-                    "$dialMhz MHz · ${status.protocol.name}",
+                    buildAnnotatedString {
+                        append("$dialMhz MHz · ${status.protocol.name}")
+                        if (inTxSlot) {
+                            append(" · ")
+                            withStyle(SpanStyle(color = txSlotColor)) {
+                                append(if (status.txParity == 0) "偶时隙" else "奇时隙")
+                                if (status.txing) {
+                                    append(" 发射中")
+                                } else if (txText != null) {
+                                    append(" 待发")
+                                }
+                                txText?.let { append(" $it") }
+                            }
+                        }
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
