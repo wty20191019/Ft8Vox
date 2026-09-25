@@ -52,6 +52,11 @@
 #define LEAD_TONE_HZ 1000
 #define LEAD_TONE_AMP 0.6f
 
+// 输出音量（发射音频的数字衰减）允许范围（dB）：发射波形本身已是数字满幅
+// （synth_gfsk 输出 sinf()，峰值 1.0），所以只能往小调；与设置页范围一致
+#define OUT_GAIN_MIN_DB (-30)
+#define OUT_GAIN_MAX_DB 0
+
 // VOX 电平下限（dBFS），低于视为静音
 #define VOX_LEVEL_FLOOR_DB (-100.0f)
 
@@ -279,6 +284,7 @@ typedef struct
 
     // ---- 音频路由 / 增益（U7c） ----
     _Atomic int in_gain_db;        ///< 采集增益（dB），在 DSP 线程对原始样本生效
+    _Atomic int out_gain_db;       ///< 输出音量（dB，≤0 的衰减），写声卡前对整段播放缓冲生效
 
     // ---- VOX 运行状态（dsp 线程写，任意线程读） ----
     _Atomic int vox_level_db_x10;  ///< 平滑后的输入电平（dBFS × 10）
@@ -823,11 +829,34 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(JNIEnv* env, jobje
 
 /// 阻塞写入浮点样本，带看门狗；返回写入的帧数。
 ///
+/**
+ * 施加「输出音量」（U7c 增补）：0 dB = 数字满幅，负值衰减。
+ *
+ * 对整段待写缓冲生效（前导静音/前导音/FT8 报文/测试音一视同仁），超过满幅的样本
+ * 限幅到 [-1, 1] 防回绕（≤ 0 dB 时不会发生，仅作兜底）。
+ */
+static void apply_output_gain(audio_engine_t* e, float* buf, int n)
+{
+    int db = atomic_load(&e->out_gain_db);
+    if (db >= 0)
+        return;
+    float g = powf(10.0f, (float)db / 20.0f);
+    for (int i = 0; i < n; ++i)
+    {
+        float v = buf[i] * g;
+        buf[i] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+    }
+}
+
 /// 看门狗只作「卡死保护」：若音频设备异常导致写入远超本段音频的播放时长
 /// （预期时长 + 3 s），则中止写循环，避免发射协程永久阻塞。合法发射
 /// （FT8 整时隙约 15 s）不会被截断，因此实际生效阈值会按需抬高。
-static int write_blocking(audio_engine_t* e, const float* buf, int n)
+///
+/// 写入前会先按「输出音量」对 [buf] 施加衰减（原地缩放，见 apply_output_gain）。
+static int write_blocking(audio_engine_t* e, float* buf, int n)
 {
+    apply_output_gain(e, buf, n);
+
     int64_t expected_ms =
         (e->out_rate > 0) ? (int64_t)((double)n * 1000.0 / (double)e->out_rate) : 0;
     int64_t wd = (int64_t)atomic_load(&e->watchdog_ms);
@@ -1044,6 +1073,29 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetInputGain(
     if (gain_db > 30)
         gain_db = 30;
     atomic_store(&e->in_gain_db, gain_db);
+}
+
+/**
+ * 下发输出音量（发射音频的数字衰减，热生效，U7c 增补）。
+ *
+ * 在播放写入前对整段缓冲按 `10^(dB/20)` 缩放：报文、前导音、测试音都生效。
+ * 发射波形（synth_gfsk）本身已是数字满幅，所以只能衰减；超过满幅的样本
+ * 限幅到 [-1, 1] 防回绕。改设置后**下一次播放**即生效。
+ *
+ * @param gain_db 输出音量（dB），合法范围 -30..0
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetOutputGain(
+    JNIEnv* env, jobject thiz, jlong handle, jint gain_db)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    if (gain_db < OUT_GAIN_MIN_DB)
+        gain_db = OUT_GAIN_MIN_DB;
+    if (gain_db > OUT_GAIN_MAX_DB)
+        gain_db = OUT_GAIN_MAX_DB;
+    atomic_store(&e->out_gain_db, gain_db);
 }
 
 /**

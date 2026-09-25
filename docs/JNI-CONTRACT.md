@@ -154,6 +154,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 | `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音（VOX 键控/音量联调），返回写入帧数 |
 | `setVox(config: VoxConfig)` | 下发 VOX/PTT 配置（热生效，见 6.1） |
 | `setInputGain(gainDb: Int)` | 下发采集增益（热生效，−12..30 dB，见 6.2） |
+| `setOutputGain(gainDb: Int)` | 下发输出音量（发射音频的数字衰减，热生效，−30..0 dB，见 6.2） |
 | `setSlotOffsetMs(offsetMs: Int)` | 下发**整时隙偏移**（热生效，±2500 ms，见 6.3）：采集窗口起点与发射起点一起平移，用于按解码 DT 校准本机时钟/时延 |
 | `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
@@ -207,6 +208,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   - 输入设备变化需重开采集流（运行中提示「下次开始接收生效」）；
   - 输出设备变化时 `stopPlayback()` 关闭旧流，下次发射用新设备重开（发射中提示「下次发射生效」）。
 - **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**包含 VOX 电平判定**的整条链路，故调增益会同时改变状态栏 VOX 读数。
+- **输出音量**：`nativeSetOutputGain(handle, gainDb)` 钳制 **−30..0 dB**，在 `write_blocking()` 写入声卡前对**整段播放缓冲**原地乘 `10^(dB/20)`（前导静音/前导音/FT8 报文/测试音一视同仁），超过满幅限幅到 [−1,1] 防回绕。**只能衰减**：发射波形由 `synth_gfsk()` 合成、本身已是数字满幅（`sinf()`，峰值 1.0 ≈ 0 dBFS），放大只会削顶并破坏频谱；0 dB = 原样输出（默认）。改设置后**下一次播放**生效。
 - **设备 id 易变**：设备 id 可能随插拔/重启变化，存的是原始 id 字符串（空串=默认），失配时 `label` 回退「系统默认」。
 
 ### 6.3 时隙偏移（U7「发射偏移」，整时隙校准）

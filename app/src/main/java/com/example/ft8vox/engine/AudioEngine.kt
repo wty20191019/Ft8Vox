@@ -1,6 +1,7 @@
 package com.example.ft8vox.engine
 
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
+import com.example.ft8vox.data.settings.clampOutputGainDb
 
 /** VOX 触发方式（对应设置页「VOX 触发」；无 CAT 时用于输入电平判定）。 */
 enum class VoxMode {
@@ -201,6 +202,18 @@ object AudioEngine {
     }
 
     /**
+     * 下发输出音量（热生效）。需先 [initialize]；未初始化时静默忽略。
+     *
+     * 对**所有播放的发射音频**生效（FT8/FT4 报文、前导音、设置页「测试音」），
+     * 在 native 写入声卡前按 `10^(dB/20)` 缩放。发射波形本身已是数字满幅，
+     * 所以只能衰减（0 dB = 原样输出），范围见 [clampOutputGainDb]。
+     */
+    fun setOutputGain(gainDb: Int) {
+        if (handle == 0L) return
+        nativeSetOutputGain(handle, clampOutputGainDb(gainDb))
+    }
+
+    /**
      * 下发时隙偏移（热生效，U7「发射偏移」）。
      *
      * **整个时隙一起偏移**：native 的采集窗口起点（解码 DT 的基准）与 Kotlin 的发射起点
@@ -282,6 +295,9 @@ object AudioEngine {
         watchdogMs: Int,
     )
     private external fun nativeSetInputGain(handle: Long, gainDb: Int)
+
+    /** 输出音量（发射音频的数字衰减，热生效，见 [setOutputGain]）。 */
+    private external fun nativeSetOutputGain(handle: Long, gainDb: Int)
 
     /** 时隙偏移（U7「发射偏移」，热生效，见 [setSlotOffsetMs]）。 */
     private external fun nativeSetSlotOffsetMs(handle: Long, offsetMs: Int)

@@ -503,4 +503,29 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL。
 
 
+### 补记：设置页「输出音量」（发射音频数字衰减）
+
+用户要求「设置页：『输出声卡』下加一个输出音频的音量（增益？）设置」。
+
+- **关键约束 —— 只能衰减**：发射波形由 `jni_bridge.c` 的 `synth_gfsk()` 合成，输出是
+  `sinf(phi)`，**峰值 1.0 ≈ 0 dBFS**，本身已是数字满幅。所以正增益只会削顶、破坏 FT8 频谱
+  （对端直接解不出），设置范围定为 **−30…0 dB**、默认 0（= 原样输出，行为与之前一致）。
+  要更大声只能调电台/声卡的音量 —— 这一点写进了设置项副标题。
+- **生效范围**：`write_blocking()` 是**所有**发射音频的唯一出口（`play_pcm` 的报文/前导音 +
+  `nativePlayTone` 的测试音），故在写入前统一 `apply_output_gain()` 原地乘 `10^(dB/20)`
+  并限幅到 [−1,1]（≤0 dB 不会触发，仅兜底）。这样「测试音」也能用来试音量 —— 正是它本来的用途。
+- **热生效**：`_Atomic int out_gain_db`，改设置后**下一次播放**即生效（不打断本次发射）。
+- **改动清单**：
+  * `AppSettings.kt`：`outputGainDb`（默认 0）+ 顶层 `OUTPUT_GAIN_MIN_DB/MAX_DB` 与 `clampOutputGainDb()`（一处钳制，仓库与引擎共用）；
+  * `SettingsRepository.kt`：key `output_gain_db`（读时钳制）；
+  * `AudioEngine.kt`：`setOutputGain()` + `nativeSetOutputGain`；
+  * `audio_engine.c`：`out_gain_db` 字段、`apply_output_gain()`、`nativeSetOutputGain`（钳 −30..0）；
+  * `SessionViewModel.applyAudio()`：`lastOutputGainDb` 去重下发（`start()` 用 force 重下发）；
+  * `SettingsScreen.kt`：6.1「输出声卡」正下方新增「输出音量」步进器；`AppChrome.kt` 音频速览加一行「输出音量 X dB」。
+- **测试**：新增 `OutputGainTest`（范围常量、钳制、正增益一律回 0）→ **258 例 / 29 suite 全过**；
+  `llvm-nm` 确认 `Java_..._nativeSetOutputGain` 已导出。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL。真机需确认：−12 dB 时「测试音」明显变小、
+  发射报文对方可解（`REGRESSION.md` A 组新增该项）。
+
+
 

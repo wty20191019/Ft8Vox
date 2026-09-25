@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
+import com.example.ft8vox.data.settings.OUTPUT_GAIN_MAX_DB
+import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
@@ -228,6 +230,17 @@ fun SettingsScreen(
                 selected = AudioDevices.formatId(AudioDevices.parseId(app.outputDevice)),
                 onSelect = { v -> settings.update { it.copy(outputDevice = v) } },
                 label = { id -> AudioDevices.label(outputDevices, id) },
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "输出音量",
+                subtitle = "发射音频的数字衰减：0 dB = 数字满幅，只能往小调" +
+                    "（波形本身已是满幅，要更大声请调电台/声卡的音量）。" +
+                    "对 FT8/FT4 报文与「测试音」都生效，热生效。",
+                value = app.outputGainDb,
+                range = OUTPUT_GAIN_MIN_DB..OUTPUT_GAIN_MAX_DB,
+                unit = " dB",
+                onChange = { v -> settings.update { it.copy(outputGainDb = v) } },
             )
             PrefDivider()
             PrefAction(

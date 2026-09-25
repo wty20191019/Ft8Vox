@@ -84,6 +84,7 @@ private object Keys {
     val txLeadTone = booleanPreferencesKey("tx_lead_tone")
     val txLeadToneMs = intPreferencesKey("tx_lead_tone_ms")
     val outputDevice = stringPreferencesKey("output_device")
+    val outputGainDb = intPreferencesKey("output_gain_db")
     val pttDelayMs = intPreferencesKey("ptt_delay_ms")
     val watchdogMs = intPreferencesKey("watchdog_ms")
     val inputDevice = stringPreferencesKey("input_device")
@@ -173,6 +174,7 @@ private fun Preferences.toAppSettings(): AppSettings {
         txLeadTone = this[Keys.txLeadTone] ?: defaults.txLeadTone,
         txLeadToneMs = (this[Keys.txLeadToneMs] ?: defaults.txLeadToneMs).coerceIn(0, 2000),
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
+        outputGainDb = clampOutputGainDb(this[Keys.outputGainDb] ?: defaults.outputGainDb),
         pttDelayMs = (this[Keys.pttDelayMs] ?: defaults.pttDelayMs).coerceIn(0, 500),
         watchdogMs = (this[Keys.watchdogMs] ?: defaults.watchdogMs).coerceIn(1000, 60000),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
@@ -238,6 +240,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.txLeadTone] = txLeadTone
     prefs[Keys.txLeadToneMs] = txLeadToneMs
     prefs[Keys.outputDevice] = outputDevice
+    prefs[Keys.outputGainDb] = outputGainDb
     prefs[Keys.pttDelayMs] = pttDelayMs
     prefs[Keys.watchdogMs] = watchdogMs
     prefs[Keys.inputDevice] = inputDevice

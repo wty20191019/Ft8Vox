@@ -210,6 +210,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的采集增益（dB），U7c。 */
     private var lastInputGainDb: Int? = null
 
+    /** 最近一次下发给 native 的输出音量（dB），U7c 增补。 */
+    private var lastOutputGainDb: Int? = null
+
     /** 最近一次生效的输出设备 id（U7c）；变化时需重开播放流。 */
     private var lastOutputDeviceId: Int? = null
 
@@ -301,7 +304,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 下发音频路由/增益（U7c）。
      *
-     * - 采集增益：热生效；
+     * - 采集增益、输出音量：热生效；
      * - 输出设备：变化时关闭播放流，下次 [armPlayback] 用新设备重开；
      * - 输入设备：需重开采集流，运行中时不打断，提示下次开始接收生效。
      */
@@ -309,6 +312,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (force || s.inputGainDb != lastInputGainDb) {
             lastInputGainDb = s.inputGainDb
             AudioEngine.setInputGain(s.inputGainDb)
+        }
+
+        if (force || s.outputGainDb != lastOutputGainDb) {
+            lastOutputGainDb = s.outputGainDb
+            AudioEngine.setOutputGain(s.outputGainDb)
         }
 
         val outId = AudioDevices.parseId(s.outputDevice)
