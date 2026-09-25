@@ -383,6 +383,13 @@ com/example/ft8vox/
 >   **返回键**：接收中改为「退到后台继续接收」（`MainShell` 的 `BackHandler` + `moveTaskToBack`，并弹一条短提示），
 >   未接收时保持默认行为退出；底部抽屉 / 弹窗打开时返回键仍先收起它们（各自独立窗口）。
 >   **已知限制**：通知权限被拒时前台服务通知不可见（服务照常运行），需在系统设置里开启。
+> - **发射中止不再卡主线程（ANR 修复，真机问题「发射中关总开关不停止发射，发射完成即崩溃」）**：
+>   `AAudioStream_write` 对阻塞流会一直等到「请求的帧数全部写完」才返回（`timeout` 只在设备卡死时兜底）；
+>   旧 `write_blocking` 一次请求剩余全部帧，写线程于是整段发射独占 `tx_mutex`（FT8 约 16 s、FT4 约 5.5 s），
+>   而 UI 线程的中止要走 `stopPlayback()` 关流 → 等 `tx_mutex` → 卡满整段 → 收不回来 + ANR。
+>   现改为：native 按 `TX_WRITE_CHUNK_FRAMES`（4096 帧，48 kHz 约 85 ms）**分块写**；
+>   新增**无锁** `nativeAbortTx`（UI 线程只给 `out_gen` 加一，不再关流）；
+>   Kotlin 侧加「发射作废代次」`txAbortGen` 丢弃已排程未落盘的发射。详见 `REGRESSION.md` N 组。
 > - 前台服务保证息屏续跑；省电与发热优化。
 - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。
