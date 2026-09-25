@@ -64,7 +64,7 @@ import java.util.Locale
  * 日志页（new_ui.md §5）。
  *
  * 顶部搜索 + 波段 / 模式 / 日期筛选；表格化卡片列表（呼号 / 网格 / 时间 / RST / 模式）；
- * 长按卡片编辑或删除；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；
+ * 长按卡片编辑或删除（**删除需二次确认**）；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；
  * 「⋮」菜单里放新增、导入 / 导出 ADIF、局域网后台地址（U7）与清空日志。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -82,6 +82,7 @@ fun LogScreen(
 
     var editing by remember { mutableStateOf<QsoEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<QsoEntity?>(null) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var clearDialog by remember { mutableStateOf(false) }
@@ -184,7 +185,7 @@ fun LogScreen(
                     LogCard(
                         entity = entity,
                         onEdit = { editing = entity },
-                        onDelete = { log.delete(entity) },
+                        onDelete = { pendingDelete = entity },
                     )
                 }
             }
@@ -216,10 +217,40 @@ fun LogScreen(
                 editing = null
             },
             onDelete = {
-                log.delete(entity)
-                editing = null
+                // 删除需二次确认：确认框叠在编辑框之上，取消则回到编辑
+                pendingDelete = entity
             },
             onDismiss = { editing = null },
+        )
+    }
+
+    // 单条删除的二次确认
+    pendingDelete?.let { entity ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除通联记录") },
+            text = {
+                Text(
+                    "将删除 ${entity.theirCall} · " +
+                        "${QsoTime.isoDateTime(entity.utcMs)} UTC" +
+                        entity.band.takeIf { it.isNotEmpty() }?.let { " · $it" }.orEmpty() +
+                        " 这一条，且不可撤销。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        log.delete(entity)
+                        pendingDelete = null
+                        editing = null
+                        statusText = "已删除 ${entity.theirCall}"
+                    },
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
         )
     }
 
