@@ -112,7 +112,8 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U4 地图页 | ✅ | | 全屏无网格线深色底图 + 蓝/黄/红标记 + 呼号前缀定位 + CQ 红旗 + 上一时隙信号连线；JVM 164 测试全绿 |
 | U5 日志页 | ✅ | | 顶栏搜索+波段/模式/日期 chip；表格化卡片（呼号/网格/时间/RST/模式，长按编辑·删除）；底部统计 QSO/DXCC/网格/确认 + 波段柱图；「⋮」菜单新增·导入·导出 ADIF·局域网地址(U7)·清空；JVM 164 测试全绿 |
 | U6 设置页 | ✅ | | Preference 风格 8 组（台站/VOX/音频/FT8/高亮/外观/日志网络/关于）；新增 30+ 设置项落 DataStore；外观「暗/亮」「字体小中大」即时生效；高亮开关接入解码列表；未接后端项标 U7 置灰；JVM 168 测试全绿 |
-| U7 后端能力 | ⏳ | | 逐项推进 |
+| U7a DXCC/ITU 实体表 | ✅ | | `qso/Dxcc.kt`：约 180 个实体（规范名 + 代表坐标 + CQ/ITU 区域）+ 呼号前缀映射（最长前缀优先，含常用呼号区扩展）；日志 DXCC 按实体去重；「新 DXCC / 新 ITU / 新 CQ 区域」开关点亮；JVM 180 测试全绿 |
+| U7 其余能力 | ⏳ | | VOX/PTT、音频路由与增益、FST4、含我呼号哔声、局域网后台、在线日志、离线瓦片 |
 
 ### U2 落地说明（与设计的取舍）
 
@@ -139,7 +140,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **底图**：整页单一深色（`#0B0B12`）+ 一层略亮的「世界矩形」，**完全去掉 Maidenhead 网格线与经纬轴**；无任何标记时整块保持空白。
 - **数据层**：新增纯逻辑 `qso/MapModel.kt`（`MapTier` / `GridMarker` / `CallMarker` / `CqFlag` / `SignalLink` 与派生函数）与 `qso/CallLocation.kt`（呼号前缀 → 归属地近似坐标）。旧的地图专用 `SpotBuilder`/`LiveSpot`/`GridIndex`/`GridGranularity` 已删除，测试同步替换为 `MapModelTest`/`CallLocationTest`。
 - **网格标记**：按 **4 字符方格**归并；优先级 红（日志已确认 QSL/LoTW）> 黄（日志已通联）> 蓝（本会话解码，重启清空）。世界视图下按最小像素放大，避免缩成一个点。
-- **呼号标记**：报文无网格时，用呼号前缀归属地近似坐标（表键可含数字，最长前缀匹配，如 `EA8`> `EA`、`KH6`> `K`）；标记后带 `~` 表示「前缀近似」。坐标只要落在同国即视为命中，非精确 DXCC（U7）。
+- **呼号标记**：报文无网格时，用呼号前缀映射实体表（`Dxcc`，最长前缀匹配，如 `EA8` > `EA`、`KH6` > `K`）的代表坐标立标；标记后带 `~` 表示「前缀近似」。坐标为实体代表点（非逐条呼号精确到台站）。
 - **CQ 红旗**：解码到 CQ 立红旗，可在底部浮层切换「CQ 呼号 / CQ 强度」。
 - **信号连线**：**只取最近一个时隙**的解码，方向 `发方 → 收方`；CQ（无收方）连到「我」（需已知我方网格）。线上内容：报告数字 / `R<报告>` / `RR73` / `73` 沿方向运动，其余载荷只跑一个移动方块；底部浮层「连线文字」可整体关闭文字。
 - **交互**：单击命中最近的呼号标记/CQ 旗帜并在底部浮层显示详情（应答 / 日志 / 清除）；右下角浮控为放大、缩小、回我的位置；双指缩放/拖动平移沿用原实现。
@@ -151,7 +152,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 - **筛选入口**：顶部为「搜索呼号/网格」输入框（带清除 X）+ 波段 / 模式 / 日期三个 `FilterChip`（高度 48dp 满足触摸规范）。波段/模式为下拉菜单，日期改为**区间对话框**（起止两个输入框，可只填一侧；支持 `YYYY-MM-DD` 与纯数字 `YYYYMMDD`，闭区间按 UTC）。任一筛选项生效时行尾出现「清除」chip。
 - **卡片布局**：`Card`（`surface` token 底、圆角）两栏——左侧呼号 16sp 粗 + 网格（未知显示 `----`）；右侧 `波段 模式`（强调蓝）/ 时间（等宽）/ `收 x / 发 y`（缺省 `--`）。已确认（QSL/LoTW=Y）时左侧竖条变绿并显示 ✔。卡片 `defaultMinSize(56dp)`，单击进编辑，**长按弹「编辑 / 删除」菜单**（锚定卡片）。
-- **底部统计**：常驻面板显示 QSO / DXCC / 网格 / 确认 四格，其下为**波段柱图**（柱高按条数比例、可横向滚动）。DXCC 用 `CallLocation` 前缀归属地近似去重（`LogStats.uniqueEntities`），面板内标注「DXCC 按呼号前缀近似（U7 精确实体表）」。
+- **底部统计**：常驻面板显示 QSO / DXCC / 网格 / 确认 四格，其下为**波段柱图**（柱高按条数比例、可横向滚动）。DXCC 由 `Dxcc` 呼号前缀映射实体表去重（`LogStats.uniqueEntities`），面板内标注「DXCC 按呼号前缀映射实体表（常用实体精选子集）」。
 - **「⋮」菜单**：新增通联、导入 ADIF、导出 ADIF、局域网后台地址（U7，弹说明框占位）、清空日志（二次确认，文案含条数并提示先导出）。ADIF 动作从原按钮组重构为可复用回调 `rememberAdifActions`（`AdifActionRow` 仍供设置页使用）。
 - **移除**：原顶部独立「统计卡（可收起）」与「补录 / 导入 / 导出」按钮行并入上述菜单与底部统计；筛选框由两行文本输入改为 chip + 对话框。
 - **模拟器验收**：搜索、波段、模式、日期区间筛选、长按编辑 / 删除、新增保存、清空/局域网对话框均通过；「显示 X / 共 Y」与底部统计随增删实时更新。日期字段在中文输入法下会把 `-` 上屏为全角破折号，故端到端用 `YYYYMMDD` 验证（解析两种格式都支持，非缺陷）。
@@ -161,9 +162,21 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **分组**：按 §6 落地「台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志与网络 / 关于」共 8 组。§6 未列台站信息（呼号/网格/波段/备注），但它属发射必备且无 CAT，故置于首组并注明「设计外补充」。
 - **组件**：自建 Preference 风格原语——`SettingsGroup`（标题 + 圆角卡）、`PrefRow`（左标题/副标题 + 右控件，`minHeight 56dp`）、`PrefSwitch` / `PrefChoice`(FilterChip) / `PrefDropdown` / `PrefStepper`(`−/值/+`，按钮 48dp) / `PrefText` / `PrefAction` / `PrefInfo` / `PrefNote` / `U7Badge`。
 - **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；发射偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体/瀑布配色；CloudLog/LoTW/eQSL/局域网后台。`SampleRatePref` 增补 `96000`。
-- **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC·前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体/瀑布配色。
-- **标记「U7」置灰**：VOX/PTT 全套、输入设备与增益、输出声卡、测试音、发射偏移、FST4、新 CQ 区域、新 ITU、含我呼号哔声、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。`FST4` 未列入模式 Chip（`Protocol` 仅 FT8/FT4），以副标题「需要 U7」说明。
+- **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC/新 ITU/新 CQ 区域/新前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体（DXCC/ITU/CQ 区域/前缀）→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体/瀑布配色。
+- **标记「U7」置灰**：VOX/PTT 全套、输入设备与增益、输出声卡、测试音、发射偏移、FST4、含我呼号哔声、瀑布配色、CloudLog/LoTW/eQSL、局域网后台。`FST4` 未列入模式 Chip（`Protocol` 仅 FT8/FT4），以副标题「需要 U7」说明。（「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮。）
 - **亮色主题的连带改造**：原 UI 直接引用硬编码 `VoxCard/VoxText/VoxOnSurfaceVariant/VoxSurfaceVariant/VoxBackground`，亮色下会失效；已全部改为 `MaterialTheme.colorScheme.{surface,onSurface,onSurfaceVariant,surfaceVariant,background}`，并把选中 Chip / 发送按钮 / 强调文字改用 `primary`。语义色（`barColor` 各高亮、`VoxRxGreen`/`VoxTxRed`/`VoxError`、地图标记、瀑布底层）保持固定，暗色表现不变；地图底图与瀑布图本身仍固定深色（设计如此）。
 - **模拟器验收**：设置页全部 8 组滚动渲染正常；主题切「亮」全局即时生效且**重启后回读一致**；字体切「大」字号明显放大；呼号/网格/波段等旧值回读一致；无崩溃（`logcat` 无 FATAL）。未接后端的项均为禁用态 + `U7` 徽标。
+
+### U7a 落地说明：DXCC / CQ / ITU 实体表
+
+- **新增 `qso/Dxcc.kt`**：约 180 个 DXCC 实体，每个含规范中文名、代表中心坐标与代表 CQ / ITU 区域；前缀表按**最长前缀优先**匹配（`EA8` > `EA`、`KH6` > `K`、`KL` > `K`），并扩充常见呼号区（美国 `AA–AL`、日本 `JB–JS`、中国 `B`、德国 `DB–DR`、意大利 `IK–IY`、西班牙 `EB–EH/AM–AO`、俄罗斯 `UA–UI`、乌克兰 `US–UZ` 等），使同实体的不同呼号区正确归并。
+- **边界与取舍**：表为**常用实体精选子集**，未收录前缀返回 `null`（不误判）；跨区实体（美/加/俄/南极等）取**代表区域**，用于「新 CQ 区域 / 新 ITU」的近似判定。自检 `Dxcc.unknownPrefixTargets()` 守护表内一致性（前缀目标必须存在于实体表）。
+- **接入点**：
+  - `CallLocation` 退化为 `Dxcc` 的薄封装（保留 `Place` / `locate`），地图呼号标记、`MapModel` 无需改动；
+  - `LogQuery.computeStats` 的 DXCC 由「前缀名去重」改为 `Dxcc.resolve(...).name` 去重（同实体不同呼号区并为一个）；
+  - `WorkedIndex` 新增 `entities` / `cqZones` / `ituZones` 与 `hasWorkedEntity` / `hasWorkedCqZone` / `hasWorkedItuZone`；
+  - `DecodeHighlight` 新增 `newEntity` / `newItu` / `newCqZone` 标记（`newPrefix` 保留为粗口径），任一成立即归入 `NEW_ENTITY` 色条；`DecodeStyle.hasNewEntityMark` 供解码卡片显示棕色标记点；
+  - 设置页「新 CQ 区域 / 新 ITU」解除置灰与 `U7` 徽标；`OperateScreen` 逐项传入 `HighlightPrefs`。
+- **测试**：新增 `qso/DxccTest.kt`（实体/区域解析、最长前缀、呼号区归并、表内一致性、区域与坐标范围）、`WorkedIndex` 实体·区域用例、`LogQuery` 实体归并用例、`DecodeHighlight` 新开关回退与 `hasNewEntityMark` 用例；JVM **180/180** 全绿。
 
 

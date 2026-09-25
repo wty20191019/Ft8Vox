@@ -247,7 +247,7 @@ fun DecodeCard(
                     if (style.toMe && endMarkMyCall) Marker(VoxError)
                     if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
                     if (style.newGrid) Marker(BarNewGrid)
-                    if (style.newPrefix) Marker(BarNewEntity)
+                    if (style.hasNewEntityMark) Marker(BarNewEntity)
                 }
             }
         }

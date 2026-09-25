@@ -210,15 +210,15 @@ data class AppSettings(
     val txOffsetMs: Int = 0,
 
     // ---- 高亮与提醒（new_ui §6.4） ----
-    /** 新 CQ 区域（依赖实体表，U7）。 */
+    /** 新 CQ 区域（按呼号前缀映射实体表）。 */
     val highlightNewCqZone: Boolean = true,
-    /** 新 ITU 区域（依赖实体表，U7）。 */
+    /** 新 ITU 区域（按呼号前缀映射实体表）。 */
     val highlightNewItu: Boolean = true,
-    /** 新 DXCC（当前用呼号前缀近似）。 */
+    /** 新 DXCC 实体（按呼号前缀映射实体表）。 */
     val highlightNewEntity: Boolean = true,
     /** 新网格。 */
     val highlightNewGrid: Boolean = true,
-    /** 新前缀（当前与「新 DXCC」同源近似）。 */
+    /** 新前缀（粗略口径，取首个数字前的连续字母）。 */
     val highlightNewPrefix: Boolean = true,
     /** 新呼号。 */
     val highlightNewCall: Boolean = true,

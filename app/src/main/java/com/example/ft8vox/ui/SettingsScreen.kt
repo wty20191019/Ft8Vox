@@ -424,26 +424,24 @@ fun SettingsScreen(
 
         // ---------- 6.4 高亮与提醒 ----------
         SettingsGroup("高亮与提醒") {
-            PrefNote("标记 U7 的项需要 DXCC/ITU/CQ 区域实体表或音频能力，当前仅保存设置值。")
+            PrefNote("关闭某类后，该类不再抢占最高优先级色条；具体颜色见设计说明。")
             PrefSwitch(
                 title = "新 CQ 区域",
+                subtitle = "未通联过的 CQ 区域",
                 checked = app.highlightNewCqZone,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewCqZone = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefSwitch(
                 title = "新 ITU 区域",
+                subtitle = "未通联过的 ITU 区域",
                 checked = app.highlightNewItu,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewItu = v) } },
-                enabled = false,
-                badge = "U7",
             )
             PrefDivider()
             PrefSwitch(
                 title = "新 DXCC",
-                subtitle = "当前按呼号前缀近似",
+                subtitle = "未通联过的 DXCC 实体（按呼号前缀映射）",
                 checked = app.highlightNewEntity,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewEntity = v) } },
             )

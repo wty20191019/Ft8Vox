@@ -147,7 +147,10 @@ fun OperateScreen(
     val highlightPrefs = HighlightPrefs(
         newCall = settings.highlightNewCall,
         newGrid = settings.highlightNewGrid,
-        newEntity = settings.highlightNewEntity || settings.highlightNewPrefix,
+        newEntity = settings.highlightNewEntity,
+        newItu = settings.highlightNewItu,
+        newCqZone = settings.highlightNewCqZone,
+        newPrefix = settings.highlightNewPrefix,
     )
     val rows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,

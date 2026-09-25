@@ -2,7 +2,7 @@ package com.example.ft8vox.ui
 
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.log.QsoEntity
-import com.example.ft8vox.qso.CallLocation
+import com.example.ft8vox.qso.Dxcc
 
 /** 日志页的筛选条件（null 表示不限）。 */
 data class LogFilter(
@@ -20,8 +20,8 @@ data class LogStats(
     val uniqueGrids: Int = 0,
     val confirmed: Int = 0,
     /**
-     * DXCC 实体数**近似值**：按呼号前缀归属地去重（见 [CallLocation]）。
-     * 真正的实体判定与坐标表见阶段 U7。
+     * DXCC 实体数：按呼号前缀映射到 [Dxcc] 实体表去重（U7）。
+     * 表为常用实体精选子集，未收录的呼号不计入，故仍属**近似统计**。
      */
     val uniqueEntities: Int = 0,
     /** 波段 → 条数，按波段从低到高排序。 */
@@ -59,7 +59,7 @@ object LogQuery {
                 .size,
             confirmed = list.count { it.qslRcvd == "Y" || it.lotwRcvd == "Y" },
             uniqueEntities = list
-                .mapNotNull { CallLocation.locate(it.theirCall)?.name }
+                .mapNotNull { Dxcc.resolve(it.theirCall)?.name }
                 .toSet()
                 .size,
             byBand = list.groupingBy { it.band.ifEmpty { "?" } }.eachCount()

@@ -566,7 +566,7 @@ private fun StatsPanel(stats: LogStats) {
                 BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(64.dp).padding(top = 8.dp))
             }
             Text(
-                "DXCC 按呼号前缀近似（U7 精确实体表）",
+                "DXCC 按呼号前缀映射实体表（常用实体精选子集）",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),

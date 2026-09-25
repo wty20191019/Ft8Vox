@@ -76,11 +76,27 @@ class LogQueryTest {
         assertEquals(2, stats.uniqueCalls)
         assertEquals(2, stats.uniqueGrids)
         assertEquals(1, stats.confirmed)
-        // DXCC 近似：JA1ABC→日本、W1AW→美国
+        // DXCC 实体表：JA1ABC→日本、W1AW→美国
         assertEquals(2, stats.uniqueEntities)
         // 波段按频率从低到高排序：40m 在 20m 之前
         assertEquals(listOf("40m" to 1, "20m" to 3), stats.byBand)
         assertEquals(3, stats.byMode.first { it.first == "FT8" }.second)
+    }
+
+    @Test
+    fun uniqueEntitiesGroupsCallAreasIntoOneEntity() {
+        // 日本 JH/JS 与 美国 AA/K 应各自并为一个实体
+        val list = listOf(
+            entity("JA1ABC", "PM95"),
+            entity("JH1XYZ", "PM96"),
+            entity("JS3ABC", "PM85"),
+            entity("W1AW", "FN42"),
+            entity("K5ABC", "EM12"),
+            entity("AA1ZZ", "FN31"),
+        )
+        val stats = LogQuery.computeStats(list)
+        assertEquals(6, stats.uniqueCalls)
+        assertEquals(2, stats.uniqueEntities)
     }
 
     @Test

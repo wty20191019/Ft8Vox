@@ -51,6 +51,21 @@ class DecodeHighlightTest {
     }
 
     @Test
+    fun workedIndexResolvesEntitiesAndZones() {
+        val w = WorkedIndex(calls = listOf("JA1ABC", "W1AW"))
+        // 同实体不同呼号区
+        assertTrue(w.hasWorkedEntity("JH1XYZ"))
+        assertTrue(w.hasWorkedEntity("K5ABC"))
+        // 区域跟随实体
+        assertTrue(w.hasWorkedCqZone("N0CALL"))
+        assertTrue(w.hasWorkedItuZone("AA1ZZ"))
+        // 未通联实体
+        assertFalse(w.hasWorkedEntity("DL1ABC"))
+        assertFalse(w.hasWorkedItuZone("G0ABC"))
+        assertFalse(w.hasWorkedCqZone("VK2ABC"))
+    }
+
+    @Test
     fun classifyCqIsCqRoleWithNewGrid() {
         val parsed = MessageParser.parse("CQ JA1ABC PM95")
         val style = DecodeHighlight.classify(parsed)
@@ -153,7 +168,13 @@ class DecodeHighlightTest {
         val parsed = MessageParser.parse("W1AW JA1ABC PM95")
         val style = DecodeHighlight.classify(
             parsed,
-            prefs = HighlightPrefs(newGrid = false, newEntity = false),
+            prefs = HighlightPrefs(
+                newGrid = false,
+                newEntity = false,
+                newItu = false,
+                newCqZone = false,
+                newPrefix = false,
+            ),
         )
         assertEquals(HighlightRole.NEW_CALL, style.role)
         assertTrue(style.newCall)
@@ -166,10 +187,60 @@ class DecodeHighlightTest {
         val parsed = MessageParser.parse("W1AW JA1ABC PM95")
         val style = DecodeHighlight.classify(
             parsed,
-            prefs = HighlightPrefs(newCall = false, newGrid = false, newEntity = false),
+            prefs = HighlightPrefs(
+                newCall = false,
+                newGrid = false,
+                newEntity = false,
+                newItu = false,
+                newCqZone = false,
+                newPrefix = false,
+            ),
         )
         assertEquals(HighlightRole.NORMAL, style.role)
         assertFalse(style.newCall)
+    }
+
+    @Test
+    fun highlightNewItuAloneStillMarksEntity() {
+        val parsed = MessageParser.parse("W1AW JA1ABC PM95")
+        val style = DecodeHighlight.classify(
+            parsed,
+            prefs = HighlightPrefs(
+                newGrid = false,
+                newEntity = false,
+                newPrefix = false,
+                newItu = true,
+                newCqZone = false,
+            ),
+        )
+        assertEquals(HighlightRole.NEW_ENTITY, style.role)
+        assertTrue(style.newItu)
+        assertFalse(style.newEntity)
+        assertFalse(style.newCqZone)
+    }
+
+    @Test
+    fun workedEntitySuppressesNewItuAndCqZone() {
+        // 已通联美国（W1AW）：报文 from = K1ABC（同实体）既不新实体，也不新 ITU / 新 CQ 区域
+        // （关闭「新前缀」以排除粗粒度前缀路径的干扰）
+        val worked = WorkedIndex(calls = listOf("W1AW"))
+        val parsed = MessageParser.parse("JA1ABC K1ABC -08")
+        assertEquals("K1ABC", parsed.from)
+        val style = DecodeHighlight.classify(parsed, worked, prefs = HighlightPrefs(newPrefix = false))
+        assertFalse(style.newEntity)
+        assertFalse(style.newItu)
+        assertFalse(style.newCqZone)
+        assertFalse(style.newPrefix)
+        assertEquals(HighlightRole.NEW_CALL, style.role)
+    }
+
+    @Test
+    fun hasNewEntityMarkCoversAllEntitySources() {
+        assertTrue(DecodeStyle(HighlightRole.NEW_ENTITY, newEntity = true).hasNewEntityMark)
+        assertTrue(DecodeStyle(HighlightRole.NEW_ENTITY, newItu = true).hasNewEntityMark)
+        assertTrue(DecodeStyle(HighlightRole.NEW_ENTITY, newCqZone = true).hasNewEntityMark)
+        assertTrue(DecodeStyle(HighlightRole.NEW_ENTITY, newPrefix = true).hasNewEntityMark)
+        assertFalse(DecodeStyle(HighlightRole.NORMAL).hasNewEntityMark)
     }
 
     @Test

@@ -7,8 +7,8 @@ import com.example.ft8vox.grid.Maidenhead
  * 呼号前缀的**紧凑近似**（取首个数字之前的连续字母）。
  *
  * 例：`JA1ABC` → `JA`、`W1AW` → `W`、`F4FSY/P` → `F`。
- * 这不是精确的 DXCC 前缀，只用于「新前缀」高亮的近似判定，
- * 精确实体表留待后续阶段（见 `docs/UI-DESIGN.md` 第 9 节）。
+ * 这不是精确的 DXCC 前缀，只用于「新前缀」高亮的**粗略**判定；
+ * 精确到 DXCC 实体 / CQ / ITU 区域的判定见 [Dxcc]（U7）。
  */
 object CallPrefix {
 
@@ -23,9 +23,10 @@ object CallPrefix {
 }
 
 /**
- * 已通联索引（呼号 / 网格 / 前缀），供显示过滤、颜色高亮与 Call 1st 共用。
+ * 已通联索引（呼号 / 网格 / 前缀 / DXCC 实体 / CQ / ITU 区域），供显示过滤、颜色高亮与 Call 1st 共用。
  *
  * 网格统一按 **4 字符方格**归并（如 `PM95ab` → `PM95`），与「新网格」的常见口径一致。
+ * 实体与区域由 [Dxcc] 按呼号前缀解析（U7 起替代原「紧凑前缀」近似）。
  */
 class WorkedIndex(
     calls: Collection<String> = emptyList(),
@@ -39,8 +40,17 @@ class WorkedIndex(
         .mapNotNull { Maidenhead.normalize(it).takeIf { g -> g.length >= 4 }?.substring(0, 4) }
         .toSet()
 
-    /** 已通联前缀（由呼号近似得到）。 */
+    /** 已通联前缀（由呼号近似得到，保留旧口径）。 */
     val prefixes: Set<String> = this.calls.mapNotNull { CallPrefix.of(it) }.toSet()
+
+    /** 已通联 DXCC 实体（规范名去重）。 */
+    val entities: Set<String> = this.calls.mapNotNull { Dxcc.resolve(it)?.name }.toSet()
+
+    /** 已通联 CQ 区域。 */
+    val cqZones: Set<Int> = this.calls.mapNotNull { Dxcc.resolve(it)?.cqZone }.toSet()
+
+    /** 已通联 ITU 区域。 */
+    val ituZones: Set<Int> = this.calls.mapNotNull { Dxcc.resolve(it)?.ituZone }.toSet()
 
     fun hasWorkedCall(call: String?): Boolean =
         call != null && call.trim().uppercase() in calls
@@ -52,6 +62,15 @@ class WorkedIndex(
 
     fun hasWorkedPrefix(call: String?): Boolean =
         CallPrefix.of(call)?.let { it in prefixes } ?: false
+
+    fun hasWorkedEntity(call: String?): Boolean =
+        Dxcc.resolve(call)?.name?.let { it in entities } ?: false
+
+    fun hasWorkedCqZone(call: String?): Boolean =
+        Dxcc.resolve(call)?.cqZone?.let { it in cqZones } ?: false
+
+    fun hasWorkedItuZone(call: String?): Boolean =
+        Dxcc.resolve(call)?.ituZone?.let { it in ituZones } ?: false
 
     companion object {
         val EMPTY = WorkedIndex()
@@ -82,7 +101,7 @@ enum class HighlightRole {
     /** 新网格（紫）。 */
     NEW_GRID,
 
-    /** 新 DXCC / 新 ITU（棕；当前以「新前缀」近似，精确实体表见 U7）。 */
+    /** 新 DXCC / 新 ITU / 新 CQ 区域 / 新前缀（棕）。 */
     NEW_ENTITY,
 
     /** 新呼号（粉）。 */
@@ -105,12 +124,21 @@ data class DecodeStyle(
     val current: Boolean = false,
     val newCall: Boolean = false,
     val newGrid: Boolean = false,
-    /** 新前缀（近似「新 DXCC / 新 ITU」）。 */
+    /** 新前缀（由呼号近似得到，保留旧口径）。 */
     val newPrefix: Boolean = false,
+    /** 新 DXCC 实体（前缀映射）。 */
+    val newEntity: Boolean = false,
+    /** 新 ITU 区域。 */
+    val newItu: Boolean = false,
+    /** 新 CQ 区域。 */
+    val newCqZone: Boolean = false,
     val worked: Boolean = false,
     val duplicate: Boolean = false,
     val transmitting: Boolean = false,
-)
+) {
+    /** 是否应显示「新实体」标记点：新 DXCC / ITU / CQ 区域 / 新前缀任一成立。 */
+    val hasNewEntityMark: Boolean get() = newEntity || newItu || newCqZone || newPrefix
+}
 
 /**
  * 「高亮与提醒」开关（new_ui.md §6.4）。
@@ -123,8 +151,14 @@ data class HighlightPrefs(
     val newCall: Boolean = true,
     /** 新网格。 */
     val newGrid: Boolean = true,
-    /** 新 DXCC / 新前缀（近似）。 */
+    /** 新 DXCC 实体。 */
     val newEntity: Boolean = true,
+    /** 新 ITU 区域。 */
+    val newItu: Boolean = true,
+    /** 新 CQ 区域。 */
+    val newCqZone: Boolean = true,
+    /** 新前缀（粗略口径）。 */
+    val newPrefix: Boolean = true,
 )
 
 /** 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。 */
@@ -158,8 +192,12 @@ object DecodeHighlight {
     ): DecodeStyle {
         val from = parsed.from
         val toMe = parsed.addressedTo(myCall)
+        val entity = from?.let { Dxcc.resolve(it) }
         val rawNewGrid = parsed.grid != null && !worked.hasWorkedGrid(parsed.grid)
         val rawNewPrefix = from != null && !worked.hasWorkedPrefix(from)
+        val rawNewEntity = entity != null && entity.name !in worked.entities
+        val rawNewItu = entity != null && entity.ituZone !in worked.ituZones
+        val rawNewCqZone = entity != null && entity.cqZone !in worked.cqZones
         val workedCall = worked.hasWorkedCall(from)
         val current = from != null &&
             currentQsoCall != null &&
@@ -169,7 +207,10 @@ object DecodeHighlight {
 
         // 被关闭的高亮类别不参与角色判定，也不显示标记点
         val newGrid = rawNewGrid && prefs.newGrid
-        val newPrefix = rawNewPrefix && prefs.newEntity
+        val newPrefix = rawNewPrefix && prefs.newPrefix
+        val newEntity = rawNewEntity && prefs.newEntity
+        val newItu = rawNewItu && prefs.newItu
+        val newCqZone = rawNewCqZone && prefs.newCqZone
         val newCall = from != null && !workedCall && prefs.newCall
 
         val role = when {
@@ -179,7 +220,7 @@ object DecodeHighlight {
             workedCall -> HighlightRole.WORKED
             duplicate -> HighlightRole.DUPLICATE
             newGrid -> HighlightRole.NEW_GRID
-            newPrefix -> HighlightRole.NEW_ENTITY
+            newEntity || newItu || newCqZone || newPrefix -> HighlightRole.NEW_ENTITY
             newCall -> HighlightRole.NEW_CALL
             else -> HighlightRole.NORMAL
         }
@@ -191,6 +232,9 @@ object DecodeHighlight {
             newCall = newCall,
             newGrid = newGrid,
             newPrefix = newPrefix,
+            newEntity = newEntity,
+            newItu = newItu,
+            newCqZone = newCqZone,
             worked = workedCall,
             duplicate = duplicate,
             transmitting = transmitting,
