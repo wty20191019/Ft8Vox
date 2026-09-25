@@ -163,13 +163,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 当前正在播放的报文是否为「一次性发射」（发完不再推进 QSO 状态机）。 */
     private var manualInFlight = false
 
-    /** 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。 */
+    /**
+     * 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。
+     *
+     * 锁定后**一直沿用**，QSO 结束也不清除（否则会按时间重锁导致偶/奇来回跳）。
+     * 仅「关闭发射总开关」「停止发送」「停止接收」会清除。
+     */
     private var autoParity: Int? = null
 
     /**
      * 「设为目标」后固定的发射周期（目标接收时隙的相反周期）；null 表示未固定。
      *
-     * 目标固定期间 [lockAutoParity] 直接返回该值，保证与目标交替收发（时隙自动对应）。
+     * 目标固定期间 [effectiveTxParity] 优先返回该值，保证与目标交替收发（时隙自动对应）；
+     * QSO 结束或「取消目标」时只解除固定，发射周期本身保持不变。
      */
     private var pinnedTxParity: Int? = null
 
@@ -453,8 +459,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 发射总开关（默认关 = 只接收）。
      *
-     * 关闭：立即停发并解除周期锁定；开启：按手机 UTC 时间锁定「下一个来得及准备的时隙」，
-     * 随后在下一个我方时隙发射。因不再提供周期设置，用户通过在不同时机开关总开关来
+     * 关闭：立即停发并解除周期锁定；开启：未锁定时按手机 UTC 时间锁定「下一个来得及准备的
+     * 时隙」，随后在下一个我方时隙发射。因不再提供周期设置，用户通过在不同时机开关总开关来
      * 决定从哪个时隙开始发射。
      */
     fun setTxEnabled(enabled: Boolean) {
@@ -467,21 +473,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
             return
         }
-        val p = lockAutoParity()
+        relockAutoParityIfNeeded()
+        val p = _status.value.txParity
         _status.update { it.copy(txEnabled = true, txParity = p, status = "发射已开启（${parityLabel(p)}）") }
-    }
-
-    /** 按手机 UTC 时间锁定自动周期：下一个「距起点 >= 前导余量」的时隙。 */
-    private fun lockAutoParity(): Int {
-        pinnedTxParity?.let {
-            autoParity = it
-            return it
-        }
-        val st = _status.value
-        val now = AudioEngine.utcNowMs()
-        val p = nextSlotParity(now, st.slotMs.toLong(), txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS)
-        autoParity = p
-        return p
     }
 
     /**
@@ -533,9 +527,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         pinnedTxParity = null
     }
 
-    /** 重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
+    /** 按需重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
     private fun relockAutoParityIfNeeded() {
-        _status.update { it.copy(txParity = lockAutoParity()) }
+        val st = _status.value
+        val p = effectiveTxParity(
+            pinned = pinnedTxParity,
+            locked = autoParity,
+            nowMs = AudioEngine.utcNowMs(),
+            slotMs = st.slotMs.toLong(),
+            leadMs = txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
+        )
+        autoParity = p
+        if (st.txParity != p) _status.update { it.copy(txParity = p) }
     }
 
     fun clearMessages() {
@@ -917,8 +920,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     retryLeft = 0
                 }
                 QsoState.FAILED -> {
-                    // 通联失败：释放周期，并记住对手供自动程序优先重试（有次数上限）
-                    autoParity = null
+                    // 通联失败：只解除「目标时隙固定」（保留当前发射周期，避免下一段跳时隙），
+                    // 并记住对手供自动程序优先重试（有次数上限）
                     pinnedTxParity = null
                     val c = p.theirCall
                     if (c != null && c.equals(retryCall, ignoreCase = true)) {
@@ -1074,8 +1077,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
                 if (finished) {
-                    // 最后一条（RR73/73）已发完：此时才释放时隙锁定，供下一段 QSO 重新锁定
-                    autoParity = null
+                    // 最后一条（RR73/73）已发完：只解除「目标时隙固定」，
+                    // **保留当前发射周期**——下一段 QSO 沿用同一周期。
+                    // 若在这里把周期清掉，下一段会按当前时间重锁，导致偶/奇来回跳时隙。
                     pinnedTxParity = null
                 }
                 _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
@@ -1352,6 +1356,25 @@ internal fun nextSlotParity(nowMs: Long, slotMs: Long, leadMs: Long): Int {
     if (idx * slotMs - now < leadMs) idx += 1
     return (idx % 2L).toInt()
 }
+
+/**
+ * 「需要时」决定当前应当使用的发射周期。
+ *
+ * - [pinned] 非空（已「设为目标」/ 对齐目标时隙）→ 用这个固定周期；
+ * - 否则若已有锁定周期 [locked] → **保持不变**；
+ * - 两者都没有（刚开启总开关 / 刚停止接收）→ 按 UTC 时间取下一个来得及准备的时隙。
+ *
+ * 之所以要「保持不变」：每段 QSO 结束都按当前时间重锁，会让发射时隙在偶/奇之间来回跳
+ * （QSO 之间「跳时隙」），与 WSJT-X / FT8CN「一直用同一周期收发」不一致。
+ * 需要换周期只有两种情况：目标在相反周期（上面的固定周期），或用户重开总开关。
+ */
+internal fun effectiveTxParity(
+    pinned: Int?,
+    locked: Int?,
+    nowMs: Long,
+    slotMs: Long,
+    leadMs: Long,
+): Int = pinned ?: locked ?: nextSlotParity(nowMs, slotMs, leadMs)
 
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =

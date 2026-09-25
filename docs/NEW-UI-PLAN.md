@@ -235,8 +235,8 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **「波段与频率」弹窗（`ui/AppChrome.kt` → `BandFreqDialog`）**：顶栏菜单第一项打开；列出各波段与全部常用频率（点选即切换并关闭），底部「自定义波段与频率…」切换为「波段名 + MHz」输入（校验正数）。设置页「台站」组的「波段与频率」`PrefAction` 复用同一弹窗。
 - **发射总开关（默认关 = 只接收）**：`ReceiverStatus` 新增 `txEnabled`（**仅会话内有效、不持久化**，故每次启动都默认只接收）。开关放在**发射抽屉收起态 56dp 条**上（`Switch`），便于快速开关；关闭时立即停发并解除时隙锁定，开启后 CQ / 应答 / 一次性发射 / Call 1st 才允许。总开关关闭时「发送」按钮禁用、防误发弹窗的「确认发射」禁用并给出提示。
 - **默认呼叫 CQ**：收起态与抽屉的发送按钮在「无自定义文本、无发送队列、无目标」时默认执行 CQ（走防误发确认弹窗）；已选目标且无文本时默认应答该目标。
-- **时隙固定自动（不再提供设置）**：移除设置页「默认发射周期」与抽屉「偶/奇/自动」三档，`AppSettings.txParity` 与 DataStore `tx_parity` 键一并删除（`ReceiverStatus.txParityMode` 亦移除）。规则 = 纯函数 `nextSlotParity(now, slotMs, leadMs)`：按手机 UTC 时间取**下一个距起点 ≥ 前导余量（前导 + 500 ms）的时隙**（当前时隙来不及就跳到再下一个，即「再下一个时隙发射」）；在打开总开关、进入新 QSO / 一次性发射时锁定，QSO 期间保持不变，结束或停发后释放。用户通过在不同时机重新开关总开关来切换发射时隙。**例外 = 应答目标**：解码在时隙结束后才到手，按当前时间推算会得到与被应答时隙相同的奇偶，因此应答（手工 `answer` / 自动 `startAutoTarget`）一律按**目标时隙的相反周期**锁定（见 U9 补记 2）。
-- **接线**：`SessionViewModel.setBandFreq` / `setTxEnabled`、`lockAutoParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证时隙已锁定；`applySettings` 同步 `band / dialHz / 生效 txParity`。
+- **时隙固定自动（不再提供设置）**：移除设置页「默认发射周期」与抽屉「偶/奇/自动」三档，`AppSettings.txParity` 与 DataStore `tx_parity` 键一并删除（`ReceiverStatus.txParityMode` 亦移除）。规则 = 纯函数 `nextSlotParity(now, slotMs, leadMs)`：按手机 UTC 时间取**下一个距起点 ≥ 前导余量（前导 + 500 ms）的时隙**（当前时隙来不及就跳到再下一个，即「再下一个时隙发射」）；在打开总开关、进入新 QSO / 一次性发射时锁定，QSO 期间保持不变，**QSO 结束后也保持不变**（不再释放；只有关闭总开关 / 停止发送 / 停止接收才清除，见 U9 补记 3）。用户通过重新开关总开关来切换发射时隙。**例外 = 应答目标**：解码在时隙结束后才到手，按当前时间推算会得到与被应答时隙相同的奇偶，因此应答（手工 `answer` / 自动 `startAutoTarget`）一律按**目标时隙的相反周期**锁定（见 U9 补记 2）。
+- **接线**：`SessionViewModel.setBandFreq` / `setTxEnabled`、`effectiveTxParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证时隙已锁定；`applySettings` 同步 `band / dialHz / 生效 txParity`。
 - **测试**：`BandPlanTest` 增补（每波段 ≥2 频率、首项 = 默认、频率在波段内、`resolveDialHz`、`parseFreqMhz`、`DialFreq.mhz`）；`ui/TxParityAutoTest`（下一时隙奇偶、前导余量跳过、边界、零时隙回退、文案）。JVM 全绿，`:app:assembleDebug` 通过。
 - **模拟器实测**：顶栏弹窗列出多频率且切换生效（20m → 80m，3.573 生效）、自定义波段/频率表单可用；收起态条上的发射开关与「发送 CQ」按钮、抽屉「只接收」态符合预期。发射时序 / 自动周期与真实电台的配合需真机验证（见 `REGRESSION.md`）。
 
@@ -288,7 +288,8 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
      前导完整保留（数据起点 = 现在 + 前导）；超出窗口才等下一个我方周期。
 3. **收尾报文发到错误周期**：`applyQsoProgress` 在 `DONE` 时清空 `autoParity`，导致最后一条 `RR73`/`73`
    被 `nextSlotParity` 重锁到错误周期，对方收不到而误判 `FAILED`。
-   - 修法：`DONE` 时**保留**发射周期，等最后一条报文真正发完（`txJustFinished`）再释放；`FAILED` 时立即释放。
+   - 修法：`DONE` 时**保留**发射周期，等最后一条报文真正发完（`txJustFinished`）再处理；`FAILED` 时立即释放。
+     （**U9 补记 3 起**：`DONE` / `FAILED` 都不再释放周期，只在收尾时解除「目标时隙固定」。）
 
 附带：接收侧不再用 `txParity` 推断「这是不是我方发射时隙」（锁定周期可能恰与对方相同，会把对方整批报文丢掉），
 改为比对解码自带的 `slotUtcMs` 与 `lastTxSlotIndex`，只丢弃「本批正好落在我方刚发射的那个时隙」的解码。
@@ -297,6 +298,24 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   「时间法算错奇偶 vs `oppositeSlotParity` 正确」与「应答落在紧邻时隙」的回归用例；
   `VoxPlanTest` 按「数据起点 = 播放起点 + 前导」的真实语义校正。JVM 全绿，`:app:assembleDebug` 通过。
 - **待真机**：见 `REGRESSION.md` C 组新增的「双方绝不同周期发射」「标准节奏约 75 s」两项。
+
+### U9 补记 3：QSO 完成后不再「跳时隙」（发射周期跨 QSO 保持）
+
+现象（真机测试发现）：自动程序跑完一段 QSO 后，发射时隙的奇偶会变（偶 ↔ 奇来回跳）。
+
+原因：QSO 收尾会把 `autoParity` / `pinnedTxParity` 一并清空 —— `txTick` 在最后一条（RR73/73）发完时清、`applyQsoProgress` 在 `FAILED` 时清；随后 `relockAutoParityIfNeeded()` 按 `nextSlotParity(now, …)` 用**当前时间**重锁，锁到的奇偶取决于「刚好赶上哪个时隙」，于是每段 QSO 之间随机跳一次。
+
+修法：
+
+- 新增纯函数 `effectiveTxParity(pinned, locked, now, slotMs, leadMs)`：有**固定周期**（设为目标 / 对齐目标时隙）用固定值；否则**已有锁定周期保持不变**；两者都没有（刚开总开关 / 刚停止接收）才按时间取下一个来得及的时隙。
+- `relockAutoParityIfNeeded()` 改用它（不再无条件按时间重锁），原 `lockAutoParity()` 删除；`setTxEnabled(true)` 复用同一入口。
+- QSO 收尾只做 `pinnedTxParity = null`（解除「目标时隙对应」），`autoParity` **保留** → 下一段 QSO / 自动搜索 CQ 沿用同一周期。
+- 周期被清除的时机收敛为三处：关闭发射总开关、停止发送（`stopTransmit`）、停止接收（`stop`）。
+
+语义：与 WSJT-X / FT8CN 一致 —— 一直用同一周期收发；**只有**下一目标在相反周期时才切换（`pinToTargetSlot` → `oppositeSlotParity`）。
+
+- **测试**：`TxParityAutoTest` 增补「时间法算出的是奇，但已锁定偶 → 仍取偶」「固定周期优先于锁定周期」「`slotMs=0` 回退」三例。
+- **待真机**：见 `REGRESSION.md` E 组「时隙稳定（不跳时隙）」。
 
 
 

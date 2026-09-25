@@ -144,4 +144,27 @@ class TxParityAutoTest {
         assertEquals(0, slotParityOf(plan.targetStartMs, slot))
         assertEquals(minute + 2 * slot, plan.targetStartMs)
     }
+
+    // ---- 回归：QSO 完成后不得「跳时隙」 ----
+
+    @Test
+    fun keepsLockedParityAfterQsoCompletes() {
+        // 时隙 10（偶）刚开头：按时间重锁会算出「下一个」是奇
+        val now = 10 * slot + 1_000L
+        assertEquals(1, nextSlotParity(now, slot, 0L))
+        assertEquals(1, effectiveTxParity(pinned = null, locked = null, nowMs = now, slotMs = slot, leadMs = 0L))
+        // 已经锁定为偶（上一段 QSO 用的周期）→ 保持不变，下一段继续用偶
+        assertEquals(0, effectiveTxParity(pinned = null, locked = 0, nowMs = now, slotMs = slot, leadMs = 0L))
+        // 「设为目标」的固定周期优先（目标在偶 → 我发奇）
+        assertEquals(1, effectiveTxParity(pinned = 1, locked = 0, nowMs = now, slotMs = slot, leadMs = 0L))
+        assertEquals(0, effectiveTxParity(pinned = 0, locked = 1, nowMs = now, slotMs = slot, leadMs = 0L))
+    }
+
+    @Test
+    fun effectiveTxParityFallsBackWhenSlotLengthUnknown() {
+        // 离线/未运行时 slotMs=0 → nextSlotParity 回退偶周期
+        assertEquals(0, effectiveTxParity(pinned = null, locked = null, nowMs = 1_000L, slotMs = 0L, leadMs = 0L))
+        // 已有锁定周期时不受影响
+        assertEquals(1, effectiveTxParity(pinned = null, locked = 1, nowMs = 1_000L, slotMs = 0L, leadMs = 0L))
+    }
 }
