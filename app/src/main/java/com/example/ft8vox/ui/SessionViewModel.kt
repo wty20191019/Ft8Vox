@@ -162,6 +162,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。 */
     private var autoParity: Int? = null
 
+    /**
+     * 「设为目标」后固定的发射周期（目标接收时隙的相反周期）；null 表示未固定。
+     *
+     * 目标固定期间 [lockAutoParity] 直接返回该值，保证与目标交替收发（时隙自动对应）。
+     */
+    private var pinnedTxParity: Int? = null
+
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
 
@@ -432,6 +439,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun setTxEnabled(enabled: Boolean) {
         if (!enabled) {
             autoParity = null
+            pinnedTxParity = null
             stopTransmit()
             _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
             return
@@ -442,11 +450,41 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 按手机 UTC 时间锁定自动周期：下一个「距起点 >= 前导余量」的时隙。 */
     private fun lockAutoParity(): Int {
+        pinnedTxParity?.let {
+            autoParity = it
+            return it
+        }
         val st = _status.value
         val now = AudioEngine.utcNowMs()
         val p = nextSlotParity(now, st.slotMs.toLong(), txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS)
         autoParity = p
         return p
+    }
+
+    /**
+     * 「设为目标」时把发射时隙固定到目标接收时隙的**相反周期**（时隙自动对应）。
+     *
+     * QSO 进行中忽略（不打断当前序列）；无时隙信息时清除固定。
+     *
+     * @param targetSlotUtcMs 目标解码所在时隙的 UTC 起点（毫秒）
+     */
+    fun alignTxToTarget(targetSlotUtcMs: Long) {
+        val st = _status.value
+        if (st.qso.active) return
+        if (st.slotMs <= 0 || targetSlotUtcMs <= 0) {
+            pinnedTxParity = null
+            return
+        }
+        val targetParity = ((targetSlotUtcMs / st.slotMs) % 2L).toInt()
+        val mine = 1 - targetParity
+        pinnedTxParity = mine
+        autoParity = mine
+        _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
+    }
+
+    /** 清除「设为目标」时的时隙固定（取消目标 / 关闭发射时）。 */
+    fun clearTargetSlot() {
+        pinnedTxParity = null
     }
 
     /** 重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
@@ -513,6 +551,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         stopTransmit()
         pollJob?.cancel()
         pollJob = null
+        pinnedTxParity = null
         AudioEngine.stopCapture()
         AudioEngine.release()
         wfInfo = null
@@ -813,7 +852,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
     private fun applyQsoProgress(p: QsoProgress) {
         val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
-        if (finished) autoParity = null
+        if (finished) {
+            autoParity = null
+            pinnedTxParity = null
+        }
         _status.update {
             it.copy(
                 qso = p,

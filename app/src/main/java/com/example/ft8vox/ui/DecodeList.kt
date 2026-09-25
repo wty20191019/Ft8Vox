@@ -98,7 +98,7 @@ private val SwipeDeleteGray = Color(0xFF455A64)
  * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
- * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 呼叫；右滑 → 删除该条。
+ * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标；右滑 → 删除该条。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -107,7 +107,7 @@ fun DecodeCard(
     myCall: String,
     onClick: () -> Unit,
     onDoubleClick: () -> Unit,
-    onSwipeCall: () -> Unit,
+    onSwipeTarget: () -> Unit,
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
@@ -172,7 +172,7 @@ fun DecodeCard(
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 if (offsetX.value < -4f) {
-                    Text("呼叫", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Text("设为目标", color = Color.White, style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
@@ -188,7 +188,7 @@ fun DecodeCard(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onSwipeCall()
+                                        onSwipeTarget()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {

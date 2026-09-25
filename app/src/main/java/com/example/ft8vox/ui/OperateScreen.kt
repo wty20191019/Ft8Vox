@@ -262,14 +262,16 @@ fun OperateScreen(
                                 viewModel.selectFrequency(row.msg.df)
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
+                                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 }
                                 detailFor = row
                             },
                             onDoubleClick = { onOpenMap(from) },
-                            onSwipeCall = {
+                            onSwipeTarget = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
-                                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                                    viewModel.selectFrequency(row.msg.df)
+                                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 }
                             },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },
@@ -292,7 +294,10 @@ fun OperateScreen(
             settings = settings,
             messages = messages,
             targetCall = targetCall,
-            onClearTarget = { targetCall = null },
+            onClearTarget = {
+                targetCall = null
+                viewModel.clearTargetSlot()
+            },
             onStartCq = { pendingTx = PendingTx.Cq },
             onAnswer = { call, grid, df -> pendingTx = PendingTx.Reply(call, grid, df) },
             onSendNow = { viewModel.sendNow(it) },
@@ -334,6 +339,7 @@ fun OperateScreen(
                 detailFor = null
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                     targetCall = from
+                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
                     pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
                 }
             },

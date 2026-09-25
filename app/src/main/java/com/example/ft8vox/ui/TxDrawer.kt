@@ -152,6 +152,9 @@ fun TxDrawer(
     // 无自定义文本、无队列、无目标：发送按钮即「发送 CQ」
     val defaultCq = target == null && composeText.isBlank() && settings.txQueue.isEmpty()
 
+    // 无自定义文本、无队列、已选目标：发送按钮即「对目标 QSO」
+    val defaultAnswer = target != null && composeText.isBlank() && settings.txQueue.isEmpty()
+
     // ---- 收起态 56dp 条 ----
     Row(
         modifier = Modifier
@@ -213,7 +216,14 @@ fun TxDrawer(
                 enabled = status.txEnabled && status.myCall.isNotEmpty(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
-                Text(if (defaultCq) "发送 CQ" else "发送", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    when {
+                        defaultCq -> "发送 CQ"
+                        defaultAnswer -> "对目标QSO"
+                        else -> "发送"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
         }
     }
