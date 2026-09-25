@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,8 +21,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -40,6 +43,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -174,6 +178,30 @@ fun OperateScreen(
         }
     }
 
+    // ---- §3.3 自动翻到最新 ----
+    // 解码列表为新→旧（最新在 index 0）；LazyColumn 默认按 key 锚定，前插新解码时视口会停在
+    // 旧消息上，所以每批新解码到达时主动回到顶部，用户无需手动上滑。
+    // 用户手动拖动（翻看历史）时暂停跟随，滑回顶部后自动恢复。
+    val listState = rememberLazyListState()
+    var followNewest by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followNewest = false
+        }
+    }
+    LaunchedEffect(listState) {
+        // 回到顶部即恢复跟随（只置 true，锚定导致的 index 漂移不会误关）
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { idx ->
+            if (idx == 0) followNewest = true
+        }
+    }
+    val newestKey = rows.firstOrNull()?.let { it.msg.text + "@" + it.msg.slotUtcMs }
+    LaunchedEffect(newestKey) {
+        if (newestKey != null && followNewest && !listState.isScrollInProgress) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)) {
 
         if (status.myCall.isEmpty()) {
@@ -208,6 +236,8 @@ fun OperateScreen(
             filter = filter,
             counts = counts,
             queryOpen = queryOpen,
+            canClear = messages.isNotEmpty(),
+            onClear = { viewModel.clearMessages() },
             onToggleSearch = { queryOpen = !queryOpen },
             onToggle = { viewModel.setFilterTags(filter.toggle(it).tags) },
         )
@@ -246,6 +276,7 @@ fun OperateScreen(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
@@ -436,44 +467,57 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
     }
 }
 
-/** 筛选 Chip 行（横向滚动）：全部互斥，其余多选，附角标计数。 */
+/** 筛选 Chip 行（横向滚动）：最左侧「清除解码信息」，其余 Chip 全部互斥、多选，附角标计数。 */
 @Composable
 private fun FilterChipRow(
     filter: DecodeFilterState,
     counts: Map<DecodeFilterTag, Int>,
     queryOpen: Boolean,
+    canClear: Boolean,
+    onClear: () -> Unit,
     onToggleSearch: () -> Unit,
     onToggle: (DecodeFilterTag) -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for (tag in DecodeFilterTag.entries) {
-            FilterChip(
-                selected = filter.isSelected(tag),
-                onClick = { onToggle(tag) },
-                label = {
-                    Text(
-                        "${tag.label} ${counts[tag] ?: 0}",
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                ),
+        // 最左：清除本会话已解析/已显示的信息（只清显示列表，不写日志、不影响自动程序）
+        IconButton(onClick = onClear, enabled = canClear) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "清除解码信息",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (canClear) 1f else 0.38f),
             )
         }
-        IconButton(onClick = onToggleSearch) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = "呼号过滤",
-                tint = if (queryOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (tag in DecodeFilterTag.entries) {
+                FilterChip(
+                    selected = filter.isSelected(tag),
+                    onClick = { onToggle(tag) },
+                    label = {
+                        Text(
+                            "${tag.label} ${counts[tag] ?: 0}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                )
+            }
+            IconButton(onClick = onToggleSearch) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = "呼号过滤",
+                    tint = if (queryOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
