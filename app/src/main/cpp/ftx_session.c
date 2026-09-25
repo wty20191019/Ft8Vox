@@ -9,6 +9,17 @@
 #include <ft8/constants.h>
 
 // -----------------------------------------------------------------------------
+// 临时诊断：逐条打印 SNR 估计的内部量（sig/noi 功率、分位、低位裁剪计数）。
+// 用于排查「与 FT8CN/WSJT-X 的 dB 差」究竟来自音频还是估计器。排查完即删。
+// -----------------------------------------------------------------------------
+#ifdef __ANDROID__
+#include <android/log.h>
+#define SNR_DIAG(...) __android_log_print(ANDROID_LOG_INFO, "Ft8VoxSnr", __VA_ARGS__)
+#else
+#define SNR_DIAG(...) ((void)0)
+#endif
+
+// -----------------------------------------------------------------------------
 // 解码参数
 //
 // 默认值与 ft8_lib 官方示例 demo/decode_ft8.c 保持一致；运行期可经
@@ -450,14 +461,26 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
         excess = 1.0e-3; // 与 WSJT-X 相同的下限，最终会被 -24 dB 夹住
 
     float symbol_period = (wf->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
-    float bin_hz = 1.0f / symbol_period;
-    // FT8 沿用 WSJT-X 的 -27.0 dB 常数（含其窗函数的相干增益/噪声增益修正）；
-    // FT4 暂无对照常数，仍按噪声带宽换算 10·log10(binHz/2500)。
-    float ref_db = (wf->protocol == FTX_PROTOCOL_FT4)
-                       ? 10.0f * log10f(bin_hz / 2500.0f)
-                       : -27.0f;
+    // 换算到 WSJT-X 的 2500 Hz 参考带宽，必须用**每个 waterfall bin 的等效噪声带宽**：
+    //   分析窗长 = 1 个符号周期 × freq_osr（monitor 的 nfft = block_size * freq_osr 是真实
+    //   填充的音频，不是补零），窗函数为周期 Hann（噪声等效带宽 = 1.5 个 FFT bin），
+    //   故 RBW = 1.5 * (1/symbol_period) / freq_osr，与采样率无关。
+    //   freq_osr=2（FT8「标准」）→ RBW = 4.6875 Hz → 10·log10(4.6875/2500) = -27.27 dB，
+    //   与 WSJT-X ft8b.f90 的 -27.0 常数一致。
+    // 不能写死常数：「快」(freq_osr=1) 会偏低约 2.7 dB、「深」(freq_osr=4) 会偏高约 3.3 dB；
+    // FT4 此前误用音调间隔(1/symbol_period)而非 RBW，同样偏高约 1.3 dB。
+    float osr = (float)(wf->freq_osr > 0 ? wf->freq_osr : 1);
+    float rbw_hz = 1.5f * (1.0f / symbol_period) / osr;
+    float ref_db = 10.0f * log10f(rbw_hz / 2500.0f);
 
     float snr = 10.0f * log10f((float)excess) + ref_db;
+    // 临时诊断（排查完删）：打印 sig/noi 的绝对功率、噪声分位、低位裁剪计数。
+    // 若 noi_db 贴近 -120 dB 或 zero 计数占多数 → 输入音频噪声底被压掉（音频侧问题）；
+    // 若 sig_db-noi_db 正常（几十 dB）→ 输入音频确实信噪比很高（同样是音频侧问题）。
+    SNR_DIAG("fbin=%d fsub=%d ts=%d score=%d n=%ld pct=%d zero=%u snr=%.1f sig_db=%.1f noi_db=%.1f",
+             cand->freq_offset, fs, ts, cand->score, noise_n, pct_bin, noise_hist[0], snr,
+             10.0f * log10f((float)(sig > 1.0e-30 ? sig : 1.0e-30)),
+             10.0f * log10f((float)(noi > 1.0e-30 ? noi : 1.0e-30)));
     return (snr < -24.0f) ? -24.0f : snr;
 }
 
