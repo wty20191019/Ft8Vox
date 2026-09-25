@@ -79,4 +79,69 @@ class TxParityAutoTest {
     fun oppositeSlotParityUnknownWhenOffline() {
         assertNull(oppositeSlotParity(0L, 15_000L))
     }
+
+    // ---- 发射调度 planTx：紧邻时隙应答 ----
+
+    @Test
+    fun planTxOwnSlotWithinWindowTransmitsNow() {
+        // 我方周期，时隙起点后 300ms，前导 50ms：就地发射，立刻开始写播放
+        val now = minute + 300L
+        val plan = planTx(now, slot, txParity = 0, preambleMs = 50L)
+        assertEquals(minute / slot, plan.targetSlotIndex)
+        assertEquals(now, plan.startAtMs)
+        assertEquals(now + 50L, plan.targetStartMs)
+    }
+
+    @Test
+    fun planTxOwnSlotPastWindowWaitsNextCycle() {
+        // 我方周期但已过 3s（+前导超出起始窗口）：等下一个我方周期（+2）
+        val now = minute + 3_000L
+        val plan = planTx(now, slot, txParity = 0, preambleMs = 50L)
+        assertEquals(minute / slot + 2, plan.targetSlotIndex)
+        assertEquals(minute + 2 * slot, plan.targetStartMs)
+        assertEquals(minute + 2 * slot - 50L, plan.startAtMs)
+    }
+
+    @Test
+    fun planTxOpponentSlotTargetsNextSlot() {
+        // 对方周期（奇）：下一个时隙必然是我方周期（偶）
+        val now = minute + slot + 3_000L
+        val plan = planTx(now, slot, txParity = 0, preambleMs = 50L)
+        assertEquals(minute / slot + 2, plan.targetSlotIndex)
+        assertEquals(minute + 2 * slot, plan.targetStartMs)
+    }
+
+    // ---- 回归：解码在时隙结束后才到手，应答必须用「对方时隙的相反周期」 ----
+
+    @Test
+    fun answeringUsesOppositeOfHeardSlotNotTimeBasedParity() {
+        val heard = minute + 30_000L            // 对方在第 3 个时隙（偶）发 CQ
+        val deliveredAt = heard + slot + 300L   // 解码在下一时隙开头 300ms 才轮到轮询
+        // 时间法会算出「再下一个时隙」的奇偶，恰好与对方相同 → 双方同周期发射、永远收不到
+        assertEquals(0, nextSlotParity(deliveredAt, slot, 0L))
+        // 正确做法：取对方时隙的相反周期
+        assertEquals(1, oppositeSlotParity(heard, slot))
+    }
+
+    @Test
+    fun answeringLandsInTheVeryNextSlot() {
+        val heard = minute + 30_000L
+        val deliveredAt = heard + slot + 300L
+        val myParity = oppositeSlotParity(heard, slot)!!
+        val plan = planTx(deliveredAt, slot, myParity, preambleMs = 50L)
+        // 落在紧邻的下一个时隙（不是白等一个周期）
+        assertEquals(heard / slot + 1, plan.targetSlotIndex)
+        assertEquals(heard + slot, plan.targetStartMs / slot * slot)
+        assertEquals(1, slotParityOf(plan.targetStartMs, slot))
+    }
+
+    @Test
+    fun qsoProgressLandsInTheFollowingOwnSlot() {
+        // 我方为 CQ 方（偶），在对方周期收到报告：下一个我方时隙就要发出去
+        val receivedAt = minute + slot + 300L    // 对方时隙开头 300ms 到手
+        val plan = planTx(receivedAt, slot, txParity = 0, preambleMs = 50L)
+        // 当前是对方周期 → 瞄准下一个我方周期（偶）
+        assertEquals(0, slotParityOf(plan.targetStartMs, slot))
+        assertEquals(minute + 2 * slot, plan.targetStartMs)
+    }
 }

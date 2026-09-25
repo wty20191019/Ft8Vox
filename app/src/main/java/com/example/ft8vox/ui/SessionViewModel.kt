@@ -507,6 +507,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return mine
     }
 
+    /**
+     * 某个呼号最近一条解码所在时隙的 UTC 起点（毫秒）。
+     *
+     * 应答时要按「对方时隙」取相反周期，但不能用 [nextSlotParity] 按当前时间推算：
+     * 解码在时隙结束后才到达，此时当前时隙已是对方时隙，再 +1 会落到**与对方相同**的周期
+     * （双方同时发射、永远收不到对方）。因此这里回查该台最近一次解码的时隙。
+     *
+     * @return 时隙起点；列表里找不到该台或离线解码（无时隙）时返回 0
+     */
+    private fun lastHeardSlotUtcMsOf(call: String): Long {
+        val c = call.trim()
+        if (c.isEmpty()) return 0L
+        return _messages.value
+            .firstOrNull { m -> MessageParser.parse(m.text).from?.equals(c, ignoreCase = true) == true }
+            ?.slotUtcMs ?: 0L
+    }
+
     /** 清除「设为目标」时的时隙固定（取消目标 / 关闭发射时）。 */
     fun clearTargetSlot() {
         pinnedTxParity = null
@@ -649,6 +666,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
+        // 时隙自动对应：按该台最近一条解码的**相反周期**应答
+        if (pinToTargetSlot(lastHeardSlotUtcMsOf(call)) == null) pinnedTxParity = null
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
@@ -850,22 +869,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
 
-            // 3) 每完成一个接收时隙，交给 QSO 状态机或 Call 1st
+            // 3) 每完成一个接收时隙，交给 QSO 状态机或自动程序
             if (s.slotsDecoded > lastSlotsDecoded) {
                 lastSlotsDecoded = s.slotsDecoded
                 val st = _status.value
-                val completedIdx = if (s.slotMs > 0) (s.utcNowMs / s.slotMs) - 1 else -1L
-                val completedParity = if (completedIdx >= 0) (completedIdx % 2L).toInt() else -1
-                val isReceiveSlot = completedParity == -1 || completedParity != st.txParity
-                if (isReceiveSlot) {
-                    val batch = pendingDecodes.toList()
+                val batch = pendingDecodes.toList()
+                pendingDecodes = mutableListOf()
+                val slotMs = s.slotMs.toLong()
+                // 本批解码所属时隙：优先用解码自带的时隙起点（native 精确给出该时隙 UTC 起点）
+                val batchSlot = batch.maxOfOrNull { it.slotUtcMs } ?: 0L
+                val batchSlotIdx = if (slotMs > 0 && batchSlot > 0) batchSlot / slotMs else Long.MIN_VALUE
+                // 只丢弃「本批正好落在我方刚发射的那个时隙」的解码（自己发出的信号）。
+                // 不能用 txParity 推断：锁定周期可能恰好与对方相同，会把对方的报文整批丢掉。
+                val isOwnTxSlot = batchSlotIdx != Long.MIN_VALUE && batchSlotIdx == lastTxSlotIndex
+                if (!isOwnTxSlot) {
                     if (st.qso.active) {
                         applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
                     } else if (st.autoArmed) {
                         runAutoProgram(batch)
                     }
                 }
-                pendingDecodes = mutableListOf()
             }
         }
 
@@ -880,16 +903,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun applyQsoProgress(p: QsoProgress) {
         val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
         if (finished) {
-            autoParity = null
-            pinnedTxParity = null
             when (p.state) {
                 QsoState.DONE -> {
-                    // 通联完成：清空失败重试记忆
+                    // 通联完成：清空失败重试记忆。
+                    // **但保留发射周期**：还要用同一周期把最后一条 RR73/73 发出去，
+                    // 若在此重锁会落到错误周期，对方收不到而误判失败（最终消息发完才释放）。
                     retryCall = null
                     retryLeft = 0
                 }
                 QsoState.FAILED -> {
-                    // 通联失败：记住对手，供自动程序优先重试（有次数上限）
+                    // 通联失败：释放周期，并记住对手供自动程序优先重试（有次数上限）
+                    autoParity = null
+                    pinnedTxParity = null
                     val c = p.theirCall
                     if (c != null && c.equals(retryCall, ignoreCase = true)) {
                         if (retryLeft > 0) retryLeft--
@@ -1038,6 +1063,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 qsoEngine.onTransmitted()
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+                if (finished) {
+                    // 最后一条（RR73/73）已发完：此时才释放时隙锁定，供下一段 QSO 重新锁定
+                    autoParity = null
+                    pinnedTxParity = null
+                }
                 _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
             }
         }
@@ -1196,18 +1226,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
-        /** 允许在时隙起点后多久内开始写播放（0.5 s 前导静音可吸收该延迟）。 */
-        const val TX_START_WINDOW_MS = 1200L
-
         fun slotMsOf(protocol: Protocol): Int = if (protocol == Protocol.FT4) 7500 else 15000
     }
 }
 
-/** 一次发射的调度结果：目标时隙、数据起点与播放起点。 */
+/** 允许在时隙起点后多久内就地发射（含前导；超出则等下一个我方周期）。 */
+internal const val TX_START_WINDOW_MS = 1200L
+
+/** 一次发射的调度结果：目标时隙、播放起点与数据起点。 */
 internal data class TxPlan(
     /** 目标时隙序号（`UTCms / slotMs`），用于去重。 */
     val targetSlotIndex: Long,
-    /** 数据（FT8 波形）预定起点，等于目标时隙起点。 */
+    /** 数据（FT8 波形）预定起点 = 播放起点 + 前导；计划起点时一般等于目标时隙起点。 */
     val targetStartMs: Long,
     /** 播放起点，= 数据起点 − 前导时长。 */
     val startAtMs: Long,
@@ -1216,20 +1246,40 @@ internal data class TxPlan(
 /**
  * 计算本次发射的目标时隙与播放起点（纯函数，便于单测）。
  *
- * 无前导时就地发射；有前导时需提前 `preambleMs` 启动播放，让前导在
- * 数据到达前键控 VOX，因此只能瞄准后续的我方周期时隙。
+ * - 当前处于**对方周期**：瞄准下一个我方周期（必到），用完整前导提前启动。
+ * - 当前处于**我方周期**且「时隙内已过时间 + 前导」仍在 [startWindowMs] 内：**就地发射**，
+ *   立刻开始写播放、前导完整保留（数据起点相应后移几百毫秒）。解码结果正好在我方时隙
+ *   开头几百毫秒到达，这条路径让应答落在**紧邻的时隙**，而不是白等一个完整周期。
+ * - 否则（我方周期但已等太久）：瞄准下一个我方周期（+2）。
+ *
+ * 真正决定数据起点的是「播放起点 + 前导」；[TxPlan.targetStartMs] 即该值。
  */
-internal fun planTx(nowMs: Long, slotMs: Long, txParity: Int, preambleMs: Long): TxPlan {
+internal fun planTx(
+    nowMs: Long,
+    slotMs: Long,
+    txParity: Int,
+    preambleMs: Long,
+    startWindowMs: Long = TX_START_WINDOW_MS,
+): TxPlan {
     require(slotMs > 0) { "slotMs must be positive" }
+    val pre = preambleMs.coerceAtLeast(0L)
     val slotIdx = nowMs / slotMs
     val parity = (slotIdx % 2L).toInt()
-    val targetIdx = if (parity == txParity) {
-        if (preambleMs <= 0) slotIdx else slotIdx + 2
-    } else {
-        slotIdx + 1
+    if (parity != txParity) {
+        // 对方周期：下一个时隙必是我方周期
+        val targetIdx = slotIdx + 1
+        val targetStart = targetIdx * slotMs
+        return TxPlan(targetIdx, targetStart, targetStart - pre)
     }
+    val posInSlot = nowMs - slotIdx * slotMs
+    if (posInSlot + pre <= startWindowMs) {
+        // 我方周期且刚过起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
+        return TxPlan(slotIdx, nowMs + pre, nowMs)
+    }
+    // 已过太久：下一个我方周期
+    val targetIdx = slotIdx + 2
     val targetStart = targetIdx * slotMs
-    return TxPlan(targetIdx, targetStart, targetStart - preambleMs)
+    return TxPlan(targetIdx, targetStart, targetStart - pre)
 }
 
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */

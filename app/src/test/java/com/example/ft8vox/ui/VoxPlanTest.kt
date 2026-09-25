@@ -16,9 +16,10 @@ class VoxPlanTest {
         val now = 100 * ft8 + 200 // 偶数时隙（周期 0），距起点 200 ms
         val p = planTx(now, ft8, txParity = 0, preambleMs = 0)
 
+        // 我方周期且刚过起点：就地发射，无前导 → 数据起点即现在
         assertEquals(100L, p.targetSlotIndex)
-        assertEquals(1_500_000L, p.targetStartMs)
-        assertEquals(1_500_000L, p.startAtMs) // 无前导：播放起点即数据起点
+        assertEquals(now, p.targetStartMs)
+        assertEquals(now, p.startAtMs)
     }
 
     @Test
@@ -32,14 +33,14 @@ class VoxPlanTest {
     }
 
     @Test
-    fun `有前导且周期匹配时瞄准后续时隙并提前播放`() {
+    fun `有前导但来得及时就地发射并保留前导`() {
         val now = 100 * ft8 + 200
         val p = planTx(now, ft8, txParity = 0, preambleMs = 1_000)
 
-        // 当前时隙起点已过，只能瞄准再下一个匹配时隙
-        assertEquals(102L, p.targetSlotIndex)
-        assertEquals(1_530_000L, p.targetStartMs)
-        assertEquals(1_529_000L, p.startAtMs)
+        // 已过 200ms + 前导 1000ms 仍在起始窗口内：就地发射，立刻开始写播放
+        assertEquals(100L, p.targetSlotIndex)
+        assertEquals(now, p.startAtMs)
+        assertEquals(now + 1_000L, p.targetStartMs)
         // 播放起点 + 前导 = 数据起点
         assertEquals(p.targetStartMs, p.startAtMs + 1_000)
     }
@@ -57,11 +58,22 @@ class VoxPlanTest {
     }
 
     @Test
+    fun `有前导但已过起始窗口时瞄准后续时隙`() {
+        val now = 100 * ft8 + 3_000
+        val p = planTx(now, ft8, txParity = 0, preambleMs = 1_000)
+
+        // 已过 3000ms + 前导 1000ms 超出窗口：等下一个我方周期
+        assertEquals(102L, p.targetSlotIndex)
+        assertEquals(1_530_000L, p.targetStartMs)
+        assertEquals(1_529_000L, p.startAtMs)
+    }
+
+    @Test
     fun `FT4 时隙同样成立`() {
         val now = 10 * ft4 + 50
         val p = planTx(now, ft4, txParity = 0, preambleMs = 0)
         assertEquals(10L, p.targetSlotIndex)
-        assertEquals(75_000L, p.targetStartMs)
+        assertEquals(now, p.targetStartMs)
     }
 
     @Test
