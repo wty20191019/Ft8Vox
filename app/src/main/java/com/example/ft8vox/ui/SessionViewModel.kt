@@ -471,12 +471,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun alignTxToTarget(targetSlotUtcMs: Long) {
         val st = _status.value
         if (st.qso.active) return
-        if (st.slotMs <= 0 || targetSlotUtcMs <= 0) {
+        val mine = oppositeSlotParity(targetSlotUtcMs, st.slotMs.toLong())
+        if (mine == null) {
             pinnedTxParity = null
             return
         }
-        val targetParity = ((targetSlotUtcMs / st.slotMs) % 2L).toInt()
-        val mine = 1 - targetParity
         pinnedTxParity = mine
         autoParity = mine
         _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
@@ -815,7 +814,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     slotMs = s.slotMs.toInt(),
                     msToNextSlot = s.msToNextSlot,
                     slotProgress = s.slotProgress,
-                    slotParity = if (s.slotMs > 0) ((s.utcNowMs / s.slotMs) % 2L).toInt() else 0,
+                    slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
                     droppedSamples = s.droppedSamples,
                     voxOpen = s.voxOpen,
@@ -1183,6 +1182,27 @@ internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
+
+/**
+ * 时隙奇偶标记（0/1）：按 UTC 时隙起点取整后的槽位序号取奇偶。
+ *
+ * 每 60 s 恰好 4 个 15 s（FT8）时隙，因此：
+ * **第 1、3 个时隙为 0，第 2、4 个时隙为 1**（FT4 为 8 个 7.5 s 时隙，同样逢奇为 1）。
+ *
+ * @param slotUtcMs 时隙的 UTC 起点（毫秒）；离线解码为 0
+ * @param slotMs 时隙长度（毫秒）
+ * @return 0/1；[slotUtcMs] 或 [slotMs] 非法时返回 null
+ */
+internal fun slotParityOf(slotUtcMs: Long, slotMs: Long): Int? =
+    if (slotUtcMs <= 0L || slotMs <= 0L) null else ((slotUtcMs / slotMs) % 2L).toInt()
+
+/**
+ * 「设为目标」时我方的发射时隙奇偶：目标时隙的**相反周期**（对方第 1/3 个我发第 2/4 个）。
+ *
+ * @return 0/1；目标时隙不可知（离线解码）时返回 null
+ */
+internal fun oppositeSlotParity(targetSlotUtcMs: Long, slotMs: Long): Int? =
+    slotParityOf(targetSlotUtcMs, slotMs)?.let { 1 - it }
 
 /**
  * 自动周期：按手机 UTC 时间取「下一个距起点 >= [leadMs] 的时隙」的奇偶（0=偶，1=奇）。

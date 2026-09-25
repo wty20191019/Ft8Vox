@@ -133,12 +133,8 @@ fun DecodeCard(
         WorkedStyle.UNDERLINE -> TextDecoration.Underline
         WorkedStyle.HIDE -> null
     }
-    // 时隙（1/0）：按解码时隙起点落在第几个槽位取奇偶；离线（无时间）显示 --
-    val slotLabel = if (msg.slotUtcMs > 0 && slotMs > 0) {
-        ((msg.slotUtcMs / slotMs) % 2).toString()
-    } else {
-        "--"
-    }
+    // 时隙（1/0）：按解码时隙起点落在第几个槽位取奇偶（第 1/3 个为 0，第 2/4 个为 1）；离线（无时间）显示 --
+    val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
     // 发送方实体（DXCC）与距离
     val entity = from?.let { Dxcc.resolve(it)?.name }
     val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
