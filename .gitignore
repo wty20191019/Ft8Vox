@@ -8,3 +8,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+# 底图原始素材（高德影像，仅本地自用）：不进仓库，成品为 app/src/main/assets/map/world_z5.jpg
+/app/map/
