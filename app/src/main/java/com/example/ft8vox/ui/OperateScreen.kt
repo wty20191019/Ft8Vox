@@ -272,7 +272,7 @@ fun OperateScreen(
                                     pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
                                 }
                             },
-                            onSwipeIgnore = { from?.let { viewModel.ignoreCall(it) } },
+                            onSwipeDelete = { viewModel.removeMessage(row.msg) },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
                             workedStyle = settings.workedStyle,

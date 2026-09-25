@@ -92,13 +92,13 @@ fun barColor(role: HighlightRole): Color = when (role) {
 }
 
 private val SwipeCallGreen = Color(0xFF2E7D32)
-private val SwipeIgnoreGray = Color(0xFF455A64)
+private val SwipeDeleteGray = Color(0xFF455A64)
 
 /**
  * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
- * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 呼叫；右滑 → 忽略。
+ * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 呼叫；右滑 → 删除该条。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -108,7 +108,7 @@ fun DecodeCard(
     onClick: () -> Unit,
     onDoubleClick: () -> Unit,
     onSwipeCall: () -> Unit,
-    onSwipeIgnore: () -> Unit,
+    onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
     modifier: Modifier = Modifier,
@@ -157,11 +157,11 @@ fun DecodeCard(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .background(if (offsetX.value > 4f) SwipeIgnoreGray else Color.Transparent),
+                    .background(if (offsetX.value > 4f) SwipeDeleteGray else Color.Transparent),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (offsetX.value > 4f) {
-                    Text("忽略", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Text("删除", color = Color.White, style = MaterialTheme.typography.labelMedium)
                 }
             }
             Box(
@@ -192,7 +192,7 @@ fun DecodeCard(
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
-                                        onSwipeIgnore()
+                                        onSwipeDelete()
                                         offsetX.animateTo(0f)
                                     }
                                     else -> offsetX.animateTo(0f)

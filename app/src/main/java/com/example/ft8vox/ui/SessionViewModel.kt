@@ -356,6 +356,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(ignoredCalls = it.ignoredCalls + c) }
     }
 
+    /** 从当前解码列表删除一条（仅本会话显示层；不写入忽略名单、不影响同呼号的后续解码）。 */
+    fun removeMessage(msg: DecodeResult) {
+        _messages.update { list -> list.filterNot { it === msg } }
+    }
+
     /** 取消忽略（供设置页管理）。 */
     fun unignoreCall(call: String) {
         val c = call.trim().uppercase()
