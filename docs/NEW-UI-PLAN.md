@@ -343,17 +343,20 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **文案**：抽屉收起态第二行显示「允许发射 / 只接收」；展开面板提示按四种状态（开关关 / 自动程序已启用 / 我方周期可立即发 / 需排下一周期）分别说明；自动程序行前加一句「『发送总开关』只表示允许发射；启用后由自动程序决定选台与整段 QSO 的报文流程」；防误发确认框写明「发送总开关：已开（只表示允许发射）」或「关 —— 确认启用时会自动打开」；`AutoProgramDialog` 说明改为「启用会自动打开『发送总开关』；关闭只停止自动化，不影响总开关」；`QsoPanel` 的防误发提示同步改称「发送总开关」。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL，JVM 253 例 / 29 suite 全绿（联动在 ViewModel，无单测覆盖；真机项见 `REGRESSION.md` E / M 组）。
 
-### U9 补记 5：顶栏时隙指示（0/1 号）+ 待发/发射中报文
+### U9 补记 5：顶栏时隙指示（0/1 号，三行）
 
-用户要求：顶部状态栏里加「发射时隙」和「正在发送的文本内容」；随后追加要求「不用奇偶时隙，用 0/1 时隙，例如 `RX：1`」。
+用户要求：顶部状态栏里加「发射时隙」和「正在发送的文本内容」；随后追加两条要求 ——「不用奇偶时隙，用 0/1 时隙，例如 `RX：1`」「发射中 CQ DX0ABC / 待发 CQ DX0ABC 写到第三行」。
 
-- **位置**：顶栏中间第二行（`14.074000 MHz · FT8`）之后追加，例如 `14.074000 MHz · FT8 · RX：1`、`14.074000 MHz · FT8 · TX：0 发射中 CQ DX0ABC`。
-- **编号（0/1，不用奇/偶）**：`TX：n` 的 n 取当前锁定的发射周期 `status.txParity`；`RX：n` 的 n 取当前时隙 `status.slotParity`（皆与 `slotParityOf` 的 0/1 定义一致：`:00/:30` 为 0，`:15/:45` 为 1）。
-- **显示条件**：`status.running` 才显示时隙号；其中「我方发射时隙」= `status.txEnabled && slotParity == txParity`。**报文只在我方发射时隙显示**（接收时隙不显示报文）；关闭发送总开关或未开始接收时整段不显示。
+- **三行布局**（顶栏中间）：
+  - 第 1 行：`13:45:55 UTC`
+  - 第 2 行：`14.074000 MHz · FT8 · RX：1`（我方发射时隙为 `· TX：0`）
+  - 第 3 行：`待发 CQ DX0ABC`（强调蓝）/ `发射中 CQ DX0ABC`（红）—— **只在我方发射时隙、且有待发报文或正在发射时出现**；接收时隙没有这一行。
+- **编号（0/1，不用奇/偶）**：`TX：n` 的 n 取当前锁定的发射周期 `status.txParity`；`RX：n` 的 n 取当前时隙 `status.slotParity`（与 `slotParityOf` 的 0/1 定义一致：`:00/:30` 为 0，`:15/:45` 为 1）。
+- **显示条件**：`status.running` 才显示时隙号；「我方发射时隙」= `status.txEnabled && slotParity == txParity`。关闭发送总开关或未开始接收时第 2/3 行的时隙段不显示。
 - **文本来源**：`manualTxText`（一次性发射）→ `qso.txText`（QSO 待发报文）→ 发射中再回退到 `lastTxText`（刚发出的那条，因为 `QsoEngine.onTransmitted()` 会把 DONE/FAILED 的 `txText` 清空）。
-- **配色/排版**：TX 段 = `colorScheme.primary`（强调蓝），其中发射中 = `VoxTxRed`（红）；RX 段与频率行同色。用 `buildAnnotatedString` + `SpanStyle` 做单行混色，`maxLines = 1` + 省略号；颜色须在组合体里先取好（`MaterialTheme` 不能在非组合 lambda 内调用）。
+- **排版细节**：三行都设紧凑 `lineHeight`（时钟 20sp、辅助行 13sp，合计约 46dp < 56dp），行容器由 `height(56.dp)` 改为 `heightIn(min = 56.dp)`，因此第 3 行出现/消失时**顶栏高度不跳动**（3 行时时钟上移约 6dp，可接受；系统字体放大时顶栏才增长，不会裁字）。配色：TX 段/待发 = `colorScheme.primary`，发射中 = `VoxTxRed`；RX 段与频率行同色。第 2 行用 `buildAnnotatedString` + `SpanStyle` 混色，`maxLines = 1` + 省略号；颜色须在组合体里先取好（`MaterialTheme` 不能在非组合 lambda 内调用）。
 - **实现**：`AppChrome.kt` 的 `Ft8VoxTopBar`；无新增状态字段（全部由 `ReceiverStatus` 现有字段推导，`slotParity` 由轮询每帧刷新）。
-- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（按用户要求只到构建成功，真机/模拟器验收项见 `REGRESSION.md` M 组）。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL、JVM 253 例全过（按用户要求只到构建成功，真机/模拟器验收项见 `REGRESSION.md` M 组）。
 
 
 

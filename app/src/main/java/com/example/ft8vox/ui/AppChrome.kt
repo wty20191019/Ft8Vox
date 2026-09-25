@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,6 +52,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
@@ -115,8 +115,8 @@ fun Ft8VoxTopBar(
     }
 
     // 时隙指示（顶栏第二行）：用 0/1 时隙号，不再用「奇/偶」——
-    //   接收时隙 → `· RX：1`；我方发射时隙 → `· TX：0 待发/发射中 <报文>`。
-    //   报文只在**我方发射时隙**显示（接收时隙不显示报文）；TX 段用主题色，发射中红色。
+    //   接收时隙 → `· RX：1`；我方发射时隙 → `· TX：0`。
+    // 待发/发射中的报文单独放**第三行**（只有我方发射时隙且有报文/正在发射时才出现）。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
     val slotTag: String? = when {
         !status.running -> null
@@ -139,7 +139,7 @@ fun Ft8VoxTopBar(
         modifier = modifier.fillMaxWidth().statusBarsPadding(),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box {
@@ -199,7 +199,7 @@ fun Ft8VoxTopBar(
             ) {
                 Text(
                     "${QsoTime.isoTime(nowMs)} UTC",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(lineHeight = 20.sp),
                     fontFamily = FontFamily.Monospace,
                 )
                 Text(
@@ -208,22 +208,30 @@ fun Ft8VoxTopBar(
                         if (slotTag != null) {
                             append(" · ")
                             if (inTxSlot) {
-                                withStyle(SpanStyle(color = txSlotColor)) {
-                                    append(slotTag)
-                                    if (status.txing) append(" 发射中")
-                                    else if (txText != null) append(" 待发")
-                                    txText?.let { append(" $it") }
-                                }
+                                withStyle(SpanStyle(color = txSlotColor)) { append(slotTag) }
                             } else {
                                 append(slotTag)
                             }
                         }
                     },
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // 第三行：待发/发射中的报文（只在我方发射时隙出现，接收时隙不显示）
+                if (inTxSlot && (status.txing || txText != null)) {
+                    Text(
+                        buildString {
+                            append(if (status.txing) "发射中" else "待发")
+                            txText?.let { append(" $it") }
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),
+                        color = txSlotColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             TxRxDot(txing = status.txing, running = status.running)
