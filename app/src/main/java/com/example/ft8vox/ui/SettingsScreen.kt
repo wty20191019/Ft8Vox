@@ -315,8 +315,9 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "「快」省电、候选更少；「深」更慢但弱信号解码率更高。" +
-                    "OSR 与频率范围需重启接收生效，其余参数即时生效。",
+                subtitle = "预设一键改下面 6 项（时间/频率 OSR、最低得分、LDPC 迭代、候选上限、" +
+                    "单时隙上限）；频率范围不随预设变化。单项手改后显示「自定义」。" +
+                    "OSR 与频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
                     add(DecodePreset.STANDARD)
@@ -336,6 +337,8 @@ fun SettingsScreen(
                 title = "时间 OSR",
                 value = app.decode.timeOsr,
                 range = DecodeSettings.TIME_OSR_RANGE,
+                subtitle = "每个符号在时间上再细分的份数（1–4）。调大：DT 时间分辨率更细、" +
+                    "弱信号同步更稳，计算量成倍上升。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(timeOsr = v) } },
             )
             PrefDivider()
@@ -343,6 +346,8 @@ fun SettingsScreen(
                 title = "频率 OSR",
                 value = app.decode.freqOsr,
                 range = DecodeSettings.FREQ_OSR_RANGE,
+                subtitle = "每个 6.25 Hz 频率格再细分的份数（1–4）。调大：DF 频率估计更准、" +
+                    "邻近信号更易分开，计算量成倍上升。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(freqOsr = v) } },
             )
             PrefDivider()
@@ -350,6 +355,8 @@ fun SettingsScreen(
                 title = "最低得分",
                 value = app.decode.minScore,
                 range = DecodeSettings.MIN_SCORE_RANGE,
+                subtitle = "Costas 同步候选的最低得分（4–40）。调高：候选更少、解码更快，" +
+                    "但更容易漏掉弱信号；调低则更全更慢。",
                 onChange = { v -> settings.updateDecode { it.copy(minScore = v) } },
             )
             PrefDivider()
@@ -358,6 +365,8 @@ fun SettingsScreen(
                 value = app.decode.ldpcIterations,
                 range = DecodeSettings.LDPC_RANGE,
                 step = 5,
+                subtitle = "纠错码最大迭代次数（5–60）。调高：误码多的弱信号更可能解出来，" +
+                    "更慢；调低解码更快但弱台可能解不出。",
                 onChange = { v -> settings.updateDecode { it.copy(ldpcIterations = v) } },
             )
             PrefDivider()
@@ -366,6 +375,8 @@ fun SettingsScreen(
                 value = app.decode.maxCandidates,
                 range = DecodeSettings.MAX_CANDIDATES_RANGE,
                 step = 20,
+                subtitle = "单时隙保留的同步候选数量上限（20–500）。调高：给弱信号更多机会，" +
+                    "更慢；调低时名额先被强台占满、弱台漏解。",
                 onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
             )
             PrefDivider()
@@ -374,6 +385,8 @@ fun SettingsScreen(
                 value = app.decode.maxDecoded,
                 range = DecodeSettings.MAX_DECODED_RANGE,
                 step = 5,
+                subtitle = "一个时隙最多输出的报文条数（5–100）。拥挤波段（如 20m 高峰）" +
+                    "调大可避免已解出的报文被丢弃。",
                 onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
             )
             PrefDivider()
@@ -383,6 +396,8 @@ fun SettingsScreen(
                 range = DecodeSettings.F_MIN_RANGE,
                 step = 50,
                 unit = " Hz",
+                subtitle = "解码搜索与瀑布显示的下边界（默认 200 Hz，即 SSB 通带低端）。" +
+                    "需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
             )
             PrefDivider()
@@ -392,6 +407,8 @@ fun SettingsScreen(
                 range = DecodeSettings.F_MAX_RANGE,
                 step = 50,
                 unit = " Hz",
+                subtitle = "解码搜索与瀑布显示的上边界（默认 3000 Hz）。范围越窄解码越快，" +
+                    "但超出范围的信号不会被解出。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMaxHz = v) } },
             )
             PrefDivider()
