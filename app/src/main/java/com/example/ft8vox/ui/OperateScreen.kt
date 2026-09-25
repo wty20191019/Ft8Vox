@@ -411,7 +411,7 @@ private fun WaterfallBox(
             onLongPress = onLongPress,
         )
 
-        // 顶部浮条
+        // 顶部浮条（仅保留接收开关；增益/噪抑/带宽原为占位，已移除）
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -424,9 +424,6 @@ private fun WaterfallBox(
                 enabled = true,
                 onClick = onToggleRunning,
             )
-            OverlayButton(text = "增益", enabled = false, onClick = {})
-            OverlayButton(text = "噪抑", enabled = false, onClick = {})
-            OverlayButton(text = "带宽", enabled = false, onClick = {})
         }
 
         // 参考电平（右上）
