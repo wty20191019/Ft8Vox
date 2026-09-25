@@ -69,7 +69,7 @@ fun MainShell(
                 status = status,
                 appSettings = appSettings,
                 nowMs = nowMs,
-                onBand = session::setBand,
+                onBandFreq = session::setBandFreq,
                 onProtocol = session::selectProtocol,
                 onOpenSettings = { tab = MainTab.SETTINGS },
             )

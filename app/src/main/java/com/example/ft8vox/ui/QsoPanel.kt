@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.example.ft8vox.data.settings.TX_PARITY_EVEN
+import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import java.util.Locale
 
 /** 待确认的发射动作（防误发闸门）。 */
@@ -148,7 +150,20 @@ fun TxConfirmDialog(
                 Text(what)
                 Text("呼号：${status.myCall}${if (status.myGrid.isNotEmpty()) " / ${status.myGrid}" else ""}")
                 Text("频率：${status.selectedFreqHz} Hz")
-                Text("周期：${if (status.txParity == 0) "偶数" else "奇数"}｜协议：${status.protocol.name}")
+                Text(
+                    "周期：" + when (status.txParityMode) {
+                        TX_PARITY_EVEN -> "偶数"
+                        TX_PARITY_ODD -> "奇数"
+                        else -> "自动（下一个 ${if (status.txParity == 0) "偶" else "奇"}）"
+                    } + "｜协议：${status.protocol.name}",
+                )
+                if (!status.txEnabled) {
+                    Text(
+                        "发射总开关当前为「关」：请先在操作页打开发射开关再确认。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB3261E),
+                    )
+                }
                 Text(
                     "请确认电台已就绪（频率/模式/VOX）。发射期间请勿离开。",
                     style = MaterialTheme.typography.bodySmall,
@@ -156,7 +171,7 @@ fun TxConfirmDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) { Text("确认发射") }
+            Button(onClick = onConfirm, enabled = status.txEnabled) { Text("确认发射") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }

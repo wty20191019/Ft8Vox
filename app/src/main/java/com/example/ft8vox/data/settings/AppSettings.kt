@@ -6,6 +6,11 @@ import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterTag
 
+/** 发射周期模式：0=偶数周期，1=奇数周期，2=自动（按手机 UTC 时间选下一个来得及的时隙）。 */
+const val TX_PARITY_EVEN = 0
+const val TX_PARITY_ODD = 1
+const val TX_PARITY_AUTO = 2
+
 /** Call 1st 自动应答策略。 */
 enum class CallFirstMode(val label: String) {
     OFF("关"),
@@ -144,14 +149,16 @@ data class AppSettings(
     val note: String = "",
     /** 当前波段（无 CAT，由用户指定）。 */
     val band: String = BandPlan.DEFAULT_BAND,
+    /** 当前刻度频率（Hz）；0 表示按 [band] 的默认频率推导。 */
+    val dialHz: Long = 0L,
 
     // ---- 操作 ----
     /** 协议名（存名字而非 ordinal，避免枚举顺序变化导致旧数据错位）。 */
     val protocolName: String = Protocol.FT8.name,
     /** 音频发射频率（Hz）。 */
     val selectedFreqHz: Int = 1500,
-    /** 我方发射周期：0=偶数，1=奇数。 */
-    val txParity: Int = 0,
+    /** 我方发射周期：[TX_PARITY_EVEN] / [TX_PARITY_ODD] / [TX_PARITY_AUTO]。 */
+    val txParity: Int = TX_PARITY_AUTO,
     /** 锁定发射频率（应答时不跟随对方频率）。 */
     val holdTxFreq: Boolean = false,
     /** Call 1st 自动应答策略。 */
@@ -254,6 +261,10 @@ data class AppSettings(
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
+
+    /** 当前实际使用的刻度频率（Hz）：自定义波段或波段内频率优先，否则取波段默认。 */
+    val resolvedDialHz: Long
+        get() = BandPlan.resolveDialHz(band, dialHz)
 
     /** 可热更新的解码参数（映射到 native `DecodeParams`）。 */
     val decodeParams: DecodeParams

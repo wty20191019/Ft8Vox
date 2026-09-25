@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -54,6 +55,7 @@ private object Keys {
     val myGrid = stringPreferencesKey("my_grid")
     val note = stringPreferencesKey("note")
     val band = stringPreferencesKey("band")
+    val dialHz = longPreferencesKey("dial_hz")
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val txParity = intPreferencesKey("tx_parity")
@@ -137,10 +139,12 @@ private fun Preferences.toAppSettings(): AppSettings {
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,
         note = this[Keys.note] ?: defaults.note,
-        band = this[Keys.band]?.takeIf { BandPlan.contains(it) } ?: defaults.band,
+        // 波段名允许自定义（非空、≤16 字符）；未知段名不再被丢弃
+        band = this[Keys.band]?.trim()?.takeIf { it.isNotEmpty() && it.length <= 16 } ?: defaults.band,
+        dialHz = (this[Keys.dialHz] ?: defaults.dialHz).takeIf { it in 0..BandPlan.MAX_FREQ_HZ } ?: defaults.dialHz,
         protocolName = this[Keys.protocolName] ?: defaults.protocolName,
         selectedFreqHz = this[Keys.selectedFreqHz] ?: defaults.selectedFreqHz,
-        txParity = (this[Keys.txParity] ?: defaults.txParity).coerceIn(0, 1),
+        txParity = (this[Keys.txParity] ?: defaults.txParity).coerceIn(TX_PARITY_EVEN, TX_PARITY_AUTO),
         holdTxFreq = this[Keys.holdTxFreq] ?: defaults.holdTxFreq,
         callFirst = enumOr(Keys.callFirst, defaults.callFirst),
         maxRetries = (this[Keys.maxRetries] ?: defaults.maxRetries).coerceIn(1, 20),
@@ -204,6 +208,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.myGrid] = myGrid
     prefs[Keys.note] = note
     prefs[Keys.band] = band
+    prefs[Keys.dialHz] = dialHz
     prefs[Keys.protocolName] = protocolName
     prefs[Keys.selectedFreqHz] = selectedFreqHz
     prefs[Keys.txParity] = txParity

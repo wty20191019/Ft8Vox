@@ -9,6 +9,9 @@ import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.SettingsRepository
+import com.example.ft8vox.data.settings.TX_PARITY_AUTO
+import com.example.ft8vox.data.settings.TX_PARITY_EVEN
+import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import com.example.ft8vox.engine.AlertTone
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.AudioEngine
@@ -68,7 +71,13 @@ data class ReceiverStatus(
     val myGrid: String = "",
     /** 当前波段（无 CAT，由用户指定，用于记录与 ADIF 导出）。 */
     val band: String = BandPlan.DEFAULT_BAND,
+    /** 当前刻度频率（Hz，已解析；0 表示未知）。 */
+    val dialHz: Long = 0L,
     // ---- 发射/QSO ----
+    /** 发射总开关：false=只接收（默认），true=允许发射；仅会话内有效，不持久化。 */
+    val txEnabled: Boolean = false,
+    /** 发射周期模式：0=偶，1=奇，2=自动（见 [txParity] 生效值）。 */
+    val txParityMode: Int = TX_PARITY_AUTO,
     /** 我方发射所在的周期：0=偶数，1=奇数。 */
     val txParity: Int = 0,
     /** 已确认发射（防误发闸门）。 */
@@ -149,6 +158,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 当前正在播放的报文是否为「一次性发射」（发完不再推进 QSO 状态机）。 */
     private var manualInFlight = false
 
+    /** 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。 */
+    private var autoParity: Int? = null
+
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
 
@@ -195,8 +207,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 myCall = s.myCall,
                 myGrid = s.myGrid,
                 band = s.band,
+                dialHz = s.resolvedDialHz,
                 selectedFreqHz = s.selectedFreqHz,
-                txParity = s.txParity,
+                txParityMode = s.txParity,
+                txParity = if (s.txParity == TX_PARITY_AUTO) {
+                    autoParity ?: nextSlotParity(
+                        AudioEngine.utcNowMs(),
+                        (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
+                        AUTO_PARITY_LEAD_MARGIN_MS,
+                    )
+                } else {
+                    s.txParity
+                },
                 holdTxFreq = s.holdTxFreq,
                 callFirst = s.callFirst,
                 callFirstArmed = if (s.callFirst == CallFirstMode.OFF) false else cur.callFirstArmed,
@@ -377,16 +399,57 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(callFirstArmed = false, status = "Call 1st 已关闭") }
     }
 
-    fun setBand(name: String) {
-        if (!BandPlan.contains(name)) return
-        _status.update { it.copy(band = name) }
-        persist { it.copy(band = name) }
+    /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
+    fun setBandFreq(name: String, hz: Long) {
+        val n = name.trim().takeIf { it.isNotEmpty() } ?: return
+        val resolved = BandPlan.resolveDialHz(n, hz)
+        _status.update { it.copy(band = n, dialHz = resolved) }
+        persist { it.copy(band = n, dialHz = resolved) }
     }
 
-    fun setTxParity(parity: Int) {
-        val v = parity.coerceIn(0, 1)
-        _status.update { it.copy(txParity = v) }
+    /** 仅切波段（沿用该波段默认频率）。 */
+    fun setBand(name: String) = setBandFreq(name, 0L)
+
+    /** 设置发射周期模式：[TX_PARITY_EVEN] / [TX_PARITY_ODD] / [TX_PARITY_AUTO]。 */
+    fun setTxParity(mode: Int) {
+        val v = mode.coerceIn(TX_PARITY_EVEN, TX_PARITY_AUTO)
+        if (v != TX_PARITY_AUTO) autoParity = null
+        val p = if (v == TX_PARITY_AUTO) lockAutoParity() else v
+        _status.update { it.copy(txParityMode = v, txParity = p) }
         persist { it.copy(txParity = v) }
+    }
+
+    /**
+     * 发射总开关（默认关 = 只接收）。
+     *
+     * 关闭：立即停发并解除周期锁定；开启：自动周期模式下按手机 UTC 时间锁定
+     * 「下一个来得及准备的时隙」，随后在下一个我方时隙发射。
+     */
+    fun setTxEnabled(enabled: Boolean) {
+        if (!enabled) {
+            autoParity = null
+            stopTransmit()
+            _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
+            return
+        }
+        val st = _status.value
+        val p = if (st.txParityMode == TX_PARITY_AUTO) lockAutoParity() else st.txParity
+        _status.update { it.copy(txEnabled = true, txParity = p, status = "发射已开启（${parityLabel(p)}）") }
+    }
+
+    /** 按手机 UTC 时间锁定自动周期：下一个「距起点 >= 前导余量」的时隙。 */
+    private fun lockAutoParity(): Int {
+        val st = _status.value
+        val now = AudioEngine.utcNowMs()
+        val p = nextSlotParity(now, st.slotMs.toLong(), txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS)
+        autoParity = p
+        return p
+    }
+
+    /** 自动周期模式下重新锁定（进入新 QSO / 一次性发射前调用）。 */
+    private fun relockAutoParityIfNeeded() {
+        if (_status.value.txParityMode != TX_PARITY_AUTO) return
+        _status.update { it.copy(txParity = lockAutoParity()) }
     }
 
     fun clearMessages() {
@@ -458,6 +521,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 status = "已停止",
                 msToNextSlot = 0,
                 slotProgress = 0f,
+                txEnabled = false,
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
@@ -481,9 +545,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
         }
+        if (!_status.value.txEnabled) {
+            _status.update { it.copy(status = "请先打开「发射」开关") }
+            return
+        }
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
+        relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         val p = qsoEngine.startCq()
@@ -494,6 +563,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun answer(call: String, grid: String?, theirDf: Int? = null) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (!_status.value.txEnabled) {
+            _status.update { it.copy(status = "请先打开「发射」开关") }
             return
         }
         // 未锁定时把 TX 跟到对方的 DF（点谁打谁）
@@ -508,6 +581,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
+        relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         val p = qsoEngine.answer(call, grid)
@@ -528,6 +602,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
         }
+        if (!_status.value.txEnabled) {
+            _status.update { it.copy(status = "请先打开「发射」开关") }
+            return
+        }
         if (_status.value.qso.active) {
             _status.update { it.copy(status = "QSO 进行中，暂不逐条发送") }
             return
@@ -537,6 +615,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
+        relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         _status.update {
@@ -552,6 +631,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun sendNow(text: String) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (!_status.value.txEnabled) {
+            _status.update { it.copy(status = "请先打开「发射」开关") }
             return
         }
         val trimmed = text.trim()
@@ -582,6 +665,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         txJob?.cancel()
         txJob = null
         AudioEngine.stopPlayback()
+        autoParity = null
         val p = qsoEngine.stop()
         _status.update {
             it.copy(
@@ -727,6 +811,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
     private fun applyQsoProgress(p: QsoProgress) {
         val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+        if (finished) autoParity = null
         _status.update {
             it.copy(
                 qso = p,
@@ -744,7 +829,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 myGrid = st.myGrid.ifEmpty { null },
                 utcMs = entry.utcMs,
                 band = st.band,
-                freqHz = BandPlan.dialHz(st.band),
+                freqHz = st.dialHz,
                 mode = st.protocol.name,
                 reportSent = entry.reportSent,
                 reportReceived = entry.reportReceived,
@@ -761,6 +846,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** Call 1st：从本时隙解码中挑一个 CQ 自动应答（需已武装）。 */
     private fun autoCallFirst(batch: List<DecodeResult>) {
         val st = _status.value
+        if (!st.txEnabled) return
         val cand = CallFirstSelector.pick(
             messages = batch,
             mode = st.callFirst,
@@ -768,6 +854,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             worked = _worked.value,
             myCall = st.myCall,
         ) ?: return
+        relockAutoParityIfNeeded()
         if (!armPlayback()) return
 
         lastTxSlotIndex = -1L
@@ -826,8 +913,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        val st = _status.value
-        if (!st.txArmed || !st.running) return
+        var st = _status.value
+        if (!st.txEnabled || !st.txArmed || !st.running) return
+        if (st.txParityMode == TX_PARITY_AUTO && autoParity == null) {
+            relockAutoParityIfNeeded()
+            st = _status.value
+        }
         if (txJob?.isActive == true) return
         val text = st.manualTxText ?: st.qso.txText ?: return
         val slotMs = st.slotMs.toLong()
@@ -1015,6 +1106,26 @@ internal fun planTx(nowMs: Long, slotMs: Long, txParity: Int, preambleMs: Long):
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
 internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
+
+/** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
+internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
+
+/**
+ * 自动周期：按手机 UTC 时间取「下一个距起点 >= [leadMs] 的时隙」的奇偶（0=偶，1=奇）。
+ *
+ * 若当前时隙剩余时间不足以准备前导，则跳到再下一个时隙（即「再下一个时隙发射」）。
+ */
+internal fun nextSlotParity(nowMs: Long, slotMs: Long, leadMs: Long): Int {
+    if (slotMs <= 0) return TX_PARITY_EVEN
+    val now = nowMs.coerceAtLeast(0L)
+    var idx = now / slotMs + 1
+    if (idx * slotMs - now < leadMs) idx += 1
+    return (idx % 2L).toInt()
+}
+
+/** 周期文案（用于状态提示）。 */
+internal fun parityLabel(parity: Int): String =
+    if (parity == TX_PARITY_ODD) "奇数周期" else "偶数周期"
 
 /**
  * 「含我呼号哔声」判定（纯函数，便于单测，U7d）。

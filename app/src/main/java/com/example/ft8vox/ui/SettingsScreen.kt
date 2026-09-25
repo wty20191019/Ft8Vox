@@ -46,12 +46,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
 import com.example.ft8vox.data.settings.SampleRatePref
+import com.example.ft8vox.data.settings.TX_PARITY_AUTO
+import com.example.ft8vox.data.settings.TX_PARITY_EVEN
+import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
@@ -85,6 +87,7 @@ fun SettingsScreen(
 
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var bandDialog by remember { mutableStateOf(false) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -137,13 +140,12 @@ fun SettingsScreen(
                 isError = gridError,
             )
             PrefDivider()
-            PrefDropdown(
-                title = "当前波段",
-                subtitle = "无 CAT，需人工指定",
-                options = BandPlan.bands,
-                selected = BandPlan.bands.firstOrNull { it.name == app.band } ?: BandPlan.bands.first(),
-                onSelect = { b -> settings.update { it.copy(band = b.name) } },
-                label = { it.name },
+            PrefAction(
+                title = "波段与频率",
+                subtitle = "无 CAT，需人工指定；当前：${app.band} · " +
+                    String.format(java.util.Locale.US, "%.4f MHz", app.resolvedDialHz / 1_000_000.0),
+                buttonLabel = "选择",
+                onClick = { bandDialog = true },
             )
             PrefDivider()
             PrefText(
@@ -388,11 +390,17 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "默认发射周期",
-                subtitle = "操作页可临时切换；此处作为默认值。",
-                options = listOf(0, 1),
+                subtitle = "自动：按手机 UTC 时间选下一个来得及的时隙；操作页可临时切换。",
+                options = listOf(TX_PARITY_EVEN, TX_PARITY_ODD, TX_PARITY_AUTO),
                 selected = app.txParity,
                 onSelect = { v -> settings.update { s -> s.copy(txParity = v) } },
-                label = { if (it == 0) "偶数" else "奇数" },
+                label = {
+                    when (it) {
+                        TX_PARITY_EVEN -> "偶数"
+                        TX_PARITY_ODD -> "奇数"
+                        else -> "自动"
+                    }
+                },
             )
             PrefDivider()
             PrefChoice(
@@ -628,6 +636,18 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(12.dp))
+    }
+
+    if (bandDialog) {
+        BandFreqDialog(
+            currentBand = app.band,
+            currentHz = app.resolvedDialHz,
+            onConfirm = { name, hz ->
+                bandDialog = false
+                settings.update { it.copy(band = name, dialHz = hz) }
+            },
+            onDismiss = { bandDialog = false },
+        )
     }
 
     if (confirmClear) {

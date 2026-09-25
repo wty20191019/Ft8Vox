@@ -288,6 +288,7 @@ fun OperateScreen(
             onSendOnce = { viewModel.sendOnce(it) },
             onStopTx = { viewModel.stopTransmit() },
             onParityChange = { viewModel.setTxParity(it) },
+            onTxEnabledChange = { viewModel.setTxEnabled(it) },
             onHoldTxChange = { viewModel.setHoldTxFreq(it) },
             onSetCallFirst = { viewModel.setCallFirst(it) },
             onArmCallFirst = {
@@ -340,10 +341,20 @@ fun OperateScreen(
             title = { Text("启用 Call 1st") },
             text = {
                 Text(
-                    "将按「${status.callFirst.label}」自动应答满足条件的 CQ。\n" +
-                        "呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜周期：" +
-                        "${if (status.txParity == 0) "偶数" else "奇数"}\n" +
-                        "一次 QSO 结束后会自动停止，请确认电台已就绪。",
+                    buildString {
+                        append("将按「${status.callFirst.label}」自动应答满足条件的 CQ。\n")
+                        append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜周期：")
+                        append(
+                            when (status.txParityMode) {
+                                com.example.ft8vox.data.settings.TX_PARITY_EVEN -> "偶数"
+                                com.example.ft8vox.data.settings.TX_PARITY_ODD -> "奇数"
+                                else -> "自动"
+                            },
+                        )
+                        append('\n')
+                        if (!status.txEnabled) append("注意：发射总开关当前为「关」，需先打开。\n")
+                        append("一次 QSO 结束后会自动停止，请确认电台已就绪。")
+                    },
                 )
             },
             confirmButton = {

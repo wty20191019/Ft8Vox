@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.CallFirstMode
+import com.example.ft8vox.data.settings.TX_PARITY_AUTO
+import com.example.ft8vox.data.settings.TX_PARITY_EVEN
+import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
@@ -78,6 +82,7 @@ fun TxDrawer(
     onSendOnce: (String) -> Unit,
     onStopTx: () -> Unit,
     onParityChange: (Int) -> Unit,
+    onTxEnabledChange: (Boolean) -> Unit,
     onHoldTxChange: (Boolean) -> Unit,
     onSetCallFirst: (CallFirstMode) -> Unit,
     onArmCallFirst: () -> Unit,
@@ -167,6 +172,13 @@ fun TxDrawer(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (!status.txEnabled) {
+                Text(
+                    "只接收",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (status.txArmed) {
                 Text(
                     if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
@@ -185,7 +197,8 @@ fun TxDrawer(
         } else {
             Button(
                 onClick = ::primarySend,
-                enabled = status.myCall.isNotEmpty() &&
+                enabled = status.txEnabled &&
+                    status.myCall.isNotEmpty() &&
                     (composeText.isNotBlank() || settings.txQueue.isNotEmpty()),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
@@ -204,6 +217,24 @@ fun TxDrawer(
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // 0) 发射总开关（默认关 = 只接收）
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("发射总开关", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (status.txEnabled) "开：允许发射（${parityText(status)}）" else "关：只接收（默认）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (status.txEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = status.txEnabled, onCheckedChange = onTxEnabledChange)
+                }
+                HorizontalDivider()
+
                 // 1) 目标信息
                 Text("目标", style = MaterialTheme.typography.titleSmall)
                 Row(
@@ -340,7 +371,8 @@ fun TxDrawer(
                     enabled = if (status.txArmed) {
                         true
                     } else {
-                        status.myCall.isNotEmpty() &&
+                        status.txEnabled &&
+                            status.myCall.isNotEmpty() &&
                             (composeText.isNotBlank() || settings.txQueue.isNotEmpty())
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -381,8 +413,11 @@ fun TxDrawer(
                     ) { Text("停止发射", style = MaterialTheme.typography.labelMedium) }
                 }
                 Text(
-                    if (canSendNow) "当前为我方周期且剩余 >2.5s：点发送将立即发射"
-                    else "非我方周期或剩余不足：点发送将排到下一个我方发射周期",
+                    when {
+                        !status.txEnabled -> "发射总开关已关：只接收。打开后点发送才会发射。"
+                        canSendNow -> "当前为我方周期且剩余 >2.5s：点发送将立即发射"
+                        else -> "非我方周期或剩余不足：点发送将排到下一个我方发射周期"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -394,16 +429,22 @@ fun TxDrawer(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("发射周期", style = MaterialTheme.typography.labelMedium)
                     FilterChip(
-                        selected = status.txParity == 0,
+                        selected = status.txParityMode == TX_PARITY_EVEN,
                         enabled = !status.txArmed,
-                        onClick = { onParityChange(0) },
+                        onClick = { onParityChange(TX_PARITY_EVEN) },
                         label = { Text("偶") },
                     )
                     FilterChip(
-                        selected = status.txParity == 1,
+                        selected = status.txParityMode == TX_PARITY_ODD,
                         enabled = !status.txArmed,
-                        onClick = { onParityChange(1) },
+                        onClick = { onParityChange(TX_PARITY_ODD) },
                         label = { Text("奇") },
+                    )
+                    FilterChip(
+                        selected = status.txParityMode == TX_PARITY_AUTO,
+                        enabled = !status.txArmed,
+                        onClick = { onParityChange(TX_PARITY_AUTO) },
+                        label = { Text("自动") },
                     )
                     FilterChip(
                         selected = status.holdTxFreq,
@@ -411,6 +452,16 @@ fun TxDrawer(
                         label = { Text("Hold Tx") },
                     )
                 }
+                Text(
+                    if (status.txParityMode == TX_PARITY_AUTO) {
+                        "自动：按手机 UTC 时间取下一个来得及的时隙，当前为" +
+                            "${if (status.txParity == 0) "偶" else "奇"}周期"
+                    } else {
+                        "固定：始终在${if (status.txParityMode == TX_PARITY_EVEN) "偶" else "奇"}数周期发射"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Call 1st", style = MaterialTheme.typography.labelMedium)
                     for (m in CallFirstMode.entries) {
@@ -446,6 +497,13 @@ fun TxDrawer(
             onDismiss = { editingMacro = null },
         )
     }
+}
+
+/** 发射周期文案（含自动模式的实际锁定值）。 */
+private fun parityText(status: ReceiverStatus): String = when (status.txParityMode) {
+    TX_PARITY_EVEN -> "偶数周期"
+    TX_PARITY_ODD -> "奇数周期"
+    else -> "自动 · ${if (status.txParity == 0) "偶" else "奇"}周期"
 }
 
 /** 消息类型大按钮（支持长按编辑宏的复用样式）。 */

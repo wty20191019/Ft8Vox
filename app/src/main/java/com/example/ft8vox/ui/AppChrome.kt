@@ -1,6 +1,7 @@
 package com.example.ft8vox.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,22 +9,29 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -86,14 +94,15 @@ fun Ft8VoxTopBar(
     status: ReceiverStatus,
     appSettings: AppSettings,
     nowMs: Long,
-    onBand: (String) -> Unit,
+    onBandFreq: (String, Long) -> Unit,
     onProtocol: (Protocol) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var audioOpen by remember { mutableStateOf(false) }
-    val dialHz = BandPlan.dialHz(status.band)
+    var bandDialogOpen by remember { mutableStateOf(false) }
+    val dialHz = status.dialHz.takeIf { it > 0 } ?: BandPlan.resolveDialHz(status.band, 0L)
     val dialMhz = if (dialHz > 0) {
         String.format(Locale.US, "%.6f", dialHz / 1_000_000.0)
     } else {
@@ -114,21 +123,18 @@ fun Ft8VoxTopBar(
                     Icon(Icons.Filled.Menu, contentDescription = "菜单")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    Text(
-                        "波段",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (status.band.isNotEmpty()) "波段与频率　${status.band} · $dialMhz MHz"
+                                else "波段与频率"
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            bandDialogOpen = true
+                        },
                     )
-                    for (b in BandPlan.bands) {
-                        DropdownMenuItem(
-                            text = { Text(if (b.name == status.band) "● ${b.name}" else b.name) },
-                            onClick = {
-                                menuOpen = false
-                                onBand(b.name)
-                            },
-                        )
-                    }
                     HorizontalDivider()
                     Text(
                         "模式",
@@ -184,6 +190,127 @@ fun Ft8VoxTopBar(
             }
         }
     }
+
+    if (bandDialogOpen) {
+        BandFreqDialog(
+            currentBand = status.band,
+            currentHz = dialHz,
+            onConfirm = { name, hz ->
+                bandDialogOpen = false
+                onBandFreq(name, hz)
+            },
+            onDismiss = { bandDialogOpen = false },
+        )
+    }
+}
+
+/**
+ * 「波段与频率」弹窗：列出各波段及常用 FT8/FT4 刻度频率，并支持自定义波段名与频率。
+ *
+ * [currentBand]/[currentHz] 用于标记当前项；[onConfirm] 回传最终（波段名, 频率 Hz）。
+ */
+@Composable
+fun BandFreqDialog(
+    currentBand: String,
+    currentHz: Long,
+    onConfirm: (String, Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var customOpen by remember { mutableStateOf(false) }
+    var customName by remember {
+        mutableStateOf(if (BandPlan.contains(currentBand)) "" else currentBand)
+    }
+    var customMhz by remember {
+        mutableStateOf(if (currentHz > 0) String.format(Locale.US, "%.4f", currentHz / 1_000_000.0) else "")
+    }
+    val customHz = BandPlan.parseFreqMhz(customMhz)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("波段与频率") },
+        text = {
+            Column {
+                if (!customOpen) {
+                    Text(
+                        "选择波段与常用刻度频率（无 CAT，仅用于记录与 ADIF）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                        for (b in BandPlan.bands) {
+                            item(key = "band_${b.name}") {
+                                Text(
+                                    b.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                                )
+                            }
+                            items(b.freqs, key = { "f_${b.name}_${it.hz}" }) { f ->
+                                val selected = b.name == currentBand && f.hz == currentHz
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onConfirm(b.name, f.hz) }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        if (selected) "● ${f.display}" else "　${f.display}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                    TextButton(onClick = { customOpen = true }) { Text("自定义波段与频率…") }
+                } else {
+                    Text(
+                        "自定义：填波段名与刻度频率（MHz，如 14.074 或 7.0475）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = customName,
+                        onValueChange = { customName = it },
+                        label = { Text("波段名（如 20m / 试验）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    )
+                    OutlinedTextField(
+                        value = customMhz,
+                        onValueChange = { customMhz = it },
+                        label = { Text("频率 MHz（如 14.074）") },
+                        singleLine = true,
+                        isError = customMhz.isNotBlank() && customHz == null,
+                        supportingText = {
+                            if (customMhz.isNotBlank() && customHz == null) Text("请输入有效的正数频率")
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    )
+                    TextButton(onClick = { customOpen = false }) { Text("返回列表") }
+                }
+            }
+        },
+        confirmButton = {
+            if (customOpen) {
+                Button(
+                    onClick = {
+                        val hz = customHz ?: return@Button
+                        val name = customName.trim().ifEmpty { "自定义" }
+                        onConfirm(name, hz)
+                    },
+                    enabled = customHz != null,
+                ) { Text("确定") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+        },
+    )
 }
 
 /** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与触发配置）。 */
