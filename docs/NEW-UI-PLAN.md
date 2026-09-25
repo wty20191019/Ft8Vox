@@ -603,6 +603,11 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   `produceState` 的 **`by` 委托**，`onDispose` 读的是**当前值**而非 effect 创建时的值；key 从
   `null → state` 变化时旧 effect 的 `onDispose` 会把**刚建好的解码器提前 recycle**，导致
   `decodeRegion called on recycled region decoder`、底图全黑。改为 `.value` + 局部 `val` 捕获后正常。
+- **踩坑 2（真机暴露）**：LRU 上限（原 16）小于某些缩放下的可见块数（最多约 24）时，**一次 `ensure`
+  内先解码的块会被后解码的挤掉**，而 `needed` 不变又不会触发重解码 → 视口**顶部永久缺一块底图**
+  （真机截图：上半屏只有标记、没有影像）。修法：`ensure` 把「当前视口需要的块」**钉住（pinned）**，
+  淘汰只挑非 pinned 的 LRU，故缓存上限变为 `max(CACHE_LIMIT=24, 当前可见块数)`；命中缓存时 `touch`
+  更新 LRU 顺序。
 - **体积**：APK 由约 13.5 MB → **18.2 MB**（asset 4,977,579 B，PNG/JPEG 默认未压缩存储）。
 - **测试**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM **262 例 / 29 suite** 全过
   （`MapProjectionTest` 重写为 Mercator 断言，+4 项：极区钳制、墨卡托往返、与等距圆柱的差异、最大缩放覆盖底图）。

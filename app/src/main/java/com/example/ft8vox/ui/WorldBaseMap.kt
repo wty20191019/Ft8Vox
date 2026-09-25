@@ -42,8 +42,8 @@ internal object WorldBaseMap {
     /** 单个解码块的边长（按层级折算后的像素）。 */
     const val BLOCK = 512
 
-    /** 解码块缓存上限（保障内存有界，ARGB_8888 下约 16 MB）。 */
-    const val CACHE_LIMIT = 16
+    /** 解码块缓存上限（保障内存有界）。当前视口需要的块会被「钉住」不淘汰，见 [WorldBaseMapState.evict]。 */
+    const val CACHE_LIMIT = 24
 
     /** 打开底图解码器（失败返回 null，UI 回退纯色底图）。 */
     fun open(context: Context): BitmapRegionDecoder? = runCatching {
@@ -99,16 +99,39 @@ internal class WorldBaseMapState(private val decoder: BitmapRegionDecoder) {
     /** 已解码好的块（未就绪返回 null）。读取该 State 会随解码完成自动触发重绘。 */
     fun bitmap(block: MapBlock): ImageBitmap? = bitmaps[block.key]
 
-    /** 确保 [blocks] 都已解码（缺的按序解码，超出 [WorldBaseMap.CACHE_LIMIT] 的按 LRU 淘汰）。 */
+    /** 确保 [blocks] 都已解码（缺的按序解码；淘汰时**不淘汰** [blocks] 内的块）。 */
     suspend fun ensure(blocks: List<MapBlock>) {
+        val pinned = HashSet<Long>(blocks.size * 2)
+        for (b in blocks) pinned += b.key
         for (b in blocks) {
-            if (bitmaps.containsKey(b.key)) continue
+            if (bitmaps.containsKey(b.key)) {
+                touch(b.key)
+                continue
+            }
             val img = withContext(Dispatchers.Default) { decode(b) } ?: continue
             bitmaps[b.key] = img
             order.addLast(b.key)
-            while (order.size > WorldBaseMap.CACHE_LIMIT) {
-                bitmaps.remove(order.removeFirst())
-            }
+            evict(pinned)
+        }
+    }
+
+    private fun touch(key: Long) {
+        if (order.remove(key)) order.addLast(key)
+    }
+
+    /**
+     * LRU 淘汰，但**当前视口需要的块（[pinned]）永不淘汰**。
+     *
+     * 否则会出现这样一个 bug：一次 [ensure] 要解码的块数超过上限时，先解码的块会被后解码的挤掉，
+     * 而 `needed` 不变又不会触发重新解码 → 视口顶部永久缺一块底图（真机截图的现象）。
+     */
+    private fun evict(pinned: Set<Long>) {
+        val it = order.iterator()
+        while (order.size > WorldBaseMap.CACHE_LIMIT && it.hasNext()) {
+            val key = it.next()
+            if (key in pinned) continue
+            it.remove()
+            bitmaps.remove(key)
         }
     }
 
