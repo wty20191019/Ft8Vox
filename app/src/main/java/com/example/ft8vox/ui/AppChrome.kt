@@ -114,10 +114,15 @@ fun Ft8VoxTopBar(
         "--.------"
     }
 
-    // 发射时隙指示：**只在我方发射时隙显示**（接收时隙不显示）——
-    // 追加在「MHz · 协议」之后，形如「· 偶时隙 发射中 CQ DX0ABC」：
-    //   发射中 = 红色，待发/仅时隙 = 强调蓝；文本优先取引擎里待发的报文，发射中则回退到「刚发出的那条」。
+    // 时隙指示（顶栏第二行）：用 0/1 时隙号，不再用「奇/偶」——
+    //   接收时隙 → `· RX：1`；我方发射时隙 → `· TX：0 待发/发射中 <报文>`。
+    //   报文只在**我方发射时隙**显示（接收时隙不显示报文）；TX 段用主题色，发射中红色。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
+    val slotTag: String? = when {
+        !status.running -> null
+        inTxSlot -> "TX：${status.txParity}"
+        else -> "RX：${status.slotParity}"
+    }
     val pendingTxText = status.manualTxText?.takeIf { it.isNotBlank() }
         ?: status.qso.txText?.takeIf { it.isNotBlank() }
     val txText = if (status.txing) {
@@ -125,7 +130,7 @@ fun Ft8VoxTopBar(
     } else {
         pendingTxText
     }
-    // 发射中红色、待发/仅时隙用强调蓝（在组合体里取色，`buildAnnotatedString` 内不能调 @Composable）
+    // 发射中红色、待发用强调蓝（在组合体里取色，`buildAnnotatedString` 内不能调 @Composable）
     val txSlotColor = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.primary
 
     Surface(
@@ -200,16 +205,17 @@ fun Ft8VoxTopBar(
                 Text(
                     buildAnnotatedString {
                         append("$dialMhz MHz · ${status.protocol.name}")
-                        if (inTxSlot) {
+                        if (slotTag != null) {
                             append(" · ")
-                            withStyle(SpanStyle(color = txSlotColor)) {
-                                append(if (status.txParity == 0) "偶时隙" else "奇时隙")
-                                if (status.txing) {
-                                    append(" 发射中")
-                                } else if (txText != null) {
-                                    append(" 待发")
+                            if (inTxSlot) {
+                                withStyle(SpanStyle(color = txSlotColor)) {
+                                    append(slotTag)
+                                    if (status.txing) append(" 发射中")
+                                    else if (txText != null) append(" 待发")
+                                    txText?.let { append(" $it") }
                                 }
-                                txText?.let { append(" $it") }
+                            } else {
+                                append(slotTag)
                             }
                         }
                     },
