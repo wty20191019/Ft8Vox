@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,7 +33,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,9 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
-import com.example.ft8vox.data.settings.CallFirstMode
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
@@ -68,8 +64,6 @@ import com.example.ft8vox.qso.WorkedIndex
 import com.example.ft8vox.ui.theme.VoxAccent
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
-import com.example.ft8vox.ui.theme.VoxRxGreen
-import com.example.ft8vox.ui.theme.VoxTxRed
 import java.util.Locale
 
 /**
@@ -91,7 +85,6 @@ fun OperateScreen(
     val status by viewModel.status.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val waterfall by viewModel.waterfall.collectAsState()
-    val recentQso by viewModel.recentQso.collectAsState(initial = emptyList())
     val worked by viewModel.workedIndex.collectAsState()
 
     var permissionGranted by remember {
@@ -103,9 +96,10 @@ fun OperateScreen(
     var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
     var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
     var confirmCallFirst by remember { mutableStateOf(false) }
-    var controlExpanded by rememberSaveable { mutableStateOf(false) }
     var queryOpen by rememberSaveable { mutableStateOf(false) }
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
+    // 发射抽屉当前目标（点选解码行 / 滑呼 / 详情「呼叫」设置）
+    var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun execute(action: PendingTx) {
         when (action) {
@@ -245,11 +239,15 @@ fun OperateScreen(
                             myCall = status.myCall,
                             onClick = {
                                 viewModel.selectFrequency(row.msg.df)
+                                if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                                    targetCall = from
+                                }
                                 detailFor = row
                             },
                             onDoubleClick = { onOpenMap(from) },
                             onSwipeCall = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                                    targetCall = from
                                     pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
                                 }
                             },
@@ -262,21 +260,29 @@ fun OperateScreen(
             }
         }
 
-        // ---- §3.4 发射控制（U3 改为抽屉；此处保持折叠面板） ----
-        ControlPanel(
+        // ---- §3.4 发射控制（发射抽屉：收起 56dp / 上拉展开） ----
+        TxDrawer(
             status = status,
-            expanded = controlExpanded,
-            onToggle = { controlExpanded = !controlExpanded },
-            onParityChange = { viewModel.setTxParity(it) },
-            onNudge = { viewModel.nudgeTxFreq(it) },
-            onHoldTxChange = { viewModel.setHoldTxFreq(it) },
+            settings = settings,
+            messages = messages,
+            targetCall = targetCall,
+            onClearTarget = { targetCall = null },
             onStartCq = { pendingTx = PendingTx.Cq },
+            onAnswer = { call, grid, df -> pendingTx = PendingTx.Reply(call, grid, df) },
+            onSendNow = { viewModel.sendNow(it) },
+            onSendOnce = { viewModel.sendOnce(it) },
             onStopTx = { viewModel.stopTransmit() },
+            onParityChange = { viewModel.setTxParity(it) },
+            onHoldTxChange = { viewModel.setHoldTxFreq(it) },
             onSetCallFirst = { viewModel.setCallFirst(it) },
-            onRequestArmCallFirst = {
+            onArmCallFirst = {
                 if (status.callFirstArmed) viewModel.disarmCallFirst() else confirmCallFirst = true
             },
-            recentQso = recentQso,
+            onMacrosChange = { viewModel.setMacros(it) },
+            onEnqueue = { viewModel.enqueueTx(it) },
+            onRemoveQueued = { viewModel.removeQueuedTx(it) },
+            onMoveQueued = { from, to -> viewModel.moveQueuedTx(from, to) },
+            onClearQueue = { viewModel.clearTxQueue() },
         )
     }
 
@@ -301,6 +307,7 @@ fun OperateScreen(
                 val from = row.parsed.from
                 detailFor = null
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                    targetCall = from
                     pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
                 }
             },
@@ -521,127 +528,4 @@ fun decodeEmptyHint(
     !status.running -> "未开始接收：点水位图左上角「▶」开始"
     decodedTotal == 0 -> "等待解码…\n（未接天线 / 无音频输入时不会出现解码）"
     else -> "没有符合当前筛选条件的解码消息"
-}
-
-/** 折叠式 QSO 控制面板：折叠态一行摘要，展开态含频率微调、周期、Call 1st 与最近通联。 */
-@Composable
-private fun ControlPanel(
-    status: ReceiverStatus,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onParityChange: (Int) -> Unit,
-    onNudge: (Int) -> Unit,
-    onHoldTxChange: (Boolean) -> Unit,
-    onStartCq: () -> Unit,
-    onStopTx: () -> Unit,
-    onSetCallFirst: (CallFirstMode) -> Unit,
-    onRequestArmCallFirst: () -> Unit,
-    recentQso: List<com.example.ft8vox.data.log.QsoEntity>,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                if (status.txArmed) {
-                    "发射 ${status.qso.txText ?: status.manualTxText ?: "--"}"
-                } else {
-                    "QSO ${status.qso.description}"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = if (status.txing) VoxTxRed else if (status.running) VoxRxGreen else VoxOnSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "Call 1st ${status.callFirst.label}${if (status.callFirstArmed) "●" else ""}",
-                style = MaterialTheme.typography.labelSmall,
-            )
-            TextButton(onClick = onToggle) { Text(if (expanded) "收起" else "展开") }
-        }
-        if (!expanded) return@Column
-
-        HorizontalDivider(Modifier.padding(vertical = 2.dp))
-        QsoStatusLine(status)
-
-        // 发射频率微调 + Hold Tx
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            for (d in intArrayOf(-100, -10, 10, 100)) {
-                OutlinedButton(
-                    onClick = { onNudge(d) },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (d > 0) "+$d" else "$d", style = MaterialTheme.typography.labelSmall)
-                }
-            }
-            FilterChip(
-                selected = status.holdTxFreq,
-                onClick = { onHoldTxChange(!status.holdTxFreq) },
-                label = { Text("Hold Tx", style = MaterialTheme.typography.labelSmall) },
-            )
-        }
-
-        TxControlRow(
-            txParity = status.txParity,
-            armed = status.txArmed,
-            canOperate = status.myCall.isNotEmpty(),
-            onParityChange = onParityChange,
-            onStartCq = onStartCq,
-            onStopTx = onStopTx,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Call 1st", style = MaterialTheme.typography.labelMedium)
-            for (m in CallFirstMode.entries) {
-                FilterChip(
-                    selected = status.callFirst == m,
-                    onClick = { onSetCallFirst(m) },
-                    label = { Text(m.label, style = MaterialTheme.typography.labelSmall) },
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            if (status.callFirstArmed) {
-                OutlinedButton(onClick = onRequestArmCallFirst) { Text("关闭") }
-            } else {
-                OutlinedButton(
-                    onClick = onRequestArmCallFirst,
-                    enabled = status.callFirst != CallFirstMode.OFF,
-                ) { Text("启用") }
-            }
-        }
-        if (status.manualTxText != null) {
-            Text(
-                "待发一次性：${status.manualTxText}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
-        if (recentQso.isNotEmpty()) {
-            Text("最近通联", style = MaterialTheme.typography.titleSmall)
-            for (r in recentQso) {
-                Text(
-                    String.format(
-                        Locale.US,
-                        "%s  %s%s  收 %s / 发 %s  %s",
-                        QsoTime.isoDateTime(r.utcMs),
-                        r.theirCall,
-                        r.theirGrid?.let { " ($it)" } ?: "",
-                        r.reportReceived?.toString() ?: "--",
-                        r.reportSent?.toString() ?: "--",
-                        r.band,
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
-        }
-    }
 }

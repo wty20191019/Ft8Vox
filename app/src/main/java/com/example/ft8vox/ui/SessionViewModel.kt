@@ -17,6 +17,7 @@ import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.CallFirstSelector
+import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.MessageParser
@@ -24,6 +25,7 @@ import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
+import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
 import com.example.ft8vox.data.settings.CallFirstMode
 import kotlinx.coroutines.Dispatchers
@@ -254,6 +256,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(callFilter = value) }
     }
 
+    /** 保存宏模板（最多 8 个；全空则回落默认）。 */
+    fun setMacros(list: List<String>) {
+        val cleaned = list.map { it.trim() }.filter { it.isNotEmpty() }.take(8)
+        persist { it.copy(macros = cleaned.ifEmpty { DEFAULT_MACROS }) }
+    }
+
+    fun enqueueTx(text: String) {
+        persist { it.copy(txQueue = TxQueue.enqueue(it.txQueue, text)) }
+    }
+
+    fun removeQueuedTx(index: Int) {
+        persist { it.copy(txQueue = TxQueue.removeAt(it.txQueue, index)) }
+    }
+
+    fun moveQueuedTx(from: Int, to: Int) {
+        persist { it.copy(txQueue = TxQueue.move(it.txQueue, from, to)) }
+    }
+
+    fun clearTxQueue() {
+        persist { it.copy(txQueue = emptyList()) }
+    }
+
     /** 武装 Call 1st（UI 需先弹防误发确认）。 */
     fun armCallFirst() {
         val mode = _status.value.callFirst
@@ -428,6 +452,38 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         lastTxSlotIndex = -1L
         _status.update {
             it.copy(manualTxText = trimmed, txArmed = true, status = "待发（一次性）：$trimmed")
+        }
+    }
+
+    /**
+     * 立即发射一条报文（**不按时隙对齐**，用于发射抽屉的「立即发」）。
+     *
+     * 正式按时隙发射请用 [sendOnce]（排到下一个我方周期）。
+     */
+    fun sendNow(text: String) {
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        if (!_status.value.running) start()
+        if (!_status.value.running) return
+        if (!armPlayback()) return
+
+        txJob?.cancel()
+        txJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val st = _status.value
+                val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
+                val written = AudioEngine.play(pcm)
+                _status.update { it.copy(status = "已发射「$trimmed」（$written 帧）") }
+            } catch (e: Exception) {
+                _status.update { it.copy(status = "发射失败: ${e.message}") }
+            } finally {
+                _status.update { it.copy(txing = false) }
+            }
         }
     }
 

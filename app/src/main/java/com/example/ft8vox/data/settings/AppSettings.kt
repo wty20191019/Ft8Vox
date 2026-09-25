@@ -3,6 +3,7 @@ package com.example.ft8vox.data.settings
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterTag
 
 /** Call 1st 自动应答策略。 */
@@ -131,6 +132,12 @@ data class AppSettings(
     val callFilter: String = "",
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
+
+    // ---- 发射抽屉（new_ui §3.4） ----
+    /** 发送队列（报文原文，有序）。 */
+    val txQueue: List<String> = emptyList(),
+    /** 宏模板（4×2）。 */
+    val macros: List<String> = DEFAULT_MACROS,
 
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,

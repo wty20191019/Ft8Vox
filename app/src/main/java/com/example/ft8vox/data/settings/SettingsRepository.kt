@@ -65,6 +65,8 @@ private object Keys {
     val filterTags = stringSetPreferencesKey("filter_tags")
     val callFilter = stringPreferencesKey("call_filter")
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
+    val txQueue = stringPreferencesKey("tx_queue")
+    val macros = stringPreferencesKey("macros")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
     val decodePreset = stringPreferencesKey("decode_preset")
@@ -95,6 +97,9 @@ private fun readFilterTags(prefs: Preferences, defaults: Set<DecodeFilterTag>): 
     }
 }
 
+private fun splitLines(s: String?): List<String>? =
+    s?.split('\n')?.map { it.trim() }?.filter { it.isNotEmpty() }
+
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
     return AppSettings(
@@ -114,6 +119,8 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
             ?.toSet()
             ?: defaults.ignoredCalls,
+        txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
+        macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
@@ -144,6 +151,8 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
     prefs[Keys.ignoredCalls] = ignoredCalls
+    prefs[Keys.txQueue] = txQueue.joinToString("\n")
+    prefs[Keys.macros] = macros.joinToString("\n")
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodePreset] = decodePreset.name
