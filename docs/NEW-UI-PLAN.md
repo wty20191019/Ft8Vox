@@ -551,5 +551,32 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   （协议切换会重建引擎，模拟器能直接看到顶栏变 `· FT4` 与状态提示）。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM 258 例 / 29 suite 全过。
 
+### 补记：修复「运行中切模式直接崩溃」（native use-after-free）
+
+用户反馈上一节做完后「切换直接崩溃」。
+
+- **取证**：真机 crash buffer 显示 8 次 tombstone（今天 20:32–23:37，含旧包 uid 10347 与新包
+  uid 10352，故**不是本次改动引入**），backtrace 一致：
+  `SIGSEGV in libaudioclient AudioTrack::write` ← `libaaudio AudioStreamTrack::write` ←
+  `libft8.so nativePlayTx` ← `AudioEngine.playTx` ← `SessionViewModel.transmit` ← `txTick`。
+- **根因**：`playTx()` 是阻塞 JNI，长时间卡在 `AAudioStream_write`；此时另一线程（`restartForProtocol`
+  的 `stop()`、点「停止发射」、Activity 销毁 `onCleared`）执行 `AAudioStream_close` / `free(引擎)`，
+  写入线程便踩到已释放的 AudioTrack 共享缓冲。`txJob.cancel()` 打断不了已开始的阻塞写。
+- **改法（native，`audio_engine.c`）**：新增 `tx_mutex` / `tx_cond` / `tx_active` / `out_gen`。
+  `write_blocking` 只在持锁时读 `out_stream`，每次写前校验 `out_gen`（单次写超时改 500 ms）；
+  `tx_stop_and_close()` 关流前先 `out_gen+1`；`nativeStartPlayback` 开流也 `out_gen+1` 并在锁内挂流；
+  `nativePlayTx`/`nativePlayTone` 由 `tx_enter`/`tx_leave` 包裹；`nativeDestroy` 先自保
+  `nativeStopCapture` + 关流，再 `tx_wait_idle(3000)`，**超时则泄漏引擎不 free**（宁漏不崩）。
+- **改法（Kotlin）**：`AudioEngine.handle` 加 `@Volatile`，`release()` 先清零句柄再销毁；
+  `SessionViewModel` 新增 `engineGen`（`start()` 时 +1）、`stopPollingAndJoin()`（`stop()`/`onCleared()`
+  `cancel()` 后 `runBlocking { join() }`，因轮询也走 JNI 但不在 native 播放保护内）、
+  `transmit(..., genAtPlan)` / `transmitTest()` 的**代次守卫**（跨引擎迟到发射直接丢弃，
+  不置 `txing` 避免误推进 QSO 状态机）；`Ft8Engine.encode` 移出原 try 单独 catch。
+- **UI 文案**：`restartForProtocol()` 的提示区分是否中止了本次发射
+  （「已切换到 FTx（重建引擎，已中止本次发射）」）。
+- **文档**：新增 `JNI-CONTRACT.md` §6.4（播放/关流的线程安全约定）；`REGRESSION.md` 新增
+  **N 组**（发射中切模式 / 停止发射 / 离开 App 不崩）与模拟器可预演项。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（三 ABI），JVM 258 例 / 29 suite 全过；
+  真机项见 `REGRESSION.md` N 组。
 
 

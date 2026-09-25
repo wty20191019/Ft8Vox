@@ -226,6 +226,30 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   本偏移只在时隙内部平移起点（`|offset| < 7.5 s` 时不跨时隙）。热生效；改在时隙中途时当前窗口会
   错位到下一个网格点才稳定（属预期）。
 
+### 6.4 播放/关流的线程安全（防 use-after-free，真机崩溃修复）
+
+`playTx()` / `playTone()` 是**阻塞写**，`write_blocking()` 会长时间卡在 `AAudioStream_write`。
+而 `stopPlayback()` / `nativeDestroy()`（换协议重建引擎、点「停止发射」、Activity 销毁）随时可能
+在另一线程执行 —— 若直接 `AAudioStream_close` / `free(引擎)`，写入线程就会踩到已释放的
+AudioTrack 共享缓冲（真机 tombstone：`libaudioclient AudioTrack::write` ← `libaaudio
+AudioStreamTrack::write` ← `nativePlayTx` ← `AudioEngine.playTx`）。约定：
+
+- **只在持有 `tx_mutex` 时碰 `out_stream`**：写入线程每次 `AAudioStream_write` 前后都持锁；
+  单次写入超时 0.5 s，保证关流方最多等这么久就能拿到锁。
+- **`out_gen` 代次**：`nativeStopPlayback`/`nativeStartPlayback` 都会 +1；写入线程进入时记下代次，
+  一旦发现代次变了（或 `out_stream == NULL`）立即返回**已写入帧数**（主动中止不算失败）。
+- **`tx_active` 播放调用计数**：`nativePlayTx`/`nativePlay`/`nativePlayTone` 进入即 `tx_enter()`、
+  退出前 `tx_leave()`；`nativeDestroy` 先 `tx_stop_and_close()` 再 `tx_wait_idle(3000ms)`，
+  **只有确认没有播放调用在用引擎才会 `free`**，否则宁可泄漏这点内存也不崩（日志会打
+  `engine leaked to avoid use-after-free`）。
+- **Kotlin 侧三件事**：
+  1. `AudioEngine.handle` 是 `@Volatile`；`release()` **先清零句柄再 `nativeDestroy`**，
+     销毁期间新起的 JNI 调用只会拿到 0 而被拒绝。
+  2. 轮询（`Dispatchers.Default`）不受 native 播放保护：`SessionViewModel.stopPollingAndJoin()`
+     在 `stop()`/`onCleared()` 里 `cancel()` + `join()`，等它从 `pollDecoded()/state()` 返回后才销毁引擎。
+  3. 引擎重建会 +1 一个 `engineGen`：排好队的发射协程带着旧代次，发现自己过期就**丢弃本次发射**
+     （`txJob.cancel()` 打断不了已开始的 JNI 阻塞写），避免把旧协议波形发到新引擎上。
+
 ## 7. 调试接口
 
 | Kotlin 方法 | 职责 |
@@ -238,6 +262,9 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 - **AAudio 回调线程**：只把 PCM 写入无锁 SPSC 环形缓冲，绝不调用重 JNI、加锁或分配内存。
 - **DSP/解码线程**：从环形缓冲取数据 → 重采样 → 按块累积 waterfall → 时隙结束解码，结果进入待轮询队列。
 - **发射线程**：调用 `encode` 生成 PCM，`play()` 内部重采样后阻塞写入 AAudio 播放流。
+  - 与「关流/释放引擎」互斥，见 §6.4：`tx_enter/tx_leave` 计数 + `out_gen` 代次 + 只在持
+    `tx_mutex` 时读 `out_stream`。同一条规则保护 `playTone()`（设置页「测试音」）。
+  - Kotlin 侧：`stopPollingAndJoin()` 保证销毁引擎前轮询已退出；`engineGen` 丢弃跨引擎的迟到发射。
 - native 对象（monitor 等）与创建/使用它的线程绑定；若跨线程调用 JNI 需 `AttachCurrentThread`。
 - MVP 阶段解码结果**拉取返回**，不引入 native → Kotlin 回调。
 

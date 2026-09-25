@@ -70,6 +70,14 @@ object AudioEngine {
         System.loadLibrary("ft8")
     }
 
+    /**
+     * native 引擎句柄。
+     *
+     * 所有 JNI 调用都会读它，而换引擎（[release]/[initialize]）可能发生在「发射写入」
+     * 「轮询」等其他线程用着旧句柄时 —— 因此标记 `@Volatile`，且 [release] 会**先清零**、
+     * 再去销毁 native 引擎（见那里的注释）。
+     */
+    @Volatile
     private var handle: Long = 0L
 
     /** 创建引擎（按配置初始化 monitor 会话）。重复调用会先释放旧引擎。 */
@@ -106,13 +114,21 @@ object AudioEngine {
         }
     }
 
-    /** 释放引擎（会先停止采集与播放）。 */
+    /**
+     * 释放引擎（会先停止采集与播放）。
+     *
+     * **先把句柄清零再销毁**：销毁期间（`nativeDestroy` 会 `free` 掉引擎）新起的 JNI 调用
+     * 只会拿到 0 而被拒绝；已经在跑的调用由 native 侧保护 —— 播放写入靠
+     * `tx_enter/tx_wait_idle`（见 `audio_engine.c`），轮询靠调用方先
+     * `stopPollingAndJoin()`。
+     */
     fun release() {
-        if (handle != 0L) {
-            stopCapture()
-            stopPlayback()
-            nativeDestroy(handle)
+        val h = handle
+        if (h != 0L) {
             handle = 0L
+            nativeStopCapture(h)
+            nativeStopPlayback(h)
+            nativeDestroy(h)
         }
     }
 

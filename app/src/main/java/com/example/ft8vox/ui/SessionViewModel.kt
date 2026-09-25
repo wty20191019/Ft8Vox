@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /** 接收会话的非瀑布状态（供状态栏/控制区使用）。 */
 data class ReceiverStatus(
@@ -221,6 +222,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
     private var lastSlotOffsetMs: Int? = null
+
+    /**
+     * 引擎代次：每次重建 native 引擎（[start]）都 +1。
+     *
+     * 排程好的发射协程可能在引擎重建**之后**才真正开跑（`txJob.cancel()` 打断不了已经
+     * 开始的 JNI 阻塞写入），此时 `AudioEngine` 已指向新引擎 —— 用代次把这种「跨引擎的
+     * 迟到发射」直接丢弃，避免把旧协议的波形发到新引擎上。
+     */
+    private var engineGen = 0
 
     /** 「含我呼号哔声」提示音（U7d）。 */
     private val alertTone = AlertTone()
@@ -624,6 +634,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }
             return
         }
+        engineGen++   // 新引擎：作废所有还在路上的发射协程（见 transmit 的 genAtPlan）
 
         wfInfo = AudioEngine.waterfallInfo()
         wfPixels = IntArray(0)
@@ -657,8 +668,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         stopTransmit()
-        pollJob?.cancel()
-        pollJob = null
+        stopPollingAndJoin()
         pinnedTxParity = null
         retryCall = null
         retryLeft = 0
@@ -689,13 +699,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 的状态把总开关恢复回来（换协议本身不应该收回「能不能发」的授权）。
      */
     private fun restartForProtocol(protocol: Protocol) {
-        val txWasOn = _status.value.txEnabled
+        val cur = _status.value
+        val txWasOn = cur.txEnabled
+        val wasTxing = cur.txing
         stop()
         _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
         start()
         if (!_status.value.running) return
         if (txWasOn) setTxEnabled(true)
-        _status.update { it.copy(status = "已切换到 ${protocol.name}（重建引擎）") }
+        _status.update {
+            it.copy(
+                status = "已切换到 ${protocol.name}（重建引擎" +
+                    (if (wasTxing) "，已中止本次发射" else "") + "）",
+            )
+        }
     }
 
     // ---- 发射 / QSO ----
@@ -870,8 +887,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
         txJob?.cancel()
         val (pttMs, leadMs) = txPreambleParts()
+        val genAtPlan = engineGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (genAtPlan != engineGen) return@launch   // 期间重建过引擎：丢弃
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 _status.update { it.copy(txing = true) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
@@ -906,6 +925,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun outputDeviceId(): Int = AudioDevices.parseId(latestSettings.outputDevice)
 
     // ---- 轮询主循环 ----
+
+    /**
+     * 停止轮询并**等它真正退出** —— 销毁引擎（`AudioEngine.release()` → nativeDestroy
+     * 会 `free` 引擎）之前必须调用。
+     *
+     * 轮询跑在 `Dispatchers.Default`：`cancel()` 只是置标志位，如果它正卡在
+     * `pollDecoded()/state()` 这类 JNI 调用里，取消并不会打断它，而 native 侧的
+     * 播放保护（`tx_enter/tx_wait_idle`）**管不到轮询**。`join()` 通常立刻返回
+     * （最多个位数毫秒），代价可以接受。
+     */
+    private fun stopPollingAndJoin() {
+        val job = pollJob ?: return
+        pollJob = null
+        job.cancel()
+        runBlocking { job.join() }
+    }
 
     private fun startPolling() {
         pollJob?.cancel()
@@ -1213,8 +1248,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         lastTxSlotIndex = plan.targetSlotIndex
         manualInFlight = st.manualTxText != null
+        val genAtPlan = engineGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
-            transmit(text, plan.targetStartMs, effectivePreamble)
+            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan)
         }
     }
 
@@ -1229,16 +1265,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 本次发射的完整前导时长（ms）。 */
     private fun txPreambleMs(): Int = txPreambleParts().let { it.first + it.second }
 
-    /** 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。 */
-    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long) {
+    /**
+     * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
+     *
+     * [genAtPlan] 是排程时的引擎代次：若期间引擎被重建（例如切了协议），**直接丢弃**本次
+     * 发射 —— `txJob.cancel()` 打断不了已经开始的 JNI 阻塞写入，只能用代次判断，否则会
+     * 把上一个协议的波形写到新引擎上。
+     */
+    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long, genAtPlan: Int) {
         val st = _status.value
         val (pttMs, leadMs) = txPreambleParts()
         // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
         val eff = preambleMs.coerceAtLeast(0L)
         val effLead = minOf(leadMs.toLong(), eff).toInt()
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
+
+        if (genAtPlan != engineGen) return
+        val pcm = try {
+            Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+        } catch (e: Exception) {
+            _status.update { it.copy(status = "发射异常: ${e.message}") }
+            return
+        }
+        if (genAtPlan != engineGen) return
+
         try {
-            val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
             if (written <= 0) {
@@ -1345,7 +1396,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        pollJob?.cancel()
+        stopPollingAndJoin()
         txJob?.cancel()
         AudioEngine.stopCapture()
         AudioEngine.release()
