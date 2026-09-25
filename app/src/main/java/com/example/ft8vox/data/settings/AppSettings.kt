@@ -139,6 +139,14 @@ data class AppSettings(
     /** 宏模板（4×2）。 */
     val macros: List<String> = DEFAULT_MACROS,
 
+    // ---- 地图页（new_ui §4.4/§4.5） ----
+    /** CQ 旗帜是否显示呼号。 */
+    val mapCqFlagShowCall: Boolean = true,
+    /** CQ 旗帜是否显示信号强度。 */
+    val mapCqFlagShowSnr: Boolean = false,
+    /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
+    val mapShowLinkText: Boolean = true,
+
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,
     val sampleRate: SampleRatePref = SampleRatePref.AUTO,

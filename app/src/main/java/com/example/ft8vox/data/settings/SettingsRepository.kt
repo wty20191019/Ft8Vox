@@ -67,6 +67,9 @@ private object Keys {
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
     val txQueue = stringPreferencesKey("tx_queue")
     val macros = stringPreferencesKey("macros")
+    val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
+    val mapCqShowSnr = booleanPreferencesKey("map_cq_show_snr")
+    val mapShowLinkText = booleanPreferencesKey("map_show_link_text")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
     val decodePreset = stringPreferencesKey("decode_preset")
@@ -121,6 +124,9 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?: defaults.ignoredCalls,
         txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
         macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
+        mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
+        mapCqFlagShowSnr = this[Keys.mapCqShowSnr] ?: defaults.mapCqFlagShowSnr,
+        mapShowLinkText = this[Keys.mapShowLinkText] ?: defaults.mapShowLinkText,
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
@@ -153,6 +159,9 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.ignoredCalls] = ignoredCalls
     prefs[Keys.txQueue] = txQueue.joinToString("\n")
     prefs[Keys.macros] = macros.joinToString("\n")
+    prefs[Keys.mapCqShowCall] = mapCqFlagShowCall
+    prefs[Keys.mapCqShowSnr] = mapCqFlagShowSnr
+    prefs[Keys.mapShowLinkText] = mapShowLinkText
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodePreset] = decodePreset.name

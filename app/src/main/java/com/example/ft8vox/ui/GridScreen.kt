@@ -4,8 +4,15 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -13,19 +20,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,171 +43,170 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.data.QsoTime
-import com.example.ft8vox.data.log.QsoEntity
-import com.example.ft8vox.grid.GridGranularity
-import com.example.ft8vox.grid.GridIndex
+import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.grid.MapProjection
-import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.HighlightRole
-import com.example.ft8vox.qso.LiveSpot
-import com.example.ft8vox.qso.SpotBuilder
+import com.example.ft8vox.qso.CallMarker
+import com.example.ft8vox.qso.CqFlag
+import com.example.ft8vox.qso.GridMarker
+import com.example.ft8vox.qso.MapModel
+import com.example.ft8vox.qso.SignalLink
+import com.example.ft8vox.ui.theme.VoxAccent
+import com.example.ft8vox.ui.theme.VoxBackground
+import com.example.ft8vox.ui.theme.VoxCard
+import com.example.ft8vox.ui.theme.VoxOnSurfaceVariant
 import kotlin.math.hypot
 
+private val LegendDecoded = Color(0xFF89B4FA)
+private val LegendWorked = Color(0xFFF9E2AF)
+private val LegendConfirmed = Color(0xFFE64553)
+private val Ocean = Color(0xFF0B0B12)
+
 /**
- * 网格页：离线 Canvas 地图。
+ * 地图页（new_ui.md §4）：全屏深色底图 + 蓝/黄/红标记 + 呼号标记 + CQ 红旗 + 信号连线。
  *
- * - 历史底图：已通联/已确认网格按 [GridGranularity] 着色；
- * - 实时层：本会话解码出的台站按其网格投点，颜色=高亮分类、半径/亮度=SNR；
- * - 交互：单指拖动平移、双指缩放、点击选取台站或网格。
+ * - 蓝色 = 本会话解码（重启清空）；黄色 = 日志已通联；红色 = 日志已确认。
+ * - 呼号无网格时用前缀归属地近似坐标（[com.example.ft8vox.qso.CallLocation]）。
+ * - 右下浮控缩放 / 回我的位置；底部浮层图例、统计与显示开关。
  */
 @Composable
 fun GridScreen(
     log: LogViewModel,
     session: SessionViewModel,
+    settings: AppSettings,
+    onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
     onOpenLog: () -> Unit,
+    focusCall: String? = null,
+    focusSeq: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
 
     val entries by log.entries.collectAsState()
-    val stats by log.stats.collectAsState()
     val messages by session.messages.collectAsState()
-    val worked by session.workedIndex.collectAsState()
     val status by session.status.collectAsState()
 
-    var granularity by remember { mutableStateOf(GridGranularity.SQUARE) }
-    var showRealtime by remember { mutableStateOf(true) }
-    var selectedSpot by remember { mutableStateOf<LiveSpot?>(null) }
-    var selectedGrid by remember { mutableStateOf<String?>(null) }
-
-    // ---- 数据派生 ----
-    val confirmedGrids = remember(entries) {
+    // ---- 日志派生：已通联 / 已确认（网格与呼号） ----
+    val confirmedEntries = remember(entries) {
         entries.filter { it.qslRcvd == "Y" || it.lotwRcvd == "Y" }
-            .mapNotNull { it.theirGrid }
-            .toSet()
     }
-    val workedGrids = remember(entries) {
-        entries.mapNotNull { it.theirGrid?.takeIf { g -> g.isNotBlank() } }.toSet()
+    val workedGrids = remember(entries) { entries.mapNotNull { it.theirGrid?.takeIf { g -> g.isNotBlank() } } }
+    val confirmedGrids = remember(confirmedEntries) {
+        confirmedEntries.mapNotNull { it.theirGrid?.takeIf { g -> g.isNotBlank() } }
     }
-    val cells = remember(workedGrids, confirmedGrids, granularity) {
-        GridIndex.cells(workedGrids, confirmedGrids, granularity)
-    }
+    val workedCalls = remember(entries) { entries.map { it.theirCall.trim().uppercase() }.toSet() }
+    val confirmedCalls = remember(confirmedEntries) { confirmedEntries.map { it.theirCall.trim().uppercase() }.toSet() }
     val gridCache = remember(entries) {
         val m = HashMap<String, String>()
         for (e in entries) {
-            e.theirGrid?.takeIf { it.isNotBlank() }?.let { m[e.theirCall.uppercase()] = it }
+            e.theirGrid?.takeIf { it.isNotBlank() }?.let { m[e.theirCall.trim().uppercase()] = it }
         }
         m
     }
-    val nowMs = System.currentTimeMillis()
-    val spots = remember(messages, worked, status.qso.theirCall, status.myCall, showRealtime) {
-        if (!showRealtime) {
-            emptyList()
-        } else {
-            SpotBuilder.build(
-                messages = messages,
-                worked = worked,
-                currentQsoCall = status.qso.theirCall,
-                myCall = status.myCall,
-                nowMs = nowMs,
-                gridCache = gridCache,
-            )
-        }
+
+    // ---- 地图层（整会话，不做时间窗；消息上限 200 条） ----
+    val decodedSquares = remember(messages) { MapModel.decodedSquares(messages) }
+    val gridMarkers = remember(decodedSquares, workedGrids, confirmedGrids) {
+        MapModel.gridMarkers(decodedSquares, workedGrids, confirmedGrids)
     }
-    val fieldCount = remember(workedGrids) {
-        workedGrids.mapNotNull { Maidenhead.field(it) }.toSet().size
+    val callMarkers = remember(messages, workedCalls, confirmedCalls, status.myCall, gridCache) {
+        MapModel.callMarkers(
+            messages = messages,
+            workedCalls = workedCalls,
+            confirmedCalls = confirmedCalls,
+            myCall = status.myCall,
+            windowMs = 0L,
+            gridCache = gridCache,
+        )
+    }
+    val cqFlags = remember(messages, status.myCall, gridCache) {
+        MapModel.cqFlags(messages, myCall = status.myCall, windowMs = 0L, gridCache = gridCache)
+    }
+    val links = remember(messages, status.myCall, status.myGrid, gridCache) {
+        MapModel.signalLinks(
+            messages = messages,
+            myCall = status.myCall,
+            myGrid = status.myGrid.ifEmpty { null },
+            gridCache = gridCache,
+        )
     }
 
-    // 权限（网格页也能直接应答）
+    // 连线内容沿通信方向循环运动
+    val transition = rememberInfiniteTransition(label = "map-link")
+    val linkPhase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
+        label = "link-phase",
+    )
+
+    // ---- 交互状态 ----
+    var projection by remember { mutableStateOf<MapProjection?>(null) }
+    var selectedCall by remember { mutableStateOf<String?>(null) }
+    var overlayHeightPx by remember { mutableStateOf(0) }
+    var pendingFocus by remember { mutableStateOf<String?>(null) }
+
+    // 权限（地图页也能直接应答）
     var permissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED,
         )
     }
-    // 待确认应答的台站（防误发闸门）
-    var pendingReply by remember { mutableStateOf<LiveSpot?>(null) }
-    // 已过确认、等待录音权限的台站
-    var afterPermission by remember { mutableStateOf<LiveSpot?>(null) }
+    var pendingReply by remember { mutableStateOf<PendingTx?>(null) }
+    var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
-        val spot = afterPermission
+        val action = afterPermission
         afterPermission = null
-        if (granted && spot != null) session.answer(spot.call, spot.grid, spot.df)
+        if (granted && action is PendingTx.Reply) {
+            session.answer(action.call, action.grid, action.df)
+        }
     }
 
-    fun confirmReply(spot: LiveSpot) {
+    fun confirmReply(action: PendingTx.Reply) {
         if (permissionGranted) {
-            session.answer(spot.call, spot.grid, spot.df)
+            session.answer(action.call, action.grid, action.df)
         } else {
-            afterPermission = spot
+            afterPermission = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    // ---- 视口 ----
-    var projection by remember { mutableStateOf<MapProjection?>(null) }
-    val density = LocalDensity.current
+    // 从操作页双击解码行跳转：定位到该呼号
+    LaunchedEffect(focusSeq) {
+        if (!focusCall.isNullOrEmpty()) pendingFocus = focusCall
+    }
+    LaunchedEffect(pendingFocus, projection, callMarkers) {
+        val target = pendingFocus ?: return@LaunchedEffect
+        val p = projection ?: return@LaunchedEffect
+        val m = callMarkers.firstOrNull { it.call.equals(target, ignoreCase = true) } ?: return@LaunchedEffect
+        selectedCall = m.call
+        projection = centeredOn(p, m.lat, m.lon)
+        pendingFocus = null
+    }
 
-    Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
-        Text("网格", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "已通联 ${workedGrids.size}｜已确认 ${confirmedGrids.size}｜大网格 $fieldCount / 324｜实时 ${spots.size} 台",
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-        )
-        LinearProgressIndicator(
-            progress = { fieldCount / 324f },
-            modifier = Modifier.fillMaxWidth().height(5.dp).padding(top = 2.dp),
-        )
+    val markersState = rememberUpdatedState(callMarkers)
+    val flagsState = rememberUpdatedState(cqFlags)
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            for (g in GridGranularity.entries) {
-                FilterChip(
-                    selected = granularity == g,
-                    onClick = { granularity = g },
-                    label = { Text(g.label) },
-                )
-            }
-            FilterChip(
-                selected = showRealtime,
-                onClick = { showRealtime = !showRealtime },
-                label = { Text("实时") },
-            )
-            OutlinedButton(
-                onClick = {
-                    projection = MapProjection.fit(
-                        projection?.viewWidth ?: 1.0,
-                        projection?.viewHeight ?: 1.0,
-                    )
-                },
-            ) { Text("适应窗口") }
-        }
-
-        // ---- 地图（固定 2:1，与世界等距圆柱一致：不拉伸、默认铺满全球） ----
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f)
-                .background(Color(0xFF0E1A2B)),
-        ) {
+    Box(modifier = modifier.fillMaxSize().background(VoxBackground)) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
             val wPx = with(density) { maxWidth.toPx() }.toDouble()
             val hPx = with(density) { maxHeight.toPx() }.toDouble()
 
@@ -206,7 +214,7 @@ fun GridScreen(
                 if (wPx > 0 && hPx > 0) {
                     val cur = projection
                     projection = if (cur == null) {
-                        MapProjection.fit(wPx, hPx)
+                        MapProjection.fill(wPx, hPx)
                     } else {
                         MapProjection(cur.viewWidth, cur.viewHeight, cur.scale, cur.centerLon, cur.centerLat)
                             .copy(viewWidth = wPx, viewHeight = hPx)
@@ -216,7 +224,7 @@ fun GridScreen(
 
             val p = projection
             if (p != null) {
-                val tapThreshold = with(density) { 26.dp.toPx() }
+                val tapThreshold = with(density) { 30.dp.toPx() }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -236,244 +244,273 @@ fun GridScreen(
                         .pointerInput(Unit) {
                             detectTapGestures { offset ->
                                 val proj = projection ?: return@detectTapGestures
-                                // 命中实时点（按屏幕距离）
-                                var best: LiveSpot? = null
-                                var bestD = Float.MAX_VALUE
-                                for (s in spots) {
-                                    val q = proj.toScreen(s.lat, s.lon)
-                                    val d = hypot(q.x.toFloat() - offset.x, q.y.toFloat() - offset.y)
-                                    if (d < bestD) {
-                                        bestD = d
-                                        best = s
-                                    }
-                                }
-                                if (best != null && bestD <= tapThreshold) {
-                                    selectedSpot = best
-                                    selectedGrid = best!!.grid
-                                } else {
-                                    selectedSpot = null
-                                    val (lat, lon) = proj.toGeo(offset.x.toDouble(), offset.y.toDouble())
-                                    val precision = if (granularity == GridGranularity.FIELD) 2 else 4
-                                    selectedGrid = Maidenhead.encode(
-                                        lat.coerceIn(-90.0, 90.0),
-                                        lon.coerceIn(-180.0, 180.0),
-                                        precision,
-                                    )
-                                }
+                                selectedCall = hitTest(
+                                    proj = proj,
+                                    x = offset.x,
+                                    y = offset.y,
+                                    threshold = tapThreshold,
+                                    markers = markersState.value,
+                                    flags = flagsState.value,
+                                )
                             }
                         },
                 ) {
                     GridMap(
                         projection = p,
-                        cells = cells,
-                        spots = spots,
+                        gridMarkers = gridMarkers,
+                        callMarkers = callMarkers,
+                        cqFlags = cqFlags,
+                        links = links,
                         myGrid = status.myGrid.ifEmpty { null },
-                        nowMs = nowMs,
-                        maxAgeMs = SpotBuilder.DEFAULT_WINDOW_MS,
-                        showLabels = true,
-                        selectedCall = selectedSpot?.call,
+                        showCqCall = settings.mapCqFlagShowCall,
+                        showCqSnr = settings.mapCqFlagShowSnr,
+                        showLinkText = settings.mapShowLinkText,
+                        selectedCall = selectedCall,
+                        linkPhase = linkPhase,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
+
+            // 右下浮控：放大 / 缩小 / 回我的位置（浮于底部浮层之上）
+            val bottomPad = with(density) { overlayHeightPx.toDp() }
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 12.dp, bottom = bottomPad + 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MapFab(onClick = {
+                    projection?.let { projection = it.zoomBy(1.6, it.viewWidth / 2, it.viewHeight / 2) }
+                }) { Text("+", style = MaterialTheme.typography.titleLarge) }
+                MapFab(onClick = {
+                    projection?.let { projection = it.zoomBy(1 / 1.6, it.viewWidth / 2, it.viewHeight / 2) }
+                }) { Text("−", style = MaterialTheme.typography.titleLarge) }
+                MapFab(onClick = {
+                    val p2 = projection ?: return@MapFab
+                    val c = status.myGrid.ifEmpty { null }?.let { com.example.ft8vox.grid.Maidenhead.center(it) }
+                        ?: return@MapFab
+                    projection = centeredOn(p2, c.first, c.second)
+                }) { Icon(Icons.Filled.Place, contentDescription = "回我的位置") }
+            }
         }
 
-        Legend()
-
-        HorizontalDivider(Modifier.padding(vertical = 3.dp))
-
-        if (selectedSpot != null || selectedGrid != null) {
-            SelectionPanel(
-                spot = selectedSpot,
-                grid = selectedGrid,
-                granularity = granularity,
-                entries = entries,
-                onReply = { spot -> pendingReply = spot },
-                onOpenLog = { call ->
-                    log.setFilter(LogFilter(query = call))
-                    onOpenLog()
-                },
-            )
-            TextButton(onClick = {
-                selectedSpot = null
-                selectedGrid = null
-            }) { Text("清除选择") }
-        } else {
-            LiveList(
-                spots = spots,
-                onSelect = { s ->
-                    selectedSpot = s
-                    selectedGrid = s.grid
-                },
-                modifier = Modifier.weight(1f),
-            )
-        }
+        MapOverlay(
+            gridMarkers = gridMarkers,
+            callMarkers = callMarkers,
+            cqFlags = cqFlags,
+            links = links,
+            selectedCall = selectedCall,
+            settings = settings,
+            onUpdateSettings = onUpdateSettings,
+            onReply = { call, grid, df ->
+                pendingReply = PendingTx.Reply(call, grid, df)
+            },
+            onOpenLog = { call ->
+                log.setFilter(LogFilter(query = call))
+                onOpenLog()
+            },
+            onClearSelection = { selectedCall = null },
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .onGloballyPositioned { overlayHeightPx = it.size.height },
+        )
     }
 
-    pendingReply?.let { spot ->
+    pendingReply?.let { action ->
         TxConfirmDialog(
-            pending = PendingTx.Reply(spot.call, spot.grid, spot.df),
+            pending = action,
             status = status,
             onConfirm = {
                 pendingReply = null
-                confirmReply(spot)
+                if (action is PendingTx.Reply) confirmReply(action)
             },
             onDismiss = { pendingReply = null },
         )
     }
 }
 
+/** 以某点为中心、放大到「适应窗口 × 6」的视口。 */
+private fun centeredOn(p: MapProjection, lat: Double, lon: Double): MapProjection {
+    val scale = (p.fitScale * 6.0).coerceIn(p.minScale, p.maxScale)
+    return MapProjection(p.viewWidth, p.viewHeight, scale, lon, lat).clamped()
+}
+
+/** 命中最近的呼号标记 / CQ 旗帜；超出阈值返回 null。 */
+private fun hitTest(
+    proj: MapProjection,
+    x: Float,
+    y: Float,
+    threshold: Float,
+    markers: List<CallMarker>,
+    flags: List<CqFlag>,
+): String? {
+    var best: String? = null
+    var bestD = Float.MAX_VALUE
+    for (m in markers) {
+        val q = proj.toScreen(m.lat, m.lon)
+        val d = hypot(q.x.toFloat() - x, q.y.toFloat() - y)
+        if (d < bestD) {
+            bestD = d
+            best = m.call
+        }
+    }
+    for (f in flags) {
+        val q = proj.toScreen(f.lat, f.lon)
+        val d = hypot(q.x.toFloat() - x, q.y.toFloat() - y)
+        if (d < bestD) {
+            bestD = d
+            best = f.call
+        }
+    }
+    return if (best != null && bestD <= threshold) best else null
+}
+
 @Composable
-private fun LiveList(
-    spots: List<LiveSpot>,
-    onSelect: (LiveSpot) -> Unit,
+private fun MapFab(onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(VoxCard.copy(alpha = 0.92f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun MapOverlay(
+    gridMarkers: List<GridMarker>,
+    callMarkers: List<CallMarker>,
+    cqFlags: List<CqFlag>,
+    links: List<SignalLink>,
+    selectedCall: String?,
+    settings: AppSettings,
+    onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+    onReply: (String, String?, Int) -> Unit,
+    onOpenLog: (String) -> Unit,
+    onClearSelection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.fillMaxWidth()) {
-        Text(
-            "当前接收 ${spots.size} 台（最近 15 分钟）",
-            style = MaterialTheme.typography.titleSmall,
-        )
-        if (spots.isEmpty()) {
-            Text(
-                "等待解码…（无天线信号时为空，真机或音频注入后出现）",
-                style = MaterialTheme.typography.labelSmall,
-            )
-        } else {
-            LazyColumn(Modifier.fillMaxWidth()) {
-                items(spots, key = { it.call }) { s ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(s) }
-                            .padding(vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            String.format(
-                                java.util.Locale.US,
-                                "%+3d  %4d  %-4s  %-7s  %s",
-                                s.snr,
-                                s.df,
-                                roleShort(s.style.role),
-                                s.call,
-                                s.grid,
-                            ),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(QsoTime.isoTime(s.utcMs), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-        }
-    }
-}
+    val decoded = gridMarkers.count { it.tier == com.example.ft8vox.qso.MapTier.DECODED }
+    val worked = gridMarkers.count { it.tier == com.example.ft8vox.qso.MapTier.WORKED }
+    val confirmed = gridMarkers.count { it.tier == com.example.ft8vox.qso.MapTier.CONFIRMED }
 
-private fun roleShort(role: HighlightRole): String = when (role) {
-    HighlightRole.TX -> "发射"
-    HighlightRole.TO_ME -> "给我"
-    HighlightRole.CQ -> "CQ"
-    HighlightRole.WORKED -> "已通"
-    HighlightRole.DUPLICATE -> "重复"
-    HighlightRole.NEW_GRID -> "新格"
-    HighlightRole.NEW_ENTITY -> "新实体"
-    HighlightRole.NEW_CALL -> "新呼号"
-    HighlightRole.NORMAL -> "普通"
-}
-
-@Composable
-private fun Legend() {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = VoxCard.copy(alpha = 0.94f),
+        shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
     ) {
-        Text("● 已通联", style = MaterialTheme.typography.labelSmall, color = Color(0xFF66BB6A))
-        Text("● 已确认", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1E88E5))
-        Text("● 新网格", style = MaterialTheme.typography.labelSmall, color = Color(0xFF00C853))
-        Text("● 发给我", style = MaterialTheme.typography.labelSmall, color = Color(0xFF00B0FF))
-        Text("● 当前", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFFAB00))
-        Text("大小=SNR", style = MaterialTheme.typography.labelSmall)
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            if (selectedCall != null) {
+                val marker = callMarkers.firstOrNull { it.call.equals(selectedCall, ignoreCase = true) }
+                val flag = cqFlags.firstOrNull { it.call.equals(selectedCall, ignoreCase = true) }
+                SelectionInfo(
+                    call = selectedCall,
+                    marker = marker,
+                    flag = flag,
+                    onReply = { onReply(selectedCall, marker?.grid, marker?.df ?: 0) },
+                    onOpenLog = { onOpenLog(selectedCall) },
+                    onClear = onClearSelection,
+                )
+            }
+
+            // 图例
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LegendDot(LegendDecoded, "解码")
+                LegendDot(LegendWorked, "通联")
+                LegendDot(LegendConfirmed, "确认")
+                LegendDot(LegendConfirmed, "CQ")
+                Text(
+                    "大小=SNR",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VoxOnSurfaceVariant,
+                )
+            }
+
+            Text(
+                "网格 蓝 $decoded · 黄 $worked · 红 $confirmed｜呼号 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = VoxOnSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+
+            // 显示开关
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = settings.mapCqFlagShowCall,
+                    onClick = { onUpdateSettings { it.copy(mapCqFlagShowCall = !it.mapCqFlagShowCall) } },
+                    label = { Text("CQ 呼号") },
+                )
+                FilterChip(
+                    selected = settings.mapCqFlagShowSnr,
+                    onClick = { onUpdateSettings { it.copy(mapCqFlagShowSnr = !it.mapCqFlagShowSnr) } },
+                    label = { Text("CQ 强度") },
+                )
+                FilterChip(
+                    selected = settings.mapShowLinkText,
+                    onClick = { onUpdateSettings { it.copy(mapShowLinkText = !it.mapShowLinkText) } },
+                    label = { Text("连线文字") },
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun SelectionPanel(
-    spot: LiveSpot?,
-    grid: String?,
-    granularity: GridGranularity,
-    entries: List<QsoEntity>,
-    onReply: (LiveSpot) -> Unit,
-    onOpenLog: (String) -> Unit,
+private fun SelectionInfo(
+    call: String,
+    marker: CallMarker?,
+    flag: CqFlag?,
+    onReply: () -> Unit,
+    onOpenLog: () -> Unit,
+    onClear: () -> Unit,
 ) {
-    if (grid == null) {
+    val snr = marker?.snr ?: flag?.snr
+    val df = marker?.df
+    val time = marker?.utcMs ?: flag?.utcMs
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
         Text(
-            "点击地图上的台站点查看详情；点击网格查看历史通联。",
-            style = MaterialTheme.typography.labelSmall,
+            String.format(
+                java.util.Locale.US,
+                "%s%s%s%s%s",
+                call,
+                marker?.grid?.let { "  $it" } ?: (if (marker?.fromPrefix == true) "  (前缀)" else ""),
+                snr?.let { String.format(java.util.Locale.US, "  %+d dB", it) } ?: "",
+                df?.let { "  $it Hz" } ?: "",
+                time?.let { "  " + QsoTime.isoTime(it) } ?: "",
+            ),
+            style = MaterialTheme.typography.titleSmall,
+            fontFamily = FontFamily.Monospace,
+            color = VoxAccent,
         )
-        return
-    }
-
-    val matches = remember(entries, grid, granularity) {
-        entries.filter { e ->
-            val g = e.theirGrid?.uppercase() ?: return@filter false
-            if (granularity == GridGranularity.FIELD) g.startsWith(grid)
-            else g.take(4) == grid.take(4)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(onClick = onReply) { Text("应答") }
+            OutlinedButton(onClick = onOpenLog) { Text("日志") }
+            TextButton(onClick = onClear) { Text("清除") }
         }
     }
+}
 
-    Column {
-        if (spot != null) {
-            Text(
-                String.format(
-                    java.util.Locale.US,
-                    "%s  %s  %+d dB  DT %+.1f  %d Hz  %s",
-                    spot.call,
-                    spot.grid,
-                    spot.snr,
-                    spot.dt,
-                    spot.df,
-                    QsoTime.isoTime(spot.utcMs),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Button(onClick = { onReply(spot) }) { Text("应答") }
-                OutlinedButton(onClick = { onOpenLog(spot.call) }) { Text("在日志中查看") }
-            }
-        } else {
-            Text(
-                "网格 $grid：${matches.size} 条通联",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
-        if (matches.isNotEmpty()) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                for (e in matches.take(10)) {
-                    Text(
-                        String.format(
-                            java.util.Locale.US,
-                            "%s  %s%s  %s  %s",
-                            QsoTime.isoDateTime(e.utcMs),
-                            e.theirCall,
-                            e.theirGrid?.let { " ($it)" } ?: "",
-                            e.band,
-                            e.mode,
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-                if (matches.size > 10) {
-                    Text("…共 ${matches.size} 条", style = MaterialTheme.typography.labelSmall)
-                }
-            }
-        } else {
-            Text("该网格暂无通联记录", style = MaterialTheme.typography.labelSmall)
-        }
+@Composable
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(9.dp).clip(CircleShape).background(color))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(start = 3.dp),
+        )
     }
 }

@@ -53,6 +53,9 @@ fun MainShell(
     modifier: Modifier = Modifier,
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.OPERATE) }
+    // 从操作页双击解码行跳地图时，要定位的呼号（与序号配合，便于重复触发）
+    var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
+    var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
@@ -100,13 +103,21 @@ fun MainShell(
                     viewModel = session,
                     settings = appSettings,
                     onOpenSettings = { tab = MainTab.SETTINGS },
-                    onOpenMap = { tab = MainTab.MAP },
+                    onOpenMap = { call ->
+                        mapFocusCall = call
+                        mapFocusSeq += 1
+                        tab = MainTab.MAP
+                    },
                     onOpenLog = { tab = MainTab.LOG },
                 )
                 MainTab.MAP -> GridScreen(
                     log = log,
                     session = session,
+                    settings = appSettings,
+                    onUpdateSettings = settings::update,
                     onOpenLog = { tab = MainTab.LOG },
+                    focusCall = mapFocusCall,
+                    focusSeq = mapFocusSeq,
                 )
                 MainTab.LOG -> LogScreen(
                     log = log,

@@ -8,89 +8,106 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ft8vox.grid.GridCell
 import com.example.ft8vox.grid.MapProjection
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.HighlightRole
-import com.example.ft8vox.qso.LiveSpot
-import kotlin.math.abs
+import com.example.ft8vox.qso.CallMarker
+import com.example.ft8vox.qso.CqFlag
+import com.example.ft8vox.qso.GridMarker
+import com.example.ft8vox.qso.MapTier
+import com.example.ft8vox.qso.SignalLink
 
-private val Ocean = Color(0xFF0E1A2B)
-private val World = Color(0xFF16273D)
-private val GridThin = Color(0x22405570)
-private val GridMajor = Color(0x66405570)
-private val AxisLine = Color(0x99E0E0E0)
-private val CellWorked = Color(0x9966BB6A) // 60% 透明绿
-private val CellConfirmed = Color(0xCC1E88E5) // 80% 透明蓝
+// ---- new_ui.md §4 配色 ----
+private val Ocean = Color(0xFF0B0B12)
+private val World = Color(0xFF171C2B)
+private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
+private val TierWorked = Color(0xFFF9E2AF) // 黄：日志已通联
+private val TierConfirmed = Color(0xFFE64553) // 红：日志已确认
+private val CqRed = Color(0xFFE64553)
+private val LinkColor = Color(0x9989B4FA)
+private val MyColor = Color(0xFF00E5FF)
 
-/** 高亮语义色（与操作页色条一致，U4 地图页再按 §4.2 重构）。 */
-private val SpotTx = Color(0xFFFFEB3B)
-private val SpotToMe = Color(0xFF89B4FA)
-private val SpotCq = Color(0xFFFF9800)
-private val SpotWorked = Color(0xFFE53935)
-private val SpotDuplicate = Color(0xFF757575)
-private val SpotNewGrid = Color(0xFF9C27B0)
-private val SpotNewEntity = Color(0xFF8D6E63)
-private val SpotNewCall = Color(0xFFF06292)
-private val SpotNormal = Color(0xFF4CAF50)
+private fun tierColor(tier: MapTier): Color = when (tier) {
+    MapTier.DECODED -> TierDecoded
+    MapTier.WORKED -> TierWorked
+    MapTier.CONFIRMED -> TierConfirmed
+}
 
 /**
- * 离线 Maidenhead 网格地图：历史通联着色 + 实时台站点。
+ * 离线深色地图（new_ui.md §4.1）：**无网格线图层**，只叠加标记、CQ 旗帜与信号连线。
  *
  * 本组件只负责绘制，视口（缩放/平移）与命中测试由 [GridScreen] 管理。
+ * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动。
  */
 @Composable
 fun GridMap(
     projection: MapProjection,
-    cells: List<GridCell>,
-    spots: List<LiveSpot>,
+    gridMarkers: List<GridMarker>,
+    callMarkers: List<CallMarker>,
+    cqFlags: List<CqFlag>,
+    links: List<SignalLink>,
     myGrid: String?,
-    nowMs: Long,
-    maxAgeMs: Long,
-    showLabels: Boolean,
+    showCqCall: Boolean,
+    showCqSnr: Boolean,
+    showLinkText: Boolean,
     selectedCall: String?,
+    linkPhase: Float,
     modifier: Modifier = Modifier,
 ) {
     val measurer = rememberTextMeasurer()
-    val labelStyle = remember {
+    val callStyle = remember {
         TextStyle(color = Color(0xFFECEFF1), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
     }
+    val cqStyle = remember {
+        TextStyle(
+            color = Color(0xFFFFD9DB),
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+    val linkStyle = remember {
+        TextStyle(
+            color = Color.White,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+        )
+    }
     val myLabelStyle = remember {
-        TextStyle(color = Color(0xFF00E5FF), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        TextStyle(color = MyColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val p = projection
         drawRect(Ocean, size = size)
 
-        // 世界矩形（保证缩放/平移后有参照，且让海洋/陆地有区分）
+        // 世界矩形（无内部网格线，仅作空间参照）
         val wtl = p.toScreen(90.0, -180.0)
         val wbr = p.toScreen(-90.0, 180.0)
-        val worldTop = wtl.y
-        val worldBottom = wbr.y
-        val worldLeft = wtl.x
-        val worldRight = wbr.x
         drawRect(
             color = World,
-            topLeft = Offset(worldLeft.toFloat(), worldTop.toFloat()),
+            topLeft = Offset(wtl.x.toFloat(), wtl.y.toFloat()),
             size = Size(
-                (worldRight - worldLeft).toFloat().coerceAtLeast(0f),
-                (worldBottom - worldTop).toFloat().coerceAtLeast(0f),
+                (wbr.x - wtl.x).toFloat().coerceAtLeast(0f),
+                (wbr.y - wtl.y).toFloat().coerceAtLeast(0f),
             ),
         )
 
-        // ---- 历史着色单元（世界视图下按最小可见尺寸放大，避免只剩一个像素） ----
-        val minCell = 1.6.dp.toPx()
-        for (c in cells) {
-            val a = p.toScreen(c.bounds.maxLat, c.bounds.minLon)
-            val b = p.toScreen(c.bounds.minLat, c.bounds.maxLon)
+        // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸） ----
+        val minCell = 2.4.dp.toPx()
+        for (m in gridMarkers) {
+            val a = p.toScreen(m.bounds.maxLat, m.bounds.minLon)
+            val b = p.toScreen(m.bounds.minLat, m.bounds.maxLon)
             val w = (b.x - a.x).toFloat()
             val h = (b.y - a.y).toFloat()
             if (w <= 0f || h <= 0f) continue
@@ -99,150 +116,145 @@ fun GridMap(
             val cy = (a.y + b.y).toFloat() / 2f
             val dw = w.coerceAtLeast(minCell)
             val dh = h.coerceAtLeast(minCell)
+            val color = tierColor(m.tier)
             drawRect(
-                color = if (c.confirmed) CellConfirmed else CellWorked,
+                color = color.copy(alpha = 0.30f),
                 topLeft = Offset(cx - dw / 2f, cy - dh / 2f),
                 size = Size(dw, dh),
             )
+            drawRect(
+                color = color.copy(alpha = 0.65f),
+                topLeft = Offset(cx - dw / 2f, cy - dh / 2f),
+                size = Size(dw, dh),
+                style = Stroke(width = 0.8.dp.toPx()),
+            )
         }
 
-        // ---- 网格线（裁剪到世界矩形内） ----
-        val squareVisible = p.scale >= p.fitScale * 2.5
-        val thin = 0.6.dp.toPx()
-        val major = 1.4.dp.toPx()
+        // ---- 信号连线（只画最近一个时隙） ----
+        val phase = linkPhase.coerceIn(0f, 1f)
+        for (l in links) {
+            val fa = p.toScreen(l.fromLat, l.fromLon)
+            val tb = p.toScreen(l.toLat, l.toLon)
+            val fx = fa.x.toFloat()
+            val fy = fa.y.toFloat()
+            val tx = tb.x.toFloat()
+            val ty = tb.y.toFloat()
+            if ((fx < -40f && tx < -40f) || (fx > size.width + 40f && tx > size.width + 40f)) continue
+            if ((fy < -40f && ty < -40f) || (fy > size.height + 40f && ty > size.height + 40f)) continue
 
-        fun drawVertical(lon: Double, strong: Boolean) {
-            val x = p.toScreen(0.0, lon).x.toFloat()
-            if (x >= -1f && x <= size.width + 1f) {
-                val y0 = worldTop.toFloat().coerceIn(0f, size.height)
-                val y1 = worldBottom.toFloat().coerceIn(0f, size.height)
-                drawLine(
-                    color = if (strong) GridMajor else GridThin,
-                    start = Offset(x, y0),
-                    end = Offset(x, y1),
-                    strokeWidth = if (strong) major else thin,
+            drawLine(
+                color = LinkColor,
+                start = Offset(fx, fy),
+                end = Offset(tx, ty),
+                strokeWidth = 1.4.dp.toPx(),
+            )
+            val mx = fx + (tx - fx) * phase
+            val my = fy + (ty - fy) * phase
+            val label = l.label
+            if (showLinkText && label != null) {
+                val laid = measurer.measure(AnnotatedString(label), linkStyle)
+                drawText(
+                    textLayoutResult = laid,
+                    topLeft = Offset(mx - laid.size.width / 2f, my - laid.size.height / 2f),
+                )
+            } else {
+                val half = 3.dp.toPx()
+                drawRect(
+                    color = Color.White.copy(alpha = 0.9f),
+                    topLeft = Offset(mx - half, my - half),
+                    size = Size(half * 2, half * 2),
                 )
             }
         }
 
-        fun drawHorizontal(lat: Double, strong: Boolean) {
-            val y = p.toScreen(lat, 0.0).y.toFloat()
-            if (y >= -1f && y <= size.height + 1f) {
-                val x0 = worldLeft.toFloat().coerceIn(0f, size.width)
-                val x1 = worldRight.toFloat().coerceIn(0f, size.width)
-                drawLine(
-                    color = if (strong) GridMajor else GridThin,
-                    start = Offset(x0, y),
-                    end = Offset(x1, y),
-                    strokeWidth = if (strong) major else thin,
+        // ---- 呼号标记（蓝/黄/红，半径随 SNR） ----
+        val baseR = 3.2.dp.toPx()
+        val spanR = 5.0.dp.toPx()
+        for (m in callMarkers.toList().asReversed()) { // 旧的先画，新的压在上面
+            val s = p.toScreen(m.lat, m.lon)
+            val x = s.x.toFloat()
+            val y = s.y.toFloat()
+            if (x < -20f || x > size.width + 20f || y < -20f || y > size.height + 20f) continue
+            val r = baseR + spanR * ((m.snr + 24).coerceIn(0, 34) / 34f)
+            val color = tierColor(m.tier)
+            drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = Offset(x, y))
+            if (m.call == selectedCall) {
+                drawCircle(
+                    color = Color.White,
+                    radius = r + 2.5.dp.toPx(),
+                    center = Offset(x, y),
+                    style = Stroke(2.dp.toPx()),
+                )
+            }
+            val showCall = p.scale >= p.fitScale * 2.2
+            if (showCall) {
+                val txt = if (m.fromPrefix) "${m.call}~" else m.call
+                drawText(
+                    textMeasurer = measurer,
+                    text = txt,
+                    topLeft = Offset(x + r + 2.dp.toPx(), y - 6.dp.toPx()),
+                    style = callStyle,
                 )
             }
         }
 
-        var lon = -180.0
-        while (lon <= 180.0 + 1e-6) {
-            drawVertical(lon, strong = abs(lon % 20.0) < 1e-6)
-            lon += 20.0
-        }
-        var lat = -90.0
-        while (lat <= 90.0 + 1e-6) {
-            drawHorizontal(lat, strong = abs(lat % 10.0) < 1e-6)
-            lat += 10.0
-        }
-        if (squareVisible) {
-            var slon = -180.0
-            while (slon <= 180.0 + 1e-6) {
-                if (abs(slon % 20.0) > 1e-6) drawVertical(slon, strong = false)
-                slon += 2.0
-            }
-            var slat = -90.0
-            while (slat <= 90.0 + 1e-6) {
-                if (abs(slat % 10.0) > 1e-6) drawHorizontal(slat, strong = false)
-                slat += 1.0
-            }
-        }
-
-        // 赤道 / 本初子午线（同样裁剪到世界矩形内）
-        val eqY = p.toScreen(0.0, 0.0).y.toFloat()
-        if (eqY >= 0f && eqY <= size.height) {
+        // ---- CQ 红旗（new_ui.md §4.4） ----
+        val poleH = 12.dp.toPx()
+        val flagW = 9.dp.toPx()
+        val flagH = 6.dp.toPx()
+        for (f in cqFlags) {
+            val s = p.toScreen(f.lat, f.lon)
+            val x = s.x.toFloat()
+            val y = s.y.toFloat()
+            if (x < -30f || x > size.width + 30f || y < -30f || y > size.height + 30f) continue
             drawLine(
-                AxisLine,
-                Offset(worldLeft.toFloat().coerceIn(0f, size.width), eqY),
-                Offset(worldRight.toFloat().coerceIn(0f, size.width), eqY),
+                color = Color(0xFFB0BEC5),
+                start = Offset(x, y),
+                end = Offset(x, y - poleH),
                 strokeWidth = 1.2.dp.toPx(),
             )
-        }
-        val pmX = p.toScreen(0.0, 0.0).x.toFloat()
-        if (pmX >= 0f && pmX <= size.width) {
-            drawLine(
-                AxisLine,
-                Offset(pmX, worldTop.toFloat().coerceIn(0f, size.height)),
-                Offset(pmX, worldBottom.toFloat().coerceIn(0f, size.height)),
-                strokeWidth = 1.2.dp.toPx(),
-            )
+            val path = Path().apply {
+                moveTo(x, y - poleH)
+                lineTo(x + flagW, y - poleH + flagH / 2f)
+                lineTo(x, y - poleH + flagH)
+                close()
+            }
+            drawPath(path, color = CqRed)
+            if (showCqCall || showCqSnr) {
+                val txt = buildString {
+                    if (showCqCall) append(f.call)
+                    if (showCqSnr) {
+                        if (isNotEmpty()) append(' ')
+                        append(if (f.snr >= 0) "+" else "")
+                        append(f.snr)
+                    }
+                }
+                drawText(
+                    textMeasurer = measurer,
+                    text = txt,
+                    topLeft = Offset(x + flagW + 2.dp.toPx(), y - poleH),
+                    style = cqStyle,
+                )
+            }
         }
 
         // ---- 我方台站 ----
         if (myGrid != null) {
             Maidenhead.center(myGrid)?.let { (mlat, mlon) ->
                 val s = p.toScreen(mlat, mlon)
+                val x = s.x.toFloat()
+                val y = s.y.toFloat()
                 val r = 5.dp.toPx()
-                drawCircle(Color(0xFF00E5FF), radius = r, center = Offset(s.x.toFloat(), s.y.toFloat()), style = Stroke(2.dp.toPx()))
-                drawLine(Color(0xFF00E5FF), Offset(s.x.toFloat() - r, s.y.toFloat()), Offset(s.x.toFloat() + r, s.y.toFloat()), strokeWidth = 1.5.dp.toPx())
-                drawLine(Color(0xFF00E5FF), Offset(s.x.toFloat(), s.y.toFloat() - r), Offset(s.x.toFloat(), s.y.toFloat() + r), strokeWidth = 1.5.dp.toPx())
-                if (showLabels) {
-                    drawText(
-                        textMeasurer = measurer,
-                        text = myGrid.uppercase(),
-                        topLeft = Offset(s.x.toFloat() + r + 2.dp.toPx(), s.y.toFloat() - 6.dp.toPx()),
-                        style = myLabelStyle,
-                    )
-                }
-            }
-        }
-
-        // ---- 实时台站点 ----
-        val baseR = 3.dp.toPx()
-        val spanR = 6.dp.toPx()
-        for (spot in spots.toList().asReversed()) { // 旧的先画，新的压在上面
-            val s = p.toScreen(spot.lat, spot.lon)
-            val x = s.x.toFloat()
-            val y = s.y.toFloat()
-            if (x < -20f || x > size.width + 20f || y < -20f || y > size.height + 20f) continue
-            val snrFactor = ((spot.snr + 24).coerceIn(0, 34) / 34f)
-            val r = baseR + spanR * snrFactor
-            val age = if (nowMs > 0L && spot.utcMs > 0L) (nowMs - spot.utcMs).coerceAtLeast(0L) else 0L
-            val alpha = if (maxAgeMs > 0L) (1f - 0.65f * (age.toFloat() / maxAgeMs)).coerceIn(0.3f, 1f) else 1f
-            val color = spotColor(spot.style.role).copy(alpha = alpha)
-            drawCircle(color = color, radius = r, center = Offset(x, y))
-            if (spot.call == selectedCall) {
-                drawCircle(
-                    color = Color.White,
-                    radius = r + 2.dp.toPx(),
-                    center = Offset(x, y),
-                    style = Stroke(2.dp.toPx()),
-                )
-            }
-            if (showLabels && p.scale >= p.fitScale * 2.5) {
+                drawCircle(MyColor, radius = r, center = Offset(x, y), style = Stroke(2.dp.toPx()))
+                drawLine(MyColor, Offset(x - r, y), Offset(x + r, y), strokeWidth = 1.5.dp.toPx())
+                drawLine(MyColor, Offset(x, y - r), Offset(x, y + r), strokeWidth = 1.5.dp.toPx())
                 drawText(
                     textMeasurer = measurer,
-                    text = spot.call,
+                    text = myGrid.uppercase(),
                     topLeft = Offset(x + r + 2.dp.toPx(), y - 6.dp.toPx()),
-                    style = labelStyle,
+                    style = myLabelStyle,
                 )
             }
         }
     }
-}
-
-private fun spotColor(role: HighlightRole): Color = when (role) {
-    HighlightRole.TX -> SpotTx
-    HighlightRole.TO_ME -> SpotToMe
-    HighlightRole.CQ -> SpotCq
-    HighlightRole.WORKED -> SpotWorked
-    HighlightRole.DUPLICATE -> SpotDuplicate
-    HighlightRole.NEW_GRID -> SpotNewGrid
-    HighlightRole.NEW_ENTITY -> SpotNewEntity
-    HighlightRole.NEW_CALL -> SpotNewCall
-    HighlightRole.NORMAL -> SpotNormal
 }
