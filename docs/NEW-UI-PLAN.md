@@ -82,7 +82,7 @@
 | 高亮与提醒 | 各提醒项接入操作页高亮、哔声、末端标记 | 依赖 U6 设置 |
 | ~~局域网后台~~ | App 内 HTTP 服务、后台地址展示 | **不做**：需前台服务常驻与网络凭据；占位项已删除（见 §收尾：删除三处占位功能） |
 | ~~在线日志~~ | CloudLog / LoTW / eQSL | **不做**：需网络、凭据与安全存储；占位项已删除（同上） |
-| 离线地图瓦片 | 可选；设计本身允许纯色底图 | 数据体积；**暂缓：缺瓦片数据源，维持矢量世界矩形底图** |
+| 离线地图瓦片 | ✅ 已实装（2026-09-26） | 单张 z5 Web Mercator 卫星底图（`assets/map/world_z5.jpg`，4.75 MB，q90），按可见区域流式解码 + ×0.7 暗化；见 §补记：离线卫星底图 |
 
 ## 2. 建议顺序与依赖
 
@@ -116,7 +116,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U7b VOX/PTT native | ✅ | | native 输入电平/VOX 触发判定（音频/静音检测 + 阈值 + 去抖）；发射前导静音 + 前导音（1 kHz），`planTx` 对齐时隙起点；写入看门狗；测试音；状态栏/音频速览显示 VOX 电平；设置页 6.1 除「输出声卡」外全部点亮；JVM 187 + 设备端 26 测试全绿 |
 | U7c 音频路由与增益 | ✅ | | `engine/AudioDevices.kt` 枚举输入/输出设备（系统默认恒为首项）；AAudio `setDeviceId` 选择输入（`nativeStartCapture`）与输出（`nativeStartPlayback`）；`nativeSetInputGain` 采集增益在 DSP 线程热生效（含 VOX 电平，限幅防回绕）；设置页 6.1 输出声卡、6.2 输入设备/输入增益点亮，音频速览显示设备与增益；JVM 191 + 设备端 30 测试全绿 |
 | U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
-| U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：**不做**（占位项已删除）；离线瓦片：暂缓（缺数据源，维持矢量底图）；FST4：**不做**（`ft8_lib` 无该模式） |
+| U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：**不做**（占位项已删除）；离线瓦片：**已实装**（单张 z5 卫星底图，见 §补记：离线卫星底图）；FST4：**不做**（`ft8_lib` 无该模式） |
 | U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发送总开关（收起态条，默认只接收；U9 补记 4 定稿为**纯权限**）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
 | U9 自动程序 | ✅ | | 取代 Call 1st：等级 0 手动 / 1 首先解码 / 2 解码窗口择优 / 3 解码后择优 / 4+ 自动搜索（无可答目标自动 CQ）；策略开关 回答·呼叫已通联 / 优先新呼号 / 报告信息优先 / 最远距离取代最佳信噪比 / 单次通联；顶栏菜单 + 发射抽屉入口 + 设置页面板；窄带过滤按用户决定不做；JVM 全绿 |
 
@@ -142,7 +142,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 ### U4 落地说明（与设计的取舍）
 
-- **底图**：整页单一深色（`#0B0B12`）+ 一层略亮的「世界矩形」，**完全去掉 Maidenhead 网格线与经纬轴**；无任何标记时整块保持空白。
+- **底图**：整页单一深色（`#0B0B12`）+ 一层略亮的「世界矩形」，**完全去掉 Maidenhead 网格线与经纬轴**；无任何标记时整块保持空白。**（2026-09-26 起）**底图升级为离线 Web Mercator 卫星影像，投影随之由等距圆柱改为 Web Mercator；见 §补记：离线卫星底图。
 - **数据层**：新增纯逻辑 `qso/MapModel.kt`（`MapTier` / `GridMarker` / `CallMarker` / `CqFlag` / `SignalLink` 与派生函数）与 `qso/CallLocation.kt`（呼号前缀 → 归属地近似坐标）。旧的地图专用 `SpotBuilder`/`LiveSpot`/`GridIndex`/`GridGranularity` 已删除，测试同步替换为 `MapModelTest`/`CallLocationTest`。
 - **网格标记**：按 **4 字符方格**归并；优先级 红（日志已确认 QSL/LoTW）> 黄（日志已通联）> 蓝（本会话解码，重启清空）。世界视图下按最小像素放大，避免缩成一个点。
 - **呼号标记**：报文无网格时，用呼号前缀映射实体表（`Dxcc`，最长前缀匹配，如 `EA8` > `EA`、`KH6` > `K`）的代表坐标立标；标记后带 `~` 表示「前缀近似」。坐标为实体代表点（非逐条呼号精确到台站）。
@@ -226,7 +226,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **UI**：设置页 6.4「含我呼号哔声」开关点亮。
 - **测试**：JVM `ui/MyCallAlertTest.kt`（开关/空呼号/发给他人/CQ/大小写/批量）7 例。JVM **198/198** 全绿。
 
-> **FST4**：不做。`ft8_lib` 仅含 FT8/FT4 调制解调，FST4 需自研（LDPC/多种符号速率/GFSK），量与风险不匹配，已从模式菜单移除相关占位。**局域网后台 / 在线日志**：不做（分别依赖阶段 9 前台服务与网络凭据），占位设置项与菜单项已删除（见 §收尾：删除三处占位功能）。**离线瓦片**：暂缓，缺瓦片数据源，维持现有矢量世界矩形底图。
+> **FST4**：不做。`ft8_lib` 仅含 FT8/FT4 调制解调，FST4 需自研（LDPC/多种符号速率/GFSK），量与风险不匹配，已从模式菜单移除相关占位。**局域网后台 / 在线日志**：不做（分别依赖阶段 9 前台服务与网络凭据），占位设置项与菜单项已删除（见 §收尾：删除三处占位功能）。**离线瓦片**：已实装为单张 z5 Web Mercator 卫星底图（见 §补记：离线卫星底图）；仍**不做**在线瓦片（无网络依赖、无版权风险）。
 
 ### U8 落地说明：波段多频率 / 自定义 / 自动发射周期
 
@@ -578,5 +578,37 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   **N 组**（发射中切模式 / 停止发射 / 离开 App 不崩）与模拟器可预演项。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（三 ABI），JVM 258 例 / 29 suite 全过；
   真机项见 `REGRESSION.md` N 组。
+
+### 补记：地图页离线卫星底图（Web Mercator + BitmapRegionDecoder）
+
+用户提供一张 **z5 世界卫星图**（高德「影像无标注」，中心经纬度 `(0,0)`），要求**离线打包栅格底图**。
+
+- **素材实测**：`app/map/tile-merge/z=5.png` = 8192×8192 **PNG，45.6 MB**。8192² × 4B = **268 MB**
+  无法整图解码（必 OOM）；PNG 无损存卫星照片严重浪费体积。**重编码 JPEG q90 仅 4.75 MB**，肉眼无差。
+  已核对地理配准：中心 `(4096,4096)` = 几内亚湾海面、伦敦点 = 不列颠陆地、上下缘 = 北极洋/南极洲
+  → 标准 **Web Mercator 全世界图**（顶左 `85.05112878°N, 180°W`）。
+- **决策（用户拍板）**：①单文件 + `BitmapRegionDecoder`（不切片）；②底图暗化 **×0.7**；③**仅测试自用**，
+  将来公开版换公有领域影像；④JPEG **q90**。
+- **投影改为 Web Mercator**（`grid/MapProjection.kt`）：世界改为 **1×1 归一化 Mercator 方形**
+  （`u=mercX(lon)`、`v=mercY(lat)`，纬度钳 `±MAX_LAT=85.05112878`），`scale` = 每世界单位的屏幕像素；
+  `fit/fill/zoomBy/panBy/clamped/toGeo` 全部按新投影重写并补 `toScreenUV/toUV/mercX/mercY/latOfV/lonOfU`。
+  `maxScale = max(WORLD_IMAGE_PX*2, fitScale*6)`（允许底图 1:1 再放大 2×）。**标记绘制代码零改动**
+  （仍只调 `toScreen`）。
+- **底图渲染**（新增 `ui/WorldBaseMap.kt`）：首次把 asset 复制到 `cacheDir`（APK 内资产不可随机定位）
+  再开 `BitmapRegionDecoder`；`levelFor(scale)` 用 `inSampleSize = 2^level`（0..5）得到 z0–z5 天然多级；
+  `visibleBlocks()` 反算可见的 512 px 块，`WorldBaseMapState` 在 `Dispatchers.Default` 解码并按 **LRU 16 块**
+  缓存（内存有界，约 16 MB）；块画到画布时**向外取整**避免相邻块 1px 缝。资产缺失/失败**回退原来的纯色世界矩形**。
+- **暗化**：`drawImage` 施加 `ColorFilter.colorMatrix(ColorMatrix().setToScale(0.7,0.7,0.7,1))`。
+- **踩坑（重要）**：`DisposableEffect(baseMap) { onDispose { baseMap?.close() } }` 里若 `baseMap` 是
+  `produceState` 的 **`by` 委托**，`onDispose` 读的是**当前值**而非 effect 创建时的值；key 从
+  `null → state` 变化时旧 effect 的 `onDispose` 会把**刚建好的解码器提前 recycle**，导致
+  `decodeRegion called on recycled region decoder`、底图全黑。改为 `.value` + 局部 `val` 捕获后正常。
+- **体积**：APK 由约 13.5 MB → **18.2 MB**（asset 4,977,579 B，PNG/JPEG 默认未压缩存储）。
+- **测试**：`:app:assembleDebug` BUILD SUCCESSFUL；JVM **262 例 / 29 suite** 全过
+  （`MapProjectionTest` 重写为 Mercator 断言，+4 项：极区钳制、墨卡托往返、与等距圆柱的差异、最大缩放覆盖底图）。
+- **模拟器验证**：地图页正确显示卫星底图（非洲/欧洲居中、`MO89` 台站标记与地理位置对齐），无解码告警。
+- **版权与仓库**：高德影像仅本地自用；原始素材目录 `app/map/` 已加入 `.gitignore`（不进仓库），
+  进包的是重编码后的 `app/src/main/assets/map/world_z5.jpg`。公开版应替换为公有领域影像（如 NASA
+  Blue Marble / 夜间灯光，天然深色更配主题）。
 
 
