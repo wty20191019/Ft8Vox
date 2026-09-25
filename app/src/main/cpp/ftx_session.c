@@ -354,8 +354,10 @@ void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* 
 }
 
 // -----------------------------------------------------------------------------
-// SNR 估计：按已知音调序列取信号 bin 功率，与同时段的平均 bin 功率比较，
-// 换算到 2500 Hz 参考带宽（与 WSJT-X 口径一致）。
+// SNR 估计：按已知音调序列取信号 bin 功率，与同时段的平均 bin 功率比较。
+// 口径对齐 WSJT-X `ft8b.f90`：解出音调所在的 bin 里同时含信号与噪声，
+// 先减去该 bin 自身的噪声再取比值（xsig/xnoi − 1），最后换算到 2500 Hz 参考带宽。
+// 直接取 signal/noise 会把噪声也算成信号，弱信号会明显偏高。
 // -----------------------------------------------------------------------------
 static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                          const ftx_message_t* msg)
@@ -405,13 +407,23 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
     if (signal_n <= 0 || noise_n <= 0)
         return -24.0f;
 
-    double ratio = (double)(signal_sum / signal_n) / (noise_sum / noise_n);
-    if (ratio <= 0.0)
-        return -24.0f;
+    // WSJT-X 口径：信号 bin 内混有噪声，须先扣除单 bin 噪声再取比值。
+    double sig = (double)signal_sum / signal_n;
+    double noi = (double)noise_sum / noise_n;
+    double excess = sig / noi - 1.0;
+    if (excess < 1.0e-3)
+        excess = 1.0e-3; // 与 WSJT-X 相同的下限，最终会被 -24 dB 夹住
 
     float symbol_period = (wf->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
     float bin_hz = 1.0f / symbol_period;
-    return 10.0f * log10f((float)ratio) + 10.0f * log10f(bin_hz / 2500.0f);
+    // FT8 沿用 WSJT-X 的 -27.0 dB 常数（含其窗函数的相干增益/噪声增益修正）；
+    // FT4 暂无对照常数，仍按噪声带宽换算 10·log10(binHz/2500)。
+    float ref_db = (wf->protocol == FTX_PROTOCOL_FT4)
+                       ? 10.0f * log10f(bin_hz / 2500.0f)
+                       : -27.0f;
+
+    float snr = 10.0f * log10f((float)excess) + ref_db;
+    return (snr < -24.0f) ? -24.0f : snr;
 }
 
 int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results)

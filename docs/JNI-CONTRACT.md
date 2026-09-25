@@ -61,8 +61,10 @@
 > `DecodeResult` 由 native 直接 `NewObject` 构造，构造签名固定在 `jni_common.h`：
 > `(Ljava/lang/String;IFIIJ)V`。**修改 Kotlin 字段顺序/类型时必须同步更新该签名。**
 
-SNR 估算口径：按解码出的音调序列取信号 bin 功率，排除音调区间（`freq_offset-2 .. freq_offset+9`）后取其余 bin 的平均功率作为噪声底，
-再按 `10·log10(signal/noise) + 10·log10(binHz/2500)` 换算到 2500 Hz 参考带宽。
+SNR 估算口径（对齐 WSJT-X `ft8b.f90`）：按解码出的音调序列取信号 bin 功率，排除音调区间（`freq_offset-2 .. freq_offset+9`）后取其余 bin 的平均功率作为噪声底；
+因解出音调所在的 bin 里同时含信号与噪声，须先扣除该 bin 自身的噪声再取比值，即 `excess = sig/noise − 1`，最后按 `10·log10(excess) + ref` 换算到 2500 Hz 参考带宽。
+其中 FT8 的 `ref = −27.0 dB`（与 WSJT-X 一致），FT4 暂无对照常数、按噪声带宽换算 `10·log10(binHz/2500)`。结果下限为 −24 dB。
+（直接取 `sig/noise` 会把噪声算成信号，弱信号会明显偏高 1~3 dB。）
 
 说明：呼号哈希表由 **native 侧管理**（去重、老化），不通过 JNI 回调，避免频繁跨语言调用。
 
