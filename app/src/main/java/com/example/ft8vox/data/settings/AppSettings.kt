@@ -45,13 +45,6 @@ enum class FontSize(val label: String, val scale: Float) {
     LARGE("大", 1.15f),
 }
 
-/** 瀑布图配色（new_ui §6.5；渐变在 native 生成，切换依赖 U7）。 */
-enum class WaterfallPalette(val label: String) {
-    CLASSIC("经典"),
-    GRAY("灰度"),
-    CONTRAST("高对比"),
-}
-
 /** 瀑布高度档位。 */
 enum class WaterfallHeight(val label: String, val heightDp: Int) {
     COMPACT("紧凑", 120),
@@ -232,14 +225,6 @@ data class AppSettings(
     // ---- 外观（new_ui §6.5） ----
     val themeMode: ThemeMode = ThemeMode.DARK,
     val fontSize: FontSize = FontSize.MEDIUM,
-    /** 瀑布图配色（渐变在 native 生成，切换依赖 U7）。 */
-    val waterfallPalette: WaterfallPalette = WaterfallPalette.CLASSIC,
-
-    // ---- 日志 / 网络（new_ui §6.6；在线服务与后台依赖 U7） ----
-    val cloudLogEnabled: Boolean = false,
-    val lotwEnabled: Boolean = false,
-    val eqslEnabled: Boolean = false,
-    val lanServerEnabled: Boolean = false,
 
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,

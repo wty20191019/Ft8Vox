@@ -48,7 +48,7 @@ fun TxConfirmDialog(
                 )
                 if (!status.txEnabled) {
                     Text(
-                        "发射总开关当前为「关」：请先在操作页打开发射开关再确认。",
+                        "发送总开关当前为「关」：请先在操作页打开「发送」开关再确认。",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFB3261E),
                     )

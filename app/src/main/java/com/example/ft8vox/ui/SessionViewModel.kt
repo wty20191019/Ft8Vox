@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ft8vox.container
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.data.log.QsoComment
 import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
@@ -77,7 +78,12 @@ data class ReceiverStatus(
     /** 当前刻度频率（Hz，已解析；0 表示未知）。 */
     val dialHz: Long = 0L,
     // ---- 发射/QSO ----
-    /** 发射总开关：false=只接收（默认），true=允许发射；仅会话内有效，不持久化。 */
+    /**
+     * 发送总开关：false=只接收（默认），true=允许发射。
+     *
+     * 只回答「能不能发」，自己不发任何报文；发什么由手动发送（抽屉「发送」按钮 / 解码卡片手势）
+     * 或自动程序决定。仅会话内有效，不持久化。
+     */
     val txEnabled: Boolean = false,
     /** 我方发射所在的周期：0=偶数，1=奇数（自动按手机 UTC 时间锁定）。 */
     val txParity: Int = 0,
@@ -96,10 +102,13 @@ data class ReceiverStatus(
     // ---- JTDX 风格操作（阶段 7c） ----
     /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
     val holdTxFreq: Boolean = false,
-    /** 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。 */
+    /**
+     * 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。
+     *
+     * **等级即开关**：`level == MANUAL`（「0 手动选择」）＝自动程序关闭，1+ ＝开启；
+     * 不存在独立的「启用/关闭」状态（见 [SessionViewModel.setAutoLevel]）。
+     */
     val autoProgram: AutoProgramSettings = AutoProgramSettings(),
-    /** 自动程序是否已启用（需用户确认；按「单次通联」在 QSO 结束后自动解除）。 */
-    val autoArmed: Boolean = false,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
     // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
@@ -162,13 +171,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 当前正在播放的报文是否为「一次性发射」（发完不再推进 QSO 状态机）。 */
     private var manualInFlight = false
 
-    /** 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。 */
+    /**
+     * 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。
+     *
+     * 锁定后**一直沿用**，QSO 结束也不清除（否则会按时间重锁导致偶/奇来回跳）。
+     * 仅「关闭发送总开关」「停止发送」「停止接收」会清除。
+     */
     private var autoParity: Int? = null
 
     /**
      * 「设为目标」后固定的发射周期（目标接收时隙的相反周期）；null 表示未固定。
      *
-     * 目标固定期间 [lockAutoParity] 直接返回该值，保证与目标交替收发（时隙自动对应）。
+     * 目标固定期间 [effectiveTxParity] 优先返回该值，保证与目标交替收发（时隙自动对应）；
+     * QSO 结束或「取消目标」时只解除固定，发射周期本身保持不变。
      */
     private var pinnedTxParity: Int? = null
 
@@ -239,7 +254,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 holdTxFreq = s.holdTxFreq,
                 autoProgram = s.auto,
-                autoArmed = if (s.auto.level == AutoLevel.MANUAL) false else cur.autoArmed,
                 // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
@@ -350,16 +364,39 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(holdTxFreq = value) }
     }
 
-    /** 设置自动程序等级；切到「手动」时立即解除启用。 */
+    /**
+     * 设置自动程序等级 —— **等级即开关**：`0 手动选择`＝关闭，1+ ＝开启。
+     *
+     * 由「0 手动选择」切到 1+ 时，UI 需先弹防误发确认（`AutoEnableConfirmDialog`）再调本方法；
+     * 确认后若「发送总开关」为关，先 [setTxEnabled] 打开（总开关此前未锁定时顺带按手机 UTC
+     * 时间锁定发射时隙）—— 总开关仍是「能不能发」的唯一权限。
+     *
+     * 切回「0 手动选择」只停止自动化，**不动「发送总开关」**（手动发送仍需要这个权限）。
+     */
     fun setAutoLevel(level: AutoLevel) {
+        if (level == _status.value.autoProgram.level) return
         if (level == AutoLevel.MANUAL) {
             retryCall = null
             retryLeft = 0
+            _status.update {
+                it.copy(
+                    autoProgram = it.autoProgram.copy(level = level),
+                    status = "自动程序已关闭（等级：0 手动选择，发送总开关不变）",
+                )
+            }
+            persist { it.copy(auto = it.auto.copy(level = level)) }
+            return
         }
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号，再启用自动程序") }
+            return
+        }
+        if (!_status.value.txEnabled) setTxEnabled(true)
+        val parity = parityLabel(_status.value.txParity)
         _status.update {
             it.copy(
                 autoProgram = it.autoProgram.copy(level = level),
-                autoArmed = if (level == AutoLevel.MANUAL) false else it.autoArmed,
+                status = "自动程序已启用（${level.label}，$parity）",
             )
         }
         persist { it.copy(auto = it.auto.copy(level = level)) }
@@ -422,22 +459,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(txQueue = emptyList()) }
     }
 
-    /** 启用自动程序（UI 需先弹防误发确认）。 */
-    fun armAutoProgram() {
-        val p = _status.value.autoProgram
-        if (p.level == AutoLevel.MANUAL) {
-            _status.update { it.copy(status = "请先选择自动程序等级") }
-            return
-        }
-        _status.update { it.copy(autoArmed = true, status = "自动程序已启用（${p.level.label}）") }
-    }
-
-    fun disarmAutoProgram() {
-        retryCall = null
-        retryLeft = 0
-        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭") }
-    }
-
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
     fun setBandFreq(name: String, hz: Long) {
         val n = name.trim().takeIf { it.isNotEmpty() } ?: return
@@ -450,11 +471,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun setBand(name: String) = setBandFreq(name, 0L)
 
     /**
-     * 发射总开关（默认关 = 只接收）。
+     * 发送总开关（默认关 = 只接收）：唯一回答「**能不能发**」。
      *
-     * 关闭：立即停发并解除周期锁定；开启：按手机 UTC 时间锁定「下一个来得及准备的时隙」，
-     * 随后在下一个我方时隙发射。因不再提供周期设置，用户通过在不同时机开关总开关来
-     * 决定从哪个时隙开始发射。
+     * 它自己**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定，
+     * 见 `TxDrawer` 收起态条与 [setAutoLevel]。
+     *
+     * - 开启：允许发射；总开关此前未锁定时按手机 UTC 时间锁定「下一个来得及准备的时隙」。
+     * - 关闭：立即停发、解除时隙锁定与目标固定；**不动自动程序等级** —— 开回总开关即按原等级继续
+     *   （不能发射时自动程序只是待命，没必要把等级清掉）。
+     *
+     * 因不再提供周期设置，用户通过在不同时机重开总开关来换发射时隙。
      */
     fun setTxEnabled(enabled: Boolean) {
         if (!enabled) {
@@ -463,24 +489,21 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             retryCall = null
             retryLeft = 0
             stopTransmit()
-            _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
+            _status.update {
+                it.copy(
+                    txEnabled = false,
+                    status = if (it.autoProgram.level.enabled) {
+                        "发送已关闭（只接收）｜自动程序待命（开总开关即继续）"
+                    } else {
+                        "发送已关闭（只接收）"
+                    },
+                )
+            }
             return
         }
-        val p = lockAutoParity()
-        _status.update { it.copy(txEnabled = true, txParity = p, status = "发射已开启（${parityLabel(p)}）") }
-    }
-
-    /** 按手机 UTC 时间锁定自动周期：下一个「距起点 >= 前导余量」的时隙。 */
-    private fun lockAutoParity(): Int {
-        pinnedTxParity?.let {
-            autoParity = it
-            return it
-        }
-        val st = _status.value
-        val now = AudioEngine.utcNowMs()
-        val p = nextSlotParity(now, st.slotMs.toLong(), txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS)
-        autoParity = p
-        return p
+        relockAutoParityIfNeeded()
+        val p = _status.value.txParity
+        _status.update { it.copy(txEnabled = true, txParity = p, status = "发送已开启（允许发射，${parityLabel(p)}）") }
     }
 
     /**
@@ -532,9 +555,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         pinnedTxParity = null
     }
 
-    /** 重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
+    /** 按需重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
     private fun relockAutoParityIfNeeded() {
-        _status.update { it.copy(txParity = lockAutoParity()) }
+        val st = _status.value
+        val p = effectiveTxParity(
+            pinned = pinnedTxParity,
+            locked = autoParity,
+            nowMs = AudioEngine.utcNowMs(),
+            slotMs = st.slotMs.toLong(),
+            leadMs = txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
+        )
+        autoParity = p
+        if (st.txParity != p) _status.update { it.copy(txParity = p) }
     }
 
     fun clearMessages() {
@@ -614,7 +646,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                autoArmed = false,
                 qso = qsoEngine.stop(),
             )
         }
@@ -751,7 +782,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 紧急停止发射：解除武装并中止可能正在进行的播放。 */
+    /**
+     * 紧急停止发射：解除武装并中止可能正在进行的播放。
+     *
+     * **只停本次发射，不动自动程序等级**：等级 ≥1 时自动程序下一时隙会继续（要全停请关
+     * 「发送总开关」，或把等级切回「0 手动选择」）。
+     */
     fun stopTransmit() {
         txJob?.cancel()
         txJob = null
@@ -763,10 +799,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                autoArmed = false,
                 qso = p,
                 txCountdownMs = 0,
-                status = "已停止发射",
+                status = if (it.autoProgram.level.enabled) {
+                    "已停止发射｜自动程序仍开启（要全停请关「发送总开关」）"
+                } else {
+                    "已停止发射"
+                },
             )
         }
     }
@@ -889,7 +928,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (!isOwnTxSlot) {
                     if (st.qso.active) {
                         applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
-                    } else if (st.autoArmed) {
+                    } else if (st.autoProgram.level.enabled) {
                         runAutoProgram(batch)
                     }
                 }
@@ -916,8 +955,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     retryLeft = 0
                 }
                 QsoState.FAILED -> {
-                    // 通联失败：释放周期，并记住对手供自动程序优先重试（有次数上限）
-                    autoParity = null
+                    // 通联失败：只解除「目标时隙固定」（保留当前发射周期，避免下一段跳时隙），
+                    // 并记住对手供自动程序优先重试（有次数上限）
                     pinnedTxParity = null
                     val c = p.theirCall
                     if (c != null && c.equals(retryCall, ignoreCase = true)) {
@@ -931,12 +970,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 else -> Unit
             }
         }
+        // 「单次通联」：一次 QSO 结束即把等级切回「0 手动选择」（＝关闭自动程序），避免无限自动呼叫。
+        // 因为「等级即开关」，这里必须改持久化的等级本身。
+        val stopAuto = finished && _status.value.autoProgram.singleQso &&
+            _status.value.autoProgram.level.enabled
+        if (stopAuto) {
+            retryCall = null
+            retryLeft = 0
+            persist { it.copy(auto = it.auto.copy(level = AutoLevel.MANUAL)) }
+        }
         _status.update {
             it.copy(
                 qso = p,
-                status = "QSO：${p.description}",
-                // 「单次通联」开启时，一次 QSO 结束即解除自动程序，避免无限自动呼叫
-                autoArmed = if (finished && it.autoProgram.singleQso) false else it.autoArmed,
+                status = if (stopAuto) {
+                    "QSO：${p.description}｜单次通联完成，自动程序已关闭（等级切回「0 手动选择」）"
+                } else {
+                    "QSO：${p.description}"
+                },
+                autoProgram = if (stopAuto) it.autoProgram.copy(level = AutoLevel.MANUAL) else it.autoProgram,
             )
         }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
@@ -952,8 +1003,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 mode = st.protocol.name,
                 reportSent = entry.reportSent,
                 reportReceived = entry.reportReceived,
-                // 台站备注作为默认 COMMENT 写入新记录（快照，可留空）
-                comment = latestSettings.note.trim().ifEmpty { null },
+                // 默认 COMMENT：台站备注（快照，可留空）+ 自动距离备注
+                //（仿 FT8CN：`Distance: 1738 km, QSO by Ft8Vox`）
+                comment = QsoComment.auto(
+                    stationNote = latestSettings.note,
+                    myGrid = st.myGrid.ifEmpty { null },
+                    theirGrid = entry.theirGrid,
+                ),
             )
             viewModelScope.launch(Dispatchers.IO) {
                 qsoRepo.add(entity)
@@ -1068,8 +1124,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
                 if (finished) {
-                    // 最后一条（RR73/73）已发完：此时才释放时隙锁定，供下一段 QSO 重新锁定
-                    autoParity = null
+                    // 最后一条（RR73/73）已发完：只解除「目标时隙固定」，
+                    // **保留当前发射周期**——下一段 QSO 沿用同一周期。
+                    // 若在这里把周期清掉，下一段会按当前时间重锁，导致偶/奇来回跳时隙。
                     pinnedTxParity = null
                 }
                 _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
@@ -1346,6 +1403,25 @@ internal fun nextSlotParity(nowMs: Long, slotMs: Long, leadMs: Long): Int {
     if (idx * slotMs - now < leadMs) idx += 1
     return (idx % 2L).toInt()
 }
+
+/**
+ * 「需要时」决定当前应当使用的发射周期。
+ *
+ * - [pinned] 非空（已「设为目标」/ 对齐目标时隙）→ 用这个固定周期；
+ * - 否则若已有锁定周期 [locked] → **保持不变**；
+ * - 两者都没有（刚开启总开关 / 刚停止接收）→ 按 UTC 时间取下一个来得及准备的时隙。
+ *
+ * 之所以要「保持不变」：每段 QSO 结束都按当前时间重锁，会让发射时隙在偶/奇之间来回跳
+ * （QSO 之间「跳时隙」），与 WSJT-X / FT8CN「一直用同一周期收发」不一致。
+ * 需要换周期只有两种情况：目标在相反周期（上面的固定周期），或用户重开总开关。
+ */
+internal fun effectiveTxParity(
+    pinned: Int?,
+    locked: Int?,
+    nowMs: Long,
+    slotMs: Long,
+    leadMs: Long,
+): Int = pinned ?: locked ?: nextSlotParity(nowMs, slotMs, leadMs)
 
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =

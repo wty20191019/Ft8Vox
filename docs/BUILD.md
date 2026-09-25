@@ -49,6 +49,11 @@ Windows 下使用 `gradlew.bat` 替代 `./gradlew`。
 
 ## 5. CI
 
-- 工作流：`.github/workflows/android.yml`。
-- 环境：`ubuntu-latest` + JDK 25 + Android SDK + 上述 NDK/CMake。
-- 执行：`./gradlew assembleDebug test`。
+**当前状态：暂不启用**（2026-09-25 决定，先只在本地构建与跑测试）。
+
+- 工作流文件保留在 `.github/workflows/android.yml.disabled`；GitHub Actions **只读取 `.yml`/`.yaml`**，
+  因此该文件不会被触发。要重新启用，改回 `.github/workflows/android.yml` 即可。
+- 工作流内容：`ubuntu-latest` + JDK 25 + Android SDK + 上述 NDK/CMake，执行
+  `./gradlew assembleDebug test --no-daemon`。
+- 因此「与 CI 一致」的表述目前等价于「与本地一条命令一致」：
+  `.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest --console=plain`。

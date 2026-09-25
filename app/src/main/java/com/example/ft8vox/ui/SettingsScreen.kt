@@ -1,6 +1,7 @@
 package com.example.ft8vox.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -42,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -53,16 +56,26 @@ import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
-import com.example.ft8vox.data.settings.WaterfallPalette
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
+import com.example.ft8vox.qso.AutoLevel
+import com.example.ft8vox.ui.theme.BarCq
+import com.example.ft8vox.ui.theme.BarDuplicate
+import com.example.ft8vox.ui.theme.BarNewCall
+import com.example.ft8vox.ui.theme.BarNewDecode
+import com.example.ft8vox.ui.theme.BarNewEntity
+import com.example.ft8vox.ui.theme.BarNewGrid
+import com.example.ft8vox.ui.theme.BarToMe
+import com.example.ft8vox.ui.theme.BarTx
+import com.example.ft8vox.ui.theme.BarWorked
+import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，new_ui.md §6）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志与网络 / 关于。
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -84,6 +97,8 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
+    // 待确认的「启用自动程序」等级（「0 手动选择」→ 1+ 时的防误发确认）
+    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -151,7 +166,7 @@ fun SettingsScreen(
                     note = v
                     settings.update { it.copy(note = v) }
                 },
-                supporting = "自动写入新通联记录的 COMMENT 字段（可留空）",
+                supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
             )
         }
 
@@ -391,8 +406,7 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                armed = false,
-                onSetLevel = { lv -> settings.update { s -> s.copy(auto = s.auto.copy(level = lv)) } },
+                onSetLevel = { lv -> requestAutoLevel(lv, sessionStatus, session) { confirmAutoLevel = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
             )
             PrefDivider()
@@ -414,12 +428,17 @@ fun SettingsScreen(
 
         // ---------- 6.4 高亮与提醒 ----------
         SettingsGroup("高亮与提醒") {
-            PrefNote("关闭某类后，该类不再抢占最高优先级色条；具体颜色见设计说明。")
+            PrefNote(
+                "每行只有一条色条，取命中的最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > " +
+                    "重复 > 新网格 > 新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码（绿）。" +
+                    "关闭某类后它不再参与竞争，行尾圆点也随之消失。开关右侧圆点 = 该类对应的色条颜色。",
+            )
             PrefSwitch(
                 title = "新 CQ 区域",
                 subtitle = "未通联过的 CQ 区域",
                 checked = app.highlightNewCqZone,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewCqZone = v) } },
+                dotColor = BarNewEntity,
             )
             PrefDivider()
             PrefSwitch(
@@ -427,6 +446,7 @@ fun SettingsScreen(
                 subtitle = "未通联过的 ITU 区域",
                 checked = app.highlightNewItu,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewItu = v) } },
+                dotColor = BarNewEntity,
             )
             PrefDivider()
             PrefSwitch(
@@ -434,33 +454,38 @@ fun SettingsScreen(
                 subtitle = "未通联过的 DXCC 实体（按呼号前缀映射）",
                 checked = app.highlightNewEntity,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewEntity = v) } },
+                dotColor = BarNewEntity,
             )
             PrefDivider()
             PrefSwitch(
                 title = "新网格",
                 checked = app.highlightNewGrid,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewGrid = v) } },
+                dotColor = BarNewGrid,
             )
             PrefDivider()
             PrefSwitch(
                 title = "新前缀",
                 checked = app.highlightNewPrefix,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewPrefix = v) } },
+                dotColor = BarNewEntity,
             )
             PrefDivider()
             PrefSwitch(
                 title = "新呼号",
                 checked = app.highlightNewCall,
                 onCheckedChange = { v -> settings.update { it.copy(highlightNewCall = v) } },
+                dotColor = BarNewCall,
             )
             PrefDivider()
             PrefChoice(
                 title = "已通联",
-                subtitle = "已通联呼号在解码列表中的呈现方式",
+                subtitle = "已通联呼号在解码列表中的呈现方式（红条 + 删除线/下划线/隐藏）",
                 options = WorkedStyle.entries,
                 selected = app.workedStyle,
                 onSelect = { v -> settings.update { it.copy(workedStyle = v) } },
                 label = { it.label },
+                dotColor = BarWorked,
             )
             PrefDivider()
             PrefSwitch(
@@ -474,13 +499,17 @@ fun SettingsScreen(
                 title = "末端标记：红=有我",
                 checked = app.endMarkMyCall,
                 onCheckedChange = { v -> settings.update { it.copy(endMarkMyCall = v) } },
+                dotColor = VoxError,
             )
             PrefDivider()
             PrefSwitch(
                 title = "末端标记：蓝=正通联",
                 checked = app.endMarkActive,
                 onCheckedChange = { v -> settings.update { it.copy(endMarkActive = v) } },
+                dotColor = MaterialTheme.colorScheme.primary,
             )
+            PrefDivider()
+            HighlightLegend()
         }
 
         // ---------- 6.5 外观 ----------
@@ -502,17 +531,6 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefChoice(
-                title = "瀑布配色",
-                subtitle = "渐变在 native 生成，切换依赖 U7",
-                options = WaterfallPalette.entries,
-                selected = app.waterfallPalette,
-                onSelect = { v -> settings.update { it.copy(waterfallPalette = v) } },
-                label = { it.label },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefChoice(
                 title = "瀑布高度",
                 subtitle = "改动回到操作页立即生效（占用解码列表的可视高度）",
                 options = WaterfallHeight.entries,
@@ -523,22 +541,21 @@ fun SettingsScreen(
             PrefDivider()
             PrefAction(
                 title = "恢复布局",
-                subtitle = "瀑布高度 / 字体 / 瀑布配色回到默认",
+                subtitle = "瀑布高度 / 字体回到默认",
                 buttonLabel = "恢复",
                 onClick = {
                     settings.update {
                         it.copy(
                             waterfallHeight = WaterfallHeight.NORMAL,
                             fontSize = FontSize.MEDIUM,
-                            waterfallPalette = WaterfallPalette.CLASSIC,
                         )
                     }
                 },
             )
         }
 
-        // ---------- 6.6 日志 / 网络 ----------
-        SettingsGroup("日志与网络") {
+        // ---------- 6.6 日志 ----------
+        SettingsGroup("日志") {
             PrefInfo(
                 title = "ADIF 路径",
                 subtitle = "通过系统文件选择器（SAF）导入 / 导出，不需要存储权限",
@@ -566,42 +583,6 @@ fun SettingsScreen(
                 subtitle = "共 ${entries.size} 条，删除后不可撤销",
                 buttonLabel = "清空",
                 onClick = { confirmClear = true },
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "CloudLog 上传",
-                subtitle = "需要服务器地址与 API Key",
-                checked = app.cloudLogEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(cloudLogEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "LoTW 上传",
-                subtitle = "需要 TQSL 凭据",
-                checked = app.lotwEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(lotwEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "eQSL 上传",
-                subtitle = "需要账号凭据",
-                checked = app.eqslEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(eqslEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "局域网后台",
-                subtitle = "需要前台服务常驻（阶段 9）",
-                checked = app.lanServerEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(lanServerEnabled = v) } },
-                enabled = false,
-                badge = "U7",
             )
         }
 
@@ -651,6 +632,18 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text("取消") }
             },
+        )
+    }
+
+    confirmAutoLevel?.let { lv ->
+        AutoEnableConfirmDialog(
+            level = lv,
+            status = sessionStatus,
+            onConfirm = {
+                confirmAutoLevel = null
+                session.setAutoLevel(lv)
+            },
+            onDismiss = { confirmAutoLevel = null },
         )
     }
 }
@@ -761,7 +754,11 @@ private fun PrefNote(text: String) {
     )
 }
 
-/** 开关行。 */
+/**
+ * 开关行。
+ *
+ * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（new_ui.md §3.3）。
+ */
 @Composable
 private fun PrefSwitch(
     title: String,
@@ -770,10 +767,66 @@ private fun PrefSwitch(
     subtitle: String? = null,
     enabled: Boolean = true,
     badge: String? = null,
+    dotColor: Color? = null,
 ) {
     PrefRow(title, subtitle, badge, trailing = {
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+            if (dotColor != null) {
+                Spacer(Modifier.width(8.dp))
+                ColorDot(dotColor)
+            }
+        }
     })
+}
+
+/** 高亮色小圆点（带一圈淡描边，亮色主题下也看得清）。 */
+@Composable
+private fun ColorDot(color: Color) {
+    Box(
+        Modifier
+            .size(10.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), CircleShape),
+    )
+}
+
+/**
+ * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（new_ui.md §3.3）。
+ */
+@Composable
+private fun HighlightLegend() {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            "固定颜色（不受上面开关影响）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        LegendRow(BarTx, "正在发射（整行黄底黑字）")
+        LegendRow(BarToMe, "与我有关 / 当前 QSO 对手（呼号同时显示为红字）")
+        LegendRow(BarCq, "CQ")
+        LegendRow(BarDuplicate, "重复解码（同一文本在更早时隙出现过；整行变淡）")
+        LegendRow(BarNewDecode, "其余新解码（兜底）")
+    }
+}
+
+/** 图例中的一行：色点 + 说明。 */
+@Composable
+private fun LegendRow(color: Color, text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ColorDot(color)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /** 单选（FilterChip）行：标题在上，选项可横向滚动。 */
@@ -787,9 +840,11 @@ private fun <T> PrefChoice(
     subtitle: String? = null,
     enabled: Boolean = true,
     badge: String? = null,
+    /** 非空时在标题行右端显示同色小圆点。 */
+    dotColor: Color? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 title,
                 style = MaterialTheme.typography.bodyMedium,
@@ -798,6 +853,10 @@ private fun <T> PrefChoice(
             if (badge != null) {
                 Spacer(Modifier.width(6.dp))
                 U7Badge(badge)
+            }
+            if (dotColor != null) {
+                Spacer(Modifier.weight(1f))
+                ColorDot(dotColor)
             }
         }
         if (subtitle != null) {

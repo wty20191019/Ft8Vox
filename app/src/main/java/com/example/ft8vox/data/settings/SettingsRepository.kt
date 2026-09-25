@@ -101,11 +101,6 @@ private object Keys {
     val endMarkActive = booleanPreferencesKey("end_mark_active")
     val themeMode = stringPreferencesKey("theme_mode")
     val fontSize = stringPreferencesKey("font_size")
-    val waterfallPalette = stringPreferencesKey("waterfall_palette")
-    val cloudLogEnabled = booleanPreferencesKey("cloudlog_enabled")
-    val lotwEnabled = booleanPreferencesKey("lotw_enabled")
-    val eqslEnabled = booleanPreferencesKey("eqsl_enabled")
-    val lanServerEnabled = booleanPreferencesKey("lan_server_enabled")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
     val decodePreset = stringPreferencesKey("decode_preset")
@@ -195,11 +190,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         endMarkActive = this[Keys.endMarkActive] ?: defaults.endMarkActive,
         themeMode = enumOr(Keys.themeMode, defaults.themeMode),
         fontSize = enumOr(Keys.fontSize, defaults.fontSize),
-        waterfallPalette = enumOr(Keys.waterfallPalette, defaults.waterfallPalette),
-        cloudLogEnabled = this[Keys.cloudLogEnabled] ?: defaults.cloudLogEnabled,
-        lotwEnabled = this[Keys.lotwEnabled] ?: defaults.lotwEnabled,
-        eqslEnabled = this[Keys.eqslEnabled] ?: defaults.eqslEnabled,
-        lanServerEnabled = this[Keys.lanServerEnabled] ?: defaults.lanServerEnabled,
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
@@ -264,11 +254,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.endMarkActive] = endMarkActive
     prefs[Keys.themeMode] = themeMode.name
     prefs[Keys.fontSize] = fontSize.name
-    prefs[Keys.waterfallPalette] = waterfallPalette.name
-    prefs[Keys.cloudLogEnabled] = cloudLogEnabled
-    prefs[Keys.lotwEnabled] = lotwEnabled
-    prefs[Keys.eqslEnabled] = eqslEnabled
-    prefs[Keys.lanServerEnabled] = lanServerEnabled
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodePreset] = decodePreset.name

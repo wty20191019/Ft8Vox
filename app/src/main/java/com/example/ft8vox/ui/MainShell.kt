@@ -18,10 +18,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.example.ft8vox.qso.AutoLevel
 
 /**
  * 底部导航的四个页面（new_ui.md §2：操作 / 地图 / 日志 / 设置）。
@@ -57,6 +59,8 @@ fun MainShell(
     var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
+    // 待确认的「启用自动程序」等级（从「0 手动选择」切到 1+ 时的防误发确认）
+    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
@@ -139,10 +143,35 @@ fun MainShell(
     if (autoDialogOpen) {
         AutoProgramDialog(
             program = status.autoProgram,
-            armed = status.autoArmed,
-            onSetLevel = session::setAutoLevel,
+            onSetLevel = { lv -> requestAutoLevel(lv, status, session) { confirmAutoLevel = it } },
             onOption = session::setAutoOption,
             onDismiss = { autoDialogOpen = false },
         )
     }
+
+    confirmAutoLevel?.let { lv ->
+        AutoEnableConfirmDialog(
+            level = lv,
+            status = status,
+            onConfirm = {
+                confirmAutoLevel = null
+                session.setAutoLevel(lv)
+            },
+            onDismiss = { confirmAutoLevel = null },
+        )
+    }
+}
+
+/**
+ * 点击自动程序等级：从「0 手动选择」切到 1+ 时先记下待确认等级（由调用方渲染
+ * [AutoEnableConfirmDialog]），其余情况直接生效。
+ */
+internal fun requestAutoLevel(
+    level: AutoLevel,
+    status: ReceiverStatus,
+    session: SessionViewModel,
+    onNeedConfirm: (AutoLevel) -> Unit,
+) {
+    if (level.enabled && !status.autoProgram.level.enabled) onNeedConfirm(level)
+    else session.setAutoLevel(level)
 }

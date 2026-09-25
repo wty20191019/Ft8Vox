@@ -22,7 +22,7 @@
 
 | 项 | 结论 |
 | --- | --- |
-| 项目定位 | **开源发布**（需许可证合规、文档、多语言、CI） |
+| 项目定位 | **开源发布**（需许可证合规、文档、多语言）；**CI 暂不配置**（见下） |
 | 开源许可证 | **GPL-3.0**（内嵌 ft8_lib 为 MIT、kissfft 为 BSD-3-Clause，均与 GPL-3.0 兼容） |
 | 协议范围 | **FT8 + FT4** |
 | 音频 API | **AAudio**（minSdk 26） |
@@ -33,6 +33,7 @@
 | 日志 | **MVP 即含 ADIF 日志** |
 | 调试环境 | **以模拟器为主**，真机做音频/硬件验证 |
 | UI 框架 | Jetpack Compose（沿用现有工程） |
+| 持续集成 | **暂不配置**（2026-09-25 决定）：只做本地构建与测试；原 GitHub Actions 工作流已改名为 `.github/workflows/android.yml.disabled` 停用保留，随时可恢复（见 `docs/BUILD.md` §5） |
 
 ### 1.3 当前仓库起点（作为基线）
 
@@ -151,14 +152,15 @@ com/example/ft8vox/
 
 任务：
 - 工具链固定（不降级）：保留现有组合（AGP 9.3.2 / Gradle 9.5.0 / Kotlin 2.2.10 / JDK 25），不降级；在 `docs/BUILD.md` 中记录各组件版本。
-- 构建可复现：校验 `gradle-wrapper.properties` 的 `distributionSha256Sum`，CI 使用固定 JDK。
+- 构建可复现：校验 `gradle-wrapper.properties` 的 `distributionSha256Sum`，固定 JDK 25。
 - `ndk { abiFilters }` 增加 `x86_64`（模拟器）。
   - AGP 9 新 DSL 注意：`ndk { abiFilters }` 必须放在 `defaultConfig` 内；顶层的 `android { ndk { ... } }` 会报 `Unresolved reference 'ndk'`。
 - 清理：删除 `jni_bridge.c.bak`；修正 `jni_bridge.c` 乱码注释；保留 `.gitignore`。
 - 建立 CI：编译 + Kotlin 单测 + native 编译（Windows/Ubuntu 至少其一）。
+  - **2026-09-25 调整**：CI **暂不使用**，只做本地构建与测试；原工作流保留为 `.github/workflows/android.yml.disabled`（见 `docs/BUILD.md` §5）。
 - 仓库治理：分支策略、提交规范、`README`、`CONTRIBUTING`、`NOTICE`（ft8_lib 归属与许可证）。
 
-验收：`gradlew assembleDebug` 与 `gradlew test` 成功；CI 绿灯；模拟器可安装运行。
+验收：`gradlew assembleDebug` 与 `gradlew test` 成功；模拟器可安装运行（CI 绿灯一项暂不适用）。
 
 ### 阶段 1：打通 JNI 最小闭环 + CMake 扩展
 
@@ -331,11 +333,12 @@ com/example/ft8vox/
 >   - **验证**：JVM 单测 118 项全过（新增 `DecodeSettingsTest`/`DecodeParamsTest` 共 11 项）；
 >     instrumented 24 项全过（新增 `DecodeParamsInstrumentedTest` 4 项：快/深预设解码、运行中热更新后仍解码、`maxDecoded` 生效）；
 >     模拟器实测：预设切换正确写入各项、手动改参数切到「自定义」、接收中热更新参数不崩溃（进程存活、状态仍「接收中」）。
-> - 本阶段**明确不做**：Hound/Fox（DXpedition）、在线地图瓦片、精确 DXCC 实体表、云日志上传。
+> - 本阶段**明确不做**：Hound/Fox（DXpedition）、在线地图瓦片、精确 DXCC 实体表、云日志上传、局域网后台；其中「云日志上传 / 局域网后台 / 瀑布配色」的置灰占位项已在 U9 后**删除**（见 `NEW-UI-PLAN.md` §收尾）。
 > - **2026-09-25 7e 收尾（离线部分）完成**：
 >   - **设置项全部接入**：新增设置页「界面」区（瀑布高度 紧凑/标准/高，此前只有代码无入口）、「发射」区补「默认发射周期」、
 >     「解码」区补「恢复默认（保留台站信息）」（接入此前未被调用的 `SettingsViewModel.resetToDefaults()`）；
->     「备注」明确为**新通联默认 COMMENT**——QSO 自动落库时写入该记录（快照，可留空）。
+>     「备注」明确为**新通联默认 COMMENT**——QSO 自动落库时写入该记录（快照，可留空）；
+>     其后再追加自动备注 `Distance: 1738 km, QSO by Ft8Vox`（仿 FT8CN，距离 = 我的网格 ↔ 对方网格大圆距离取整 km，缺网格时只留 `QSO by Ft8Vox`）。
 >   - **空态/错误态**：呼号留空、网格非法（非 2/4/6/8 位合法 Maidenhead）时输入框报红并给出提示；
 >     操作页解码列表补空态（未开始接收 / 暂无解码 / 被过滤三种，由纯函数 `decodeEmptyHint` 生成）；
 >     日志页、网格页原有空态保持。
@@ -351,7 +354,7 @@ com/example/ft8vox/
 
 > 拆解与进度见 **`docs/NEW-UI-PLAN.md`**（U1 全局外壳 / U2 操作页 / U3 发射抽屉 / U4 地图 / U5 日志 / U6 设置 / U7 后端）。
 >
-> 进度：U1（主题/AppBar/底部状态条/4 Tab）、U2（操作页：水位图 30% 屏高 + 多选筛选 Chip + 彩色解码卡片与手势 + 半屏详情）、U3（发射抽屉：收起 56dp / 上拉 Bottom Sheet，消息类型、自定义 42·75、4×2 宏、发送队列、立即发/排下一周期的大发射按钮）、U4（地图页：全屏无网格线深色底图、蓝/黄/红网格与呼号标记、CQ 红旗、上一时隙信号连线动画、右下浮控与底部图例/统计/开关）、U5（日志页：搜索 + 波段/模式/日期筛选、表格化卡片、长按编辑/删除、底部 QSO/DXCC/网格/确认统计与波段柱图、「⋮」菜单 ADIF 导入导出/清空/局域网地址占位）、U6（设置页：Preference 风格 8 组、30+ 新增设置项落 DataStore、暗/亮与字体小中大即时生效、高亮开关接入解码列表、未接后端项标 U7 置灰）、**U7a**（`qso/Dxcc.kt`：约 180 个 DXCC 实体 + 呼号前缀映射（最长前缀优先，含常用呼号区扩展）、CQ/ITU 代表区域与坐标；日志 DXCC 按实体去重；「新 DXCC / 新 ITU / 新 CQ 区域」开关点亮）、**U7b**（VOX/PTT native：输入电平/VOX 触发判定、发射前导静音 + 前导音并对齐时隙起点、写入看门狗、测试音、状态栏 VOX 电平、设置页 6.1 除「输出声卡」外全部点亮）、**U7c**（音频路由与增益：`AudioManager` 设备枚举 + AAudio `setDeviceId` 选择输入/输出设备、采集增益热生效、设置页 6.1 输出声卡与 6.2 输入设备/增益点亮）、**U7d**（含我呼号哔声：收到直接呼叫我方的报文时以系统提示音提醒）与 **U8**（波段多频率选择 + 自定义波段/频率 + 发射总开关默认只接收 + 按手机 UTC 时间的自动奇偶周期）已完成并提交；U7 其余项：FST4 **明确不做**（`ft8_lib` 无该模式，需自研调制解调）；局域网后台、在线日志本轮不做；离线瓦片暂缓（缺数据源，维持矢量底图）。
+> 进度：U1（主题/AppBar/底部状态条/4 Tab）、U2（操作页：水位图 30% 屏高 + 多选筛选 Chip + 彩色解码卡片与手势 + 半屏详情）、U3（发射抽屉：收起 56dp / 上拉 Bottom Sheet，消息类型、自定义 42·75、4×2 宏、发送队列、立即发/排下一周期的大发射按钮）、U4（地图页：全屏无网格线深色底图、蓝/黄/红网格与呼号标记、CQ 红旗、上一时隙信号连线动画、右下浮控与底部图例/统计/开关）、U5（日志页：搜索 + 波段/模式/日期筛选、表格化卡片、长按编辑/删除、底部 QSO/DXCC/网格/确认统计与波段柱图、「⋮」菜单 ADIF 导入导出/清空/局域网地址占位）、U6（设置页：Preference 风格 8 组、30+ 新增设置项落 DataStore、暗/亮与字体小中大即时生效、高亮开关接入解码列表、未接后端项标 U7 置灰）、**U7a**（`qso/Dxcc.kt`：约 180 个 DXCC 实体 + 呼号前缀映射（最长前缀优先，含常用呼号区扩展）、CQ/ITU 代表区域与坐标；日志 DXCC 按实体去重；「新 DXCC / 新 ITU / 新 CQ 区域」开关点亮）、**U7b**（VOX/PTT native：输入电平/VOX 触发判定、发射前导静音 + 前导音并对齐时隙起点、写入看门狗、测试音、状态栏 VOX 电平、设置页 6.1 除「输出声卡」外全部点亮）、**U7c**（音频路由与增益：`AudioManager` 设备枚举 + AAudio `setDeviceId` 选择输入/输出设备、采集增益热生效、设置页 6.1 输出声卡与 6.2 输入设备/增益点亮）、**U7d**（含我呼号哔声：收到直接呼叫我方的报文时以系统提示音提醒）与 **U8**（波段多频率选择 + 自定义波段/频率 + 发送总开关默认只接收 + 按手机 UTC 时间的自动奇偶周期）已完成并提交；U7 其余项：FST4 **明确不做**（`ft8_lib` 无该模式，需自研调制解调）；局域网后台、在线日志：**不做**（占位项已在 U9 后删除，见 `NEW-UI-PLAN.md` §收尾）；离线瓦片暂缓（缺数据源，维持矢量底图）。
 
 ---
 
@@ -364,7 +367,7 @@ com/example/ft8vox/
 - 多语言：中/英起步，字符串外置。
 - 许可证合规：保留 ft8_lib 的 LICENSE 与归属；项目自身采用 **GPL-3.0**；生成 `NOTICE`。
 - R8/混淆：JNI 类与方法 keep（`keepRules/rules.keep`），否则 release 崩溃。
-- 发布：签名配置、版本号、GitHub Release / tag；CI 产出 APK。
+- 发布：签名配置、版本号、GitHub Release / tag；APK 由本地构建产出（**暂不配置 CI 出包**，见 `docs/BUILD.md` §5）。
 - 免责声明与合规提示（发射相关）。
 
 验收：Release APK 在模拟器与真机稳定运行；仓库可被他人克隆构建。
@@ -381,7 +384,7 @@ com/example/ft8vox/
 - 呼号地区归属（中国省级可参考 JTDX 石家庄版数据）。
 - 全类型报文：DXpedition（Hound）、ARRL Field Day、RTTY RU 等。
 - 蓝牙音频 / 单线音频等更多接入方式。
-- 云日志上传（Cloudlog / QRZ）——需用户自配凭据与隐私说明。
+- 云日志上传（Cloudlog / QRZ / LoTW / eQSL）与局域网后台——需用户自配凭据与隐私说明、前台服务常驻；本轮**不做**，占位项已删除（见 `NEW-UI-PLAN.md` §收尾）。
 
 ---
 
@@ -446,7 +449,7 @@ com/example/ft8vox/
 
 | # | 风险 | 影响 | 应对 |
 | --- | --- | --- | --- |
-| R1 | 工具链较新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建不可复现 | 阶段 0 锁定版本、校验 wrapper、CI 固定 JDK 并验证构建 |
+| R1 | 工具链较新（AGP 9.3.2 / compileSdk 37 / JDK 25） | 依赖不兼容、构建不可复现 | 阶段 0 锁定版本、校验 wrapper、固定 JDK 25 并以本地全量构建（`assembleDebug` + `testDebugUnitTest`）验证（CI 暂不配置） |
 | R2 | AAudio 采样率/路由在模拟器与真机差异大 | 采集不可用或失真 | native 重采样 + 真机验证 + 文件注入兜底 |
 | R3 | 音频时钟抖动 / 时隙漂移 | 解码率下降或漏解 | 动态对齐、窗口余量、丢帧统计与补偿 |
 | R4 | `audio.c` 依赖 PortAudio | 若误加入编译会失败 | CMake 明确排除，只编 monitor/wave/kissfft/ft8 |
@@ -463,7 +466,7 @@ com/example/ft8vox/
 
 | 里程碑 | 对应阶段 | 标志 |
 | --- | --- | --- |
-| M0 基线就绪 | 0 | 稳定工具链 + CI + 可跑 APK |
+| M0 基线就绪 | 0 | 稳定工具链 + 可跑 APK（CI 暂不配置） |
 | M1 桥打通 | 1 | Kotlin 调到 native，库完整编入 |
 | M2 解码可用 | 2 | WAV 回归通过（FT8+FT4） |
 | M3 编码可用 | 3 | 自回环解码成功 |
@@ -483,6 +486,6 @@ com/example/ft8vox/
 2. 瀑布性能不足时的升级路径（SurfaceView / OpenGL）。
 3. 目标频段与默认频率表（是否内置常用波段）。
 4. 发射功率/ALC 提示策略（无 CAT，只能提示）。
-5. 云日志上传是否纳入，及隐私与凭据存储方案。
+5. ~~云日志上传是否纳入，及隐私与凭据存储方案~~（已决定**不做**：设置页占位项已删除，见 `NEW-UI-PLAN.md` §收尾）。
 6. 多语言首批语言范围（中/英之外）。
 7. 呼号归属数据来源与体积/更新方式。

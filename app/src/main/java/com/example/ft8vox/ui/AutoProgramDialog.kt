@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -26,12 +27,12 @@ import com.example.ft8vox.qso.AutoProgramSettings
 /**
  * 「自动程序」设置弹窗（顶栏菜单入口），对应 FT8CN 的自动程序菜单。
  *
- * 只编辑策略；启用/关闭在发射抽屉的「自动程序」行完成（需防误发确认）。
+ * **等级即开关**：选「0 手动选择」＝关闭，选 1+ ＝开启。调用方（`MainShell`）负责在
+ * 「0 → 1+」时先弹 [AutoEnableConfirmDialog] 防误发确认，再执行 `setAutoLevel`。
  */
 @Composable
 fun AutoProgramDialog(
     program: AutoProgramSettings,
-    armed: Boolean,
     onSetLevel: (AutoLevel) -> Unit,
     onOption: ((AutoProgramSettings) -> AutoProgramSettings) -> Unit,
     onDismiss: () -> Unit,
@@ -42,7 +43,6 @@ fun AutoProgramDialog(
         text = {
             AutoProgramPanel(
                 program = program,
-                armed = armed,
                 onSetLevel = onSetLevel,
                 onOption = onOption,
             )
@@ -55,15 +55,16 @@ fun AutoProgramDialog(
  * 自动程序策略面板（弹窗与设置页共用）。
  *
  * [onOption] 接收一个「就地变换」，便于对 [AutoProgramSettings] 做单字段 copy。
+ * 等级行只上报点击，防误发确认由调用方处理。
  */
 @Composable
 fun AutoProgramPanel(
     program: AutoProgramSettings,
-    armed: Boolean,
     onSetLevel: (AutoLevel) -> Unit,
     onOption: ((AutoProgramSettings) -> AutoProgramSettings) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val enabled = program.level.enabled
     Column(
         modifier
             .fillMaxWidth()
@@ -71,9 +72,10 @@ fun AutoProgramPanel(
             .verticalScroll(rememberScrollState()),
     ) {
         Text(
-            "启用后自动完成整段 QSO：自动应答对方的 CQ，也自动应答发给我方的呼号 / 报告，" +
+            "等级即开关：「0 手动选择」＝关闭，1+ ＝开启。" +
+                "开启后自动完成整段 QSO：自动应答对方的 CQ，也自动应答发给我方的呼号 / 报告，" +
                 "完成后自动接续下一台；4+ 在无可答目标时自动发 CQ（自动搜索）。" +
-                "启用/关闭请在发射抽屉的「自动程序」行操作（需先打开发射总开关）。",
+                "从「0」切到 1+ 会先弹防误发确认，确认后自动打开「发送总开关」（总开关本身只表示允许发射）。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -139,15 +141,56 @@ fun AutoProgramPanel(
             checked = program.singleQso,
             onChange = { v -> onOption { it.copy(singleQso = v) } },
         )
-        if (armed) {
+        if (enabled) {
             Text(
-                "当前已启用；切到「0 手动选择」会立即停止。",
+                "当前已启用（等级 ${program.level.shortLabel}）；切到「0 手动选择」即关闭，「发送总开关」不变。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
     }
+}
+
+/**
+ * 「启用自动程序」防误发确认：等级从「0 手动选择」切到 1+ 时弹出。
+ *
+ * 顶栏弹窗与设置页两处共用同一实现（抽屉没有启用按钮，等级只能在这两处改），确认后由调用方执行
+ * `SessionViewModel.setAutoLevel`。
+ */
+@Composable
+fun AutoEnableConfirmDialog(
+    level: AutoLevel,
+    status: ReceiverStatus,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("启用自动程序") },
+        text = {
+            Text(
+                buildString {
+                    append("将按「${level.label}」自动发射：选台与整段 QSO 报文流程均由自动程序决定。\n")
+                    append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜时隙：自动（下一个 ")
+                    append(if (status.txParity == 0) "偶" else "奇")
+                    append("）\n")
+                    append(
+                        if (status.txEnabled) "发送总开关：已开（只表示允许发射）。\n"
+                        else "发送总开关：关 —— 确认启用时会自动打开。\n",
+                    )
+                    if (status.autoProgram.singleQso) {
+                        append("「单次通联」已开：一次 QSO 结束后等级会自动切回「0 手动选择」。\n")
+                    } else {
+                        append("「单次通联」已关：将连续自动通联，直到把等级切回「0 手动选择」或关「发送总开关」。\n")
+                    }
+                    append("请确认电台已就绪。")
+                },
+            )
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("确认启用") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
