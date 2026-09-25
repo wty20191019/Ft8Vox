@@ -44,6 +44,10 @@
 // 允许在时隙起点后多久开始采集（毫秒）；超过则丢弃等下一个时隙
 #define ALIGN_TOLERANCE_MS 200
 
+// 时隙偏移（发射 + 解码窗口）的允许范围（ms）：FT8 的 DT 搜索窗约 ±2.5s，
+// 超过这个范围既测不出也解不出；与设置页 6.3「时隙偏移」范围一致
+#define SLOT_OFFSET_LIMIT_MS 2500
+
 // 发射前导音：键控 VOX 用的单音（落在 SSB 通带内）与幅度
 #define LEAD_TONE_HZ 1000
 #define LEAD_TONE_AMP 0.6f
@@ -235,6 +239,9 @@ typedef struct
     ftx_session_t* session;
     int slot_ms;
     int slot_samples;
+    /// 整个时隙的偏移（ms，正=推后）：采集窗口起点与发射起点一起平移，
+    /// 使「解码 DT」与「对端收我」同时校准（见 nativeSetSlotOffsetMs）
+    _Atomic int64_t slot_offset_ms;
 
     // 采集
     AAudioStream* in_stream;
@@ -327,7 +334,9 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
     if (count <= 0)
         return;
 
-    int64_t now = utc_now_ms();
+    // 整个时隙偏移：用「偏移后的时间」判定边界，等价于把时隙网格整体平移
+    // （解码窗口起点随之移动，因此解码 DT 的读数会同步变化 = 校准）
+    int64_t now = utc_now_ms() - atomic_load(&e->slot_offset_ms);
     int64_t slot = now / e->slot_ms;
     int pos = (int)(now % e->slot_ms);
 
@@ -494,6 +503,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->vox_candidate, 0);
     atomic_store(&e->vox_change_ms, 0);
     atomic_store(&e->in_gain_db, 0);
+    atomic_store(&e->slot_offset_ms, 0);
     return (jlong)(intptr_t)e;
 }
 
@@ -1034,6 +1044,31 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetInputGain(
     if (gain_db > 30)
         gain_db = 30;
     atomic_store(&e->in_gain_db, gain_db);
+}
+
+/**
+ * 下发时隙偏移（ms，热生效，U7「发射偏移」）。
+ *
+ * **整个时隙一起偏移**：采集窗口起点（native 侧 UTC 边界判定）与发射起点
+ * （Kotlin 侧 planTx）都按同一数值平移，正=推后、负=提前。
+ *
+ * 校准用法：操作页解码卡片显示的「时间差 DT」即对端信号相对本机时隙起点的偏移；
+ * 把它原样下发（如 +1.5s → +1500）后，DT 会回到约 0，且我方发射也落到对方的时隙起点上。
+ *
+ * @param offset_ms 偏移（ms），合法范围 -2500..2500
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetSlotOffsetMs(
+    JNIEnv* env, jobject thiz, jlong handle, jint offset_ms)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    if (offset_ms < -SLOT_OFFSET_LIMIT_MS)
+        offset_ms = -SLOT_OFFSET_LIMIT_MS;
+    if (offset_ms > SLOT_OFFSET_LIMIT_MS)
+        offset_ms = SLOT_OFFSET_LIMIT_MS;
+    atomic_store(&e->slot_offset_ms, (int64_t)offset_ms);
 }
 
 // -----------------------------------------------------------------------------

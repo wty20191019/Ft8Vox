@@ -1,5 +1,7 @@
 package com.example.ft8vox.engine
 
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
+
 /** VOX 触发方式（对应设置页「VOX 触发」；无 CAT 时用于输入电平判定）。 */
 enum class VoxMode {
     /** 音频检测：输入电平 ≥ 阈值视为触发/有信号。 */
@@ -198,6 +200,18 @@ object AudioEngine {
         nativeSetInputGain(handle, gainDb.coerceIn(-12, 30))
     }
 
+    /**
+     * 下发时隙偏移（热生效，U7「发射偏移」）。
+     *
+     * **整个时隙一起偏移**：native 的采集窗口起点（解码 DT 的基准）与 Kotlin 的发射起点
+     * 都按同一数值平移（正=推后、负=提前）。需先 [initialize]；未初始化时静默忽略。
+     * 范围与设置页一致（[SLOT_OFFSET_LIMIT_MS]）：FT8 的 DT 搜索窗约 ±2.5 s。
+     */
+    fun setSlotOffsetMs(offsetMs: Int) {
+        if (handle == 0L) return
+        nativeSetSlotOffsetMs(handle, offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS))
+    }
+
     /** 读取当前状态快照。 */
     fun state(): AudioState? {
         if (handle == 0L) return null
@@ -268,6 +282,10 @@ object AudioEngine {
         watchdogMs: Int,
     )
     private external fun nativeSetInputGain(handle: Long, gainDb: Int)
+
+    /** 时隙偏移（U7「发射偏移」，热生效，见 [setSlotOffsetMs]）。 */
+    private external fun nativeSetSlotOffsetMs(handle: Long, offsetMs: Int)
+
     private external fun nativeGetState(handle: Long): LongArray
     private external fun nativeUtcNowMs(): Long
     private external fun nativeResample(input: FloatArray, inRate: Int, outRate: Int): FloatArray?

@@ -61,6 +61,14 @@ enum class DecodePreset(val label: String) {
 }
 
 /**
+ * 时隙偏移的允许范围（ms）：见 [AppSettings.slotOffsetMs]。
+ *
+ * FT8 的解码器只在窗口起点前后约 ±2.5 s 内搜索信号（`find_candidates` 的
+ * `time_offset ∈ [-10, +19]` 个符号块），超出这个范围既测不出 DT 也解不出报文。
+ */
+const val SLOT_OFFSET_LIMIT_MS = 2500
+
+/**
  * 解码参数（对应 native 的可调项）。
  *
  * - [timeOsr]/[freqOsr]/[fMinHz]/[fMaxHz] 属于 `monitor_config_t`，改动需**重建引擎**；
@@ -197,8 +205,13 @@ data class AppSettings(
     val inputGainDb: Int = 0,
 
     // ---- FT8（new_ui §6.3） ----
-    /** 发射偏移（ms，0–15000；在一个时隙内后移发射，生效依赖 U7）。 */
-    val txOffsetMs: Int = 0,
+    /**
+     * 时隙偏移（ms，−2500…+2500）：**整个时隙一起偏移**（解码窗口起点 + 发射起点）。
+     *
+     * 校准用法：操作页解码卡片上的「时间差」就是本机时隙起点与对端的偏差，把它原样填进来
+     * （如 +1.5s → +1500），DT 回到约 0 即校准完成；正值 = 推后，负值 = 提前。
+     */
+    val slotOffsetMs: Int = 0,
 
     // ---- 高亮与提醒（new_ui §6.4） ----
     /** 新 CQ 区域（按呼号前缀映射实体表）。 */

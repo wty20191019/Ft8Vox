@@ -88,7 +88,7 @@ private object Keys {
     val watchdogMs = intPreferencesKey("watchdog_ms")
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
-    val txOffsetMs = intPreferencesKey("tx_offset_ms")
+    val slotOffsetMs = intPreferencesKey("slot_offset_ms")
     val hlNewCqZone = booleanPreferencesKey("hl_new_cq_zone")
     val hlNewItu = booleanPreferencesKey("hl_new_itu")
     val hlNewEntity = booleanPreferencesKey("hl_new_entity")
@@ -177,7 +177,8 @@ private fun Preferences.toAppSettings(): AppSettings {
         watchdogMs = (this[Keys.watchdogMs] ?: defaults.watchdogMs).coerceIn(1000, 60000),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
-        txOffsetMs = (this[Keys.txOffsetMs] ?: defaults.txOffsetMs).coerceIn(0, 15000),
+        slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
+            .coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS),
         highlightNewCqZone = this[Keys.hlNewCqZone] ?: defaults.highlightNewCqZone,
         highlightNewItu = this[Keys.hlNewItu] ?: defaults.highlightNewItu,
         highlightNewEntity = this[Keys.hlNewEntity] ?: defaults.highlightNewEntity,
@@ -241,7 +242,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.watchdogMs] = watchdogMs
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
-    prefs[Keys.txOffsetMs] = txOffsetMs
+    prefs[Keys.slotOffsetMs] = slotOffsetMs
     prefs[Keys.hlNewCqZone] = highlightNewCqZone
     prefs[Keys.hlNewItu] = highlightNewItu
     prefs[Keys.hlNewEntity] = highlightNewEntity

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
@@ -299,15 +300,17 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefStepper(
-                title = "发射偏移",
-                value = app.txOffsetMs,
-                range = 0..15000,
+                title = "时隙偏移",
+                value = app.slotOffsetMs,
+                range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
                 step = 100,
                 unit = " ms",
-                subtitle = "在一个时隙内后移发射起点",
-                onChange = { v -> settings.update { it.copy(txOffsetMs = v) } },
-                enabled = false,
-                badge = "U7",
+                signed = true,
+                subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
+                    "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
+                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前；FT8 可到 ±2.5s，" +
+                    "FT4 的搜索窗只有 ±0.5s，偏移过大会解不出。",
+                onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
             )
             PrefDivider()
             PrefChoice(
@@ -926,6 +929,8 @@ private fun PrefStepper(
     onChange: (Int) -> Unit,
     step: Int = 1,
     unit: String = "",
+    /** 显示正号（用于可正可负的偏移量，如 `+1500 ms`）。 */
+    signed: Boolean = false,
     subtitle: String? = null,
     enabled: Boolean = true,
     badge: String? = null,
@@ -939,7 +944,7 @@ private fun PrefStepper(
                 modifier = Modifier.size(48.dp),
             ) { Text("−") }
             Text(
-                "$value$unit",
+                if (signed && value >= 0) "+$value$unit" else "$value$unit",
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.Center,

@@ -216,6 +216,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次生效的输入设备 id（U7c）；变化需重开采集流，运行中提示下次生效。 */
     private var lastInputDeviceId: Int? = null
 
+    /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
+    private var lastSlotOffsetMs: Int? = null
+
     /** 「含我呼号哔声」提示音（U7d）。 */
     private val alertTone = AlertTone()
 
@@ -263,6 +266,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         applyDecodeParams(s)
         applyVox(s)
         applyAudio(s)
+        applySlotOffset(s)
     }
 
     /** 运行中把「热生效」的解码参数下发给 native（频率范围/OSR 需重启，见 [start]）。 */
@@ -329,6 +333,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 _status.update { it.copy(status = "输入设备将在下次开始接收生效") }
             }
         }
+    }
+
+    /**
+     * 下发时隙偏移（热生效，U7「发射偏移」）。
+     *
+     * 影响 native 的采集窗口起点（= 解码 DT 的基准），发射起点由 [planTx] 用同一值平移。
+     * 改在时隙中途时，当前时隙的窗口会错位到下一个网格点生效，属预期。
+     */
+    private fun applySlotOffset(s: AppSettings, force: Boolean = false) {
+        if (!force && s.slotOffsetMs == lastSlotOffsetMs) return
+        lastSlotOffsetMs = s.slotOffsetMs
+        AudioEngine.setSlotOffsetMs(s.slotOffsetMs)
     }
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
@@ -605,6 +621,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
         applyVox(latestSettings, force = true)
         applyAudio(latestSettings, force = true)
+        applySlotOffset(latestSettings, force = true)
 
         val rate = AudioEngine.startCapture(preferredRate(), inputDeviceId())
         if (rate <= 0) {
@@ -1148,7 +1165,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 前导（PTT 静音 + 发射前导音）：需要提前 preamble 启动播放，数据才落在时隙起点
         val preambleMs = txPreambleMs().toLong()
-        val plan = planTx(now, slotMs, st.txParity, preambleMs)
+        val plan = planTx(
+            now, slotMs, st.txParity, preambleMs,
+            slotOffsetMs = latestSettings.slotOffsetMs.toLong(),
+        )
 
         // 距数据起点的倒计时（用于 UI）
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
@@ -1331,6 +1351,7 @@ internal data class TxPlan(
  * - 否则（我方周期但已等太久）：瞄准下一个我方周期（+2）。
  *
  * 真正决定数据起点的是「播放起点 + 前导」；[TxPlan.targetStartMs] 即该值。
+ * [slotOffsetMs] 非 0 时整个时隙网格（含 native 解码窗口）一起平移，见该参数说明。
  */
 internal fun planTx(
     nowMs: Long,
@@ -1338,25 +1359,35 @@ internal fun planTx(
     txParity: Int,
     preambleMs: Long,
     startWindowMs: Long = TX_START_WINDOW_MS,
+    /**
+     * 整个时隙的偏移（ms，正=推后）：所有时隙边界 = 名义 UTC 边界 + 该值。
+     *
+     * 与 native 采集窗口用同一个值（[AudioEngine.setSlotOffsetMs]），因此「解码窗口」与
+     * 「发射起点」同步平移：把解码卡片显示的「时间差」原样填进来即可同时校准两端。
+     */
+    slotOffsetMs: Long = 0L,
 ): TxPlan {
     require(slotMs > 0) { "slotMs must be positive" }
     val pre = preambleMs.coerceAtLeast(0L)
-    val slotIdx = nowMs / slotMs
+    val off = slotOffsetMs
+    // 在「偏移后的时间轴」上判断：等价于把整个时隙网格平移 off（时隙序号仍是名义 UTC 序号）
+    val shiftedNow = nowMs - off
+    val slotIdx = shiftedNow / slotMs
     val parity = (slotIdx % 2L).toInt()
     if (parity != txParity) {
         // 对方周期：下一个时隙必是我方周期
         val targetIdx = slotIdx + 1
-        val targetStart = targetIdx * slotMs
+        val targetStart = targetIdx * slotMs + off
         return TxPlan(targetIdx, targetStart, targetStart - pre)
     }
-    val posInSlot = nowMs - slotIdx * slotMs
+    val posInSlot = shiftedNow - slotIdx * slotMs
     if (posInSlot + pre <= startWindowMs) {
-        // 我方周期且刚过起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
+        // 我方周期且刚过（偏移后的）起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
         return TxPlan(slotIdx, nowMs + pre, nowMs)
     }
     // 已过太久：下一个我方周期
     val targetIdx = slotIdx + 2
-    val targetStart = targetIdx * slotMs
+    val targetStart = targetIdx * slotMs + off
     return TxPlan(targetIdx, targetStart, targetStart - pre)
 }
 

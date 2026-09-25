@@ -65,7 +65,7 @@
 ### U6 设置页（Preference 风格）
 - 6.1 电台（仅 VOX）：VOX 触发方式、延迟 50–1000ms、阈值 −60~−20dB、发射前导音开关+时长、输出声卡、测试音+电平条、PTT 延迟、看门狗。
 - 6.2 音频：输入/输出设备、采样率 44100/48000/96000、输入增益。
-- 6.3 FT8：模式 FT8/FT4（FST4 不做，见 U7 能力表）、发射偏移 0–15s、解码深度（max_candidates / ldpc_iterations / rx_time_osr / rx_freq_osr）、自动序列参数。
+- 6.3 FT8：模式 FT8/FT4（FST4 不做，见 U7 能力表）、时隙偏移 −2.5s–+2.5s（整个时隙一起偏移：解码窗口 + 发射起点；用法见 U7 补记）、解码深度（max_candidates / ldpc_iterations / rx_time_osr / rx_freq_osr）、自动序列参数。
 - 6.4 高亮与提醒：新 CQ 区域 / 新 ITU / 新 DXCC / 新网格 / 新前缀 / 新呼号 / 已通联（删除线·下划线·隐藏）/ 含我呼号哔声 / 末端标记。
 - 6.5 外观：暗/亮、字体小/中/大、恢复布局（~~瀑布配色~~已删除）。
 - 6.6 日志（原「日志/网络」）：ADIF 路径、清空日志（~~CloudLog / LoTW / eQSL~~、~~局域网后台开关~~已删除）。
@@ -166,9 +166,9 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 - **分组**：按 §6 落地「台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志（原「日志与网络」）/ 关于」共 8 组（「日志与网络」在收尾时改名「日志」，见 §收尾：删除三处占位功能）。§6 未列台站信息（呼号/网格/波段/备注），但它属发射必备且无 CAT，故置于首组并注明「设计外补充」。
 - **组件**：自建 Preference 风格原语——`SettingsGroup`（标题 + 圆角卡）、`PrefRow`（左标题/副标题 + 右控件，`minHeight 56dp`）、`PrefSwitch` / `PrefChoice`(FilterChip) / `PrefDropdown` / `PrefStepper`(`−/值/+`，按钮 48dp) / `PrefText` / `PrefAction` / `PrefInfo` / `PrefNote` / `U7Badge`。
-- **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；发射偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体；~~瀑布配色~~；~~CloudLog/LoTW/eQSL/局域网后台~~（三项已删除，见 §收尾：删除三处占位功能）。`SampleRatePref` 增补 `96000`。
+- **新增设置项（落 DataStore）**：VOX 触发/延迟/阈值/前导音及时长/输出声卡/PTT 延迟/看门狗；输入设备/输入增益；时隙偏移；新 CQ 区域/新 ITU/新 DXCC/新网格/新前缀/新呼号/已通联样式（删除线·下划线·隐藏）/含我呼号哔声/末端红·蓝标记；主题/字体；~~瀑布配色~~；~~CloudLog/LoTW/eQSL/局域网后台~~（三项已删除，见 §收尾：删除三处占位功能）。`SampleRatePref` 增补 `96000`。
 - **已接通**：解码深度全套 + `Hold Tx` / 发射周期 / `Call 1st` / 最大重试（自动序列参数由 U3 抽屉迁回本节）；**外观「暗/亮」**接通 `Ft8VoxTheme(darkTheme)`，新增亮色板 `VoxLight*`（强调蓝加深保白底对比度）；**字体小/中/大**通过覆盖 `LocalDensity.fontScale`（0.9/1.0/1.15）统一缩放 sp、不影响 dp；**「高亮与提醒」**中 新呼号/新网格/新 DXCC/新 ITU/新 CQ 区域/新前缀 接入 `DecodeHighlight.classify(..., HighlightPrefs)`（关闭后角色按 新网格→新实体（DXCC/ITU/CQ 区域/前缀）→新呼号→普通 顺序回退），**已通联样式**与**末端红·蓝标记**接入解码卡片（隐藏样式会在操作页过滤掉已通联行）；「恢复布局」重置瀑布高度/字体（原含瀑布配色，该设置项已删除）。
-- **标记「U7」置灰**：发射偏移。（其余原占位项 —— 瀑布配色、CloudLog/LoTW/eQSL、局域网后台 —— 已按用户要求**删除**，见 §收尾：删除三处占位功能。`Protocol` 仅 FT8/FT4，FST4 已定为**不做**，不再显示占位说明。「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮；**输出声卡、输入设备与增益**已在 **U7c** 点亮；**含我呼号哔声**已在 **U7d** 点亮。）
+- **标记「U7」置灰**：无（原「发射偏移」已实装，见 §U7 补记：时隙偏移）。其余原占位项 —— 瀑布配色、CloudLog/LoTW/eQSL、局域网后台 —— 已按用户要求**删除**，见 §收尾：删除三处占位功能。`Protocol` 仅 FT8/FT4，FST4 已定为**不做**，不再显示占位说明。「新 CQ 区域 / 新 ITU」已在 **U7a** 点亮；**VOX 触发/延迟/阈值、发射前导音与时长、测试音、PTT 延迟、看门狗**已在 **U7b** 点亮；**输出声卡、输入设备与增益**已在 **U7c** 点亮；**含我呼号哔声**已在 **U7d** 点亮。
 - **亮色主题的连带改造**：原 UI 直接引用硬编码 `VoxCard/VoxText/VoxOnSurfaceVariant/VoxSurfaceVariant/VoxBackground`，亮色下会失效；已全部改为 `MaterialTheme.colorScheme.{surface,onSurface,onSurfaceVariant,surfaceVariant,background}`，并把选中 Chip / 发送按钮 / 强调文字改用 `primary`。语义色（`barColor` 各高亮、`VoxRxGreen`/`VoxTxRed`/`VoxError`、地图标记、瀑布底层）保持固定，暗色表现不变；地图底图与瀑布图本身仍固定深色（设计如此）。
 - **模拟器验收**：设置页全部 8 组滚动渲染正常；主题切「亮」全局即时生效且**重启后回读一致**；字体切「大」字号明显放大；呼号/网格/波段等旧值回读一致；无崩溃（`logcat` 无 FATAL）。未接后端的项均为禁用态 + `U7` 徽标。
 
@@ -428,6 +428,42 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   清空后空态回到「等待解码…」而不是「没有符合筛选条件」，因为空态提示取的是 `messages.size`。
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；模拟器实拍筛选条布局（按钮在最左、空列表时置灰）。
   自动翻页需真机/模拟器有解码输入才能观察（模拟器无音频输入），列入 `REGRESSION.md` B 组。
+
+
+### U7 补记：时隙偏移（整个时隙，发射 + 解码窗口）
+
+用户要求：「实现 U7 发射偏移 —— 应该是让**整个时隙**偏移（手动调整，如果操作页解析的信息
+时间差为 `+1.5` 则在时间偏移里填 `+1.5` 即可校准，这个使用方法写在对应的设置位置）」。
+
+- **口径**：解码卡片的「时间差 DT」= native `out->dt = time_sec - 0.5f`，即对端信号在本机
+  采集窗口内的位置减去名义 0.5s。本机的**时钟偏差 + 声卡时延**会同步体现在两端：收到的信号
+  在窗口里偏晚（DT 正），而我方发射在对端看来也偏了同样的量。因此把 DT **原样填进偏移** =
+  把整个时隙网格平移 —— 解码窗口起点随之移动（DT 读数同步归零），发射起点也一起移动，两端
+  一次校准。正值 = 推后，负值 = 提前（`-1.5s` 就填 `-1500 ms`）。
+- **范围为什么是 ±2500 ms**：`ftx_find_candidates` 的 `time_offset ∈ [-10, +19]` 个符号块，
+  FT8 符号周期 0.16s → 相对窗口起点约 `[-1.6, +3.04]s`，减去名义 0.5s 后 DT 可测范围约
+  `[-2.1, +2.5]s`。FT4 符号周期仅 0.048s → 搜索窗只有约 ±0.5s，所以设置项副标题注明
+  「FT4 偏移过大会解不出」。
+- **设置项**：`AppSettings.slotOffsetMs`（DataStore `slot_offset_ms`，与 `SLOT_OFFSET_LIMIT_MS`
+  一起钳制），**取代**原 `txOffsetMs`（0–15000，`U7` 置灰占位）；`PrefStepper` 新增 `signed`
+  参数显示 `+1500 ms` / `-1500 ms`。用法写在设置项**副标题**里（用户要求）：看操作页解码卡片的
+  「时间差」原样填进来，校到约 0 即可。旧安装包残留的 `tx_offset_ms` 键不再被读取（无害）。
+- **native**（`audio_engine.c`）：`audio_engine_t.slot_offset_ms`（`_Atomic int64_t`）+
+  `nativeSetSlotOffsetMs(handle, ms)`（钳制 ±2500，热生效）；`feed_slot()` 用
+  `utc_now_ms() - slot_offset_ms` 判定时隙边界 → **采集窗口起点整体平移**。上报的
+  `slot_start_ms` 仍是名义 UTC 时隙起点（时隙序号不变），所以 0/1 号显示、「双方相反周期」判定
+  与自动程序解耦于本偏移。改设置在时隙中途时，当前时隙会错位到下一个网格点才稳定（属预期）。
+- **Kotlin**：`AudioEngine.setSlotOffsetMs`（`initialize` 前 no-op）；`SessionViewModel.applySlotOffset`
+  （沿用 `applyVox`/`applyAudio` 的 `force` 模式，`start()` 里对新引擎强制重下发）；
+  `planTx(..., slotOffsetMs)` 在「偏移后的时间轴」上判断、再把起点加回 offset —— 于是目标时隙
+  **序号不变**（`lastTxSlotIndex` 去重、`effectiveTxParity`/`nextSlotParity`/解码时隙奇偶全部
+  保持名义 UTC 口径），只有窗口/起点平移。
+- **验证**：JVM `TxParityAutoTest` 新增 2 例（目标时隙不变且起点整体平移 1500ms；「就地发射」
+  窗口随偏移移动、负偏移则等下一个同周期时隙），**255 例全过**；`:app:assembleDebug`
+  BUILD SUCCESSFUL；模拟器确认设置项可步进（`+0 ms` → `+300 ms` → `-200 ms`，带符号显示）、
+  持久化（DataStore 写出 `slot_offset_ms`）、开启接收后无 `UnsatisfiedLinkError`（`llvm-nm`
+  确认 `Java_..._nativeSetSlotOffsetMs` 已导出）。**校准效果需真机 + 对方电台**，见
+  `REGRESSION.md` A 组「时隙偏移校准」。
 
 
 

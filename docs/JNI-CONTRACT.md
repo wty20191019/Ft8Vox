@@ -154,6 +154,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 | `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音（VOX 键控/音量联调），返回写入帧数 |
 | `setVox(config: VoxConfig)` | 下发 VOX/PTT 配置（热生效，见 6.1） |
 | `setInputGain(gainDb: Int)` | 下发采集增益（热生效，−12..30 dB，见 6.2） |
+| `setSlotOffsetMs(offsetMs: Int)` | 下发**整时隙偏移**（热生效，±2500 ms，见 6.3）：采集窗口起点与发射起点一起平移，用于按解码 DT 校准本机时钟/时延 |
 | `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
@@ -169,6 +170,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   成功即用（日志打印实际预设）。`setInputPreset` 自 API 28 才提供，minSdk 26/27 上用 `dlopen` 解析符号，
   解析不到则保持系统默认。
 - **时隙调度**：按 UTC 对齐（FT8 = 15 s，FT4 = 7.5 s）。仅在时隙起点后 200 ms 内开始采集，累积满 `slot_samples` 后解码；若跨入下个时隙则先解码已采集部分并重新对齐。
+  时隙边界判定用的是 `utc_now_ms() - slot_offset_ms`（见 6.3「时隙偏移」），因此 `setSlotOffsetMs` 会把**整个采集窗口**平移；上报的 `slot_start_ms` 仍是名义 UTC 时隙起点，时隙序号与 0/1 奇偶不受偏移影响。
 - **线程**：AAudio 回调只写入无锁 SPSC 环形缓冲（不分配、不加锁）；DSP 线程负责重采样与解码。
 - **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。
 - **waterfall 行流**：每处理完一个 monitor block，将 `time_osr` 行（取 `freq_sub=0`）写入 native 环形缓冲；
@@ -206,6 +208,21 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   - 输出设备变化时 `stopPlayback()` 关闭旧流，下次发射用新设备重开（发射中提示「下次发射生效」）。
 - **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**包含 VOX 电平判定**的整条链路，故调增益会同时改变状态栏 VOX 读数。
 - **设备 id 易变**：设备 id 可能随插拔/重启变化，存的是原始 id 字符串（空串=默认），失配时 `label` 回退「系统默认」。
+
+### 6.3 时隙偏移（U7「发射偏移」，整时隙校准）
+
+- **语义**：`setSlotOffsetMs(offsetMs)` 把**整个时隙网格**平移（正 = 推后，负 = 提前），
+  native 侧只影响 `feed_slot()` 的边界判定（→ 采集窗口起点），Kotlin 侧由 `planTx(..., slotOffsetMs)`
+  把发射起点按同一值平移。两处共用同一个 `slot_offset_ms`，因此「解码窗口」与「发射起点」永远同步。
+- **校准用法**：解码卡片显示的「时间差 DT」即对端信号相对本机窗口起点的偏移（名义 0.5 s 基准，
+  `out->dt = time_sec - 0.5f`）。把该值原样下发（`+1.5s` → `+1500`）后，后续解码 DT 应回到约 0，
+  同时我方发射也落到对端的时隙起点上；负 DT 填负值同理。
+- **范围**：钳制 ±2500 ms。上限来自解码器的搜索窗 —— `ftx_find_candidates` 的
+  `time_offset ∈ [-10, +19]` 个符号块，FT8 符号 0.16 s → 相对窗口起点约 `[-1.6, +3.04]s`
+  （DT 约 `[-2.1, +2.5]s`）；**FT4** 符号仅 0.048 s，搜索窗约 ±0.5 s，偏移过大（尤其正向）会解不出。
+- **口径不变**：`slot_start_ms`、时隙序号、0/1 奇偶、「双方相反周期」判定全部仍按名义 UTC 时隙，
+  本偏移只在时隙内部平移起点（`|offset| < 7.5 s` 时不跨时隙）。热生效；改在时隙中途时当前窗口会
+  错位到下一个网格点才稳定（属预期）。
 
 ## 7. 调试接口
 
