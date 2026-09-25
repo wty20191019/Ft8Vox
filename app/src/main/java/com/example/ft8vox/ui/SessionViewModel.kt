@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ft8vox.container
 import com.example.ft8vox.data.BandPlan
+import com.example.ft8vox.data.log.QsoComment
 import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
@@ -952,8 +953,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 mode = st.protocol.name,
                 reportSent = entry.reportSent,
                 reportReceived = entry.reportReceived,
-                // 台站备注作为默认 COMMENT 写入新记录（快照，可留空）
-                comment = latestSettings.note.trim().ifEmpty { null },
+                // 默认 COMMENT：台站备注（快照，可留空）+ 自动距离备注
+                //（仿 FT8CN：`Distance: 1738 km, QSO by Ft8Vox`）
+                comment = QsoComment.auto(
+                    stationNote = latestSettings.note,
+                    myGrid = st.myGrid.ifEmpty { null },
+                    theirGrid = entry.theirGrid,
+                ),
             )
             viewModelScope.launch(Dispatchers.IO) {
                 qsoRepo.add(entity)

@@ -151,7 +151,7 @@ fun SettingsScreen(
                     note = v
                     settings.update { it.copy(note = v) }
                 },
-                supporting = "自动写入新通联记录的 COMMENT 字段（可留空）",
+                supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
             )
         }
 
