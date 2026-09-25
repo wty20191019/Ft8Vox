@@ -403,5 +403,31 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **验证**：`:app:assembleDebug` BUILD SUCCESSFUL（无新增单测，纯 UI）；模拟器 `emulator-5554` 实拍暗/亮主题各一张，
   色点与图例渲染正常、无布局跳动（真机项见 `REGRESSION.md` A 组与 §4）。
 
+### U9 补记 8：解码列表自动翻到最新 + 筛选栏最左「清除解码信息」
+
+用户要求：「让操作页解析的信息自动翻到最新」「加一个清除解析信息的（按钮）到筛选栏最左侧」。
+
+- **为什么原来不会自动到最新**：列表是**新→旧**（`_messages` 前插，`SessionViewModel:881`，最多 200 条），
+  最新在 `index 0`。但 `LazyColumn` 默认按 item key **锚定视口** —— 前端插入新条目时，为保持「正在看的
+  那条」不动，视口会停在旧消息上（新消息在视口上方），所以用户每批解码后都得手动上滑一次。
+- **自动翻到最新**（`OperateScreen.kt`）：给 `LazyColumn` 接 `rememberLazyListState()`，用
+  `LaunchedEffect(最新行 key) → animateScrollToItem(0)` 在每批新解码到达时回顶。key 取
+  「报文文本 + 时隙 UTC」，`rows` 因高亮/筛选重算但最新行没变时不会重复滚动。
+- **不打断翻历史**：收集 `listState.interactionSource` 的 `DragInteraction.Start` —— 用户一旦手动拖动就
+  `followNewest = false`（暂停跟随）；`snapshotFlow { firstVisibleItemIndex }` 在滑回 `index 0` 时恢复跟随。
+  注意**只在 `index == 0` 时置 `true`**：锚定导致的 index 漂移（0→1）不能误判成「用户翻走了」。
+  另外用户手指正在拖动（`isScrollInProgress`）时本轮不抢滚动，避免和手势打架。
+- **清除解码信息**：`SessionViewModel.clearMessages()`（原有方法，此前无 UI 入口）接到筛选栏
+  **最左侧固定的 `IconButton`**（`Icons.Filled.Delete`，core 图标集，项目只依赖 `material-icons-core`）。
+  按钮不放进横向滚动的 Chip 行里，所以 Chip 横滚时它始终可见；`messages.isEmpty()` 时 `enabled = false`
+  并淡化到 38% 透明度。**不做二次确认**：解码列表是本会话的临时显示数据（与「右滑删除单条」一致），
+  不是日志；组内不做确认也避免误触成本。
+- **清除的边界（重要）**：只清 `_messages`（显示列表）。`status.decodedTotal`（状态栏「已解码时隙 / 解码
+  n/min」）是接收健康度计数，保留；自动程序用的是自己每时隙的 `pendingDecodes` 批（`runAutoProgram(batch)`），
+  不受影响；只有 `lastHeardSlotUtcMsOf()`（按解码列表回查目标台时隙）会查不到而回退 0，与「列表里没有该台」同路径。
+  清空后空态回到「等待解码…」而不是「没有符合筛选条件」，因为空态提示取的是 `messages.size`。
+- **验证**：`:app:assembleDebug` BUILD SUCCESSFUL；模拟器实拍筛选条布局（按钮在最左、空列表时置灰）。
+  自动翻页需真机/模拟器有解码输入才能观察（模拟器无音频输入），列入 `REGRESSION.md` B 组。
+
 
 
