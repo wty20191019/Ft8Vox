@@ -429,20 +429,38 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(txQueue = emptyList()) }
     }
 
-    /** 启用自动程序（UI 需先弹防误发确认）。 */
+    /**
+     * 启用自动程序（UI 需先弹防误发确认）。
+     *
+     * 自动程序的启用/关闭与「发射总开关」联动：**启用即自动打开总开关**（自动程序全靠它才发得出去），
+     * 总开关此前未锁定时顺带按手机 UTC 时间锁定发射时隙。
+     */
     fun armAutoProgram() {
         val p = _status.value.autoProgram
         if (p.level == AutoLevel.MANUAL) {
             _status.update { it.copy(status = "请先选择自动程序等级") }
             return
         }
-        _status.update { it.copy(autoArmed = true, status = "自动程序已启用（${p.level.label}）") }
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号") }
+            return
+        }
+        if (!_status.value.txEnabled) setTxEnabled(true)
+        val parity = parityLabel(_status.value.txParity)
+        _status.update { it.copy(autoArmed = true, status = "自动程序已启用（${p.level.label}，$parity）") }
     }
 
+    /**
+     * 关闭自动程序：与「发射总开关」联动，**一并关闭总开关回到只接收**（停发 + 解除时隙锁定 + 清重试记录）。
+     *
+     * 例外（只解除自动程序、不动总开关）：切到「手动」等级、以及「单次通联」在 QSO 结束后自动停止 ——
+     * 前者可能还有进行中的 QSO，后者还有最后一条报文（RR73/73）待发，关总开关会把它们掐掉。
+     */
     fun disarmAutoProgram() {
         retryCall = null
         retryLeft = 0
-        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭") }
+        if (_status.value.txEnabled) setTxEnabled(false)
+        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭（发射已关，只接收）") }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */

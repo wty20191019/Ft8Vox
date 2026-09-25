@@ -362,7 +362,10 @@ fun OperateScreen(
                         append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜时隙：自动（下一个 ")
                         append(if (status.txParity == 0) "偶" else "奇")
                         append("）\n")
-                        if (!status.txEnabled) append("注意：发射总开关当前为「关」，需先打开。\n")
+                        append(
+                            if (status.txEnabled) "发射总开关：已开。\n"
+                            else "发射总开关：关 —— 确认启用时会自动打开。\n",
+                        )
                         if (status.autoProgram.singleQso) {
                             append("「单次通联」已开：一次 QSO 结束后会自动停止。\n")
                         } else {
