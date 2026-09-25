@@ -171,25 +171,31 @@ class MapModelTest {
     }
 
     @Test
-    fun signalLinksCqConnectsToMe() {
+    fun signalLinksSkipCqMessages() {
+        // CQ 只有发方、没有收方 → 不画连线（即使已知我的网格）
         val links = MapModel.signalLinks(
             messages = listOf(decoded("CQ JA1ABC PM95", slotUtcMs = 1000)),
             myCall = "F4FSY",
             myGrid = "JN25",
         )
-        assertEquals(1, links.size)
-        assertNull(links[0].toCall)
-        assertNull(links[0].label)
+        assertEquals(0, links.size)
     }
 
     @Test
-    fun signalLinksCqSkippedWithoutMyGrid() {
+    fun signalLinksSkipsCqWithinSameSlot() {
+        // 同一时隙内 CQ 与双方报文混合：只画有收方的那条
         val links = MapModel.signalLinks(
-            messages = listOf(decoded("CQ JA1ABC PM95", slotUtcMs = 1000)),
+            messages = listOf(
+                decoded("CQ DL1ABC JN48", slotUtcMs = 1000),
+                decoded("F4FSY JA1ABC -12", slotUtcMs = 1000),
+            ),
             myCall = "F4FSY",
-            myGrid = null,
+            myGrid = "JN25",
+            gridCache = mapOf("JA1ABC" to "PM95"),
         )
-        assertEquals(0, links.size)
+        assertEquals(1, links.size)
+        assertEquals("JA1ABC", links[0].fromCall)
+        assertEquals("F4FSY", links[0].toCall)
     }
 
     @Test

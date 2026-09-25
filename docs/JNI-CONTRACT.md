@@ -154,6 +154,8 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 | `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音（VOX 键控/音量联调），返回写入帧数 |
 | `setVox(config: VoxConfig)` | 下发 VOX/PTT 配置（热生效，见 6.1） |
 | `setInputGain(gainDb: Int)` | 下发采集增益（热生效，−12..30 dB，见 6.2） |
+| `setOutputGain(gainDb: Int)` | 下发输出音量（发射音频的数字衰减，热生效，−30..0 dB，见 6.2） |
+| `setSlotOffsetMs(offsetMs: Int)` | 下发**整时隙偏移**（热生效，±2500 ms，见 6.3）：采集窗口起点与发射起点一起平移，用于按解码 DT 校准本机时钟/时延 |
 | `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
@@ -169,6 +171,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   成功即用（日志打印实际预设）。`setInputPreset` 自 API 28 才提供，minSdk 26/27 上用 `dlopen` 解析符号，
   解析不到则保持系统默认。
 - **时隙调度**：按 UTC 对齐（FT8 = 15 s，FT4 = 7.5 s）。仅在时隙起点后 200 ms 内开始采集，累积满 `slot_samples` 后解码；若跨入下个时隙则先解码已采集部分并重新对齐。
+  时隙边界判定用的是 `utc_now_ms() - slot_offset_ms`（见 6.3「时隙偏移」），因此 `setSlotOffsetMs` 会把**整个采集窗口**平移；上报的 `slot_start_ms` 仍是名义 UTC 时隙起点，时隙序号与 0/1 奇偶不受偏移影响。
 - **线程**：AAudio 回调只写入无锁 SPSC 环形缓冲（不分配、不加锁）；DSP 线程负责重采样与解码。
 - **限流**：环形缓冲满时丢弃样本并累加 `droppedSamples` 统计。
 - **waterfall 行流**：每处理完一个 monitor block，将 `time_osr` 行（取 `freq_sub=0`）写入 native 环形缓冲；
@@ -205,7 +208,47 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
   - 输入设备变化需重开采集流（运行中提示「下次开始接收生效」）；
   - 输出设备变化时 `stopPlayback()` 关闭旧流，下次发射用新设备重开（发射中提示「下次发射生效」）。
 - **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**包含 VOX 电平判定**的整条链路，故调增益会同时改变状态栏 VOX 读数。
+- **输出音量**：`nativeSetOutputGain(handle, gainDb)` 钳制 **−30..0 dB**，在 `write_blocking()` 写入声卡前对**整段播放缓冲**原地乘 `10^(dB/20)`（前导静音/前导音/FT8 报文/测试音一视同仁），超过满幅限幅到 [−1,1] 防回绕。**只能衰减**：发射波形由 `synth_gfsk()` 合成、本身已是数字满幅（`sinf()`，峰值 1.0 ≈ 0 dBFS），放大只会削顶并破坏频谱；0 dB = 原样输出（默认）。改设置后**下一次播放**生效。
 - **设备 id 易变**：设备 id 可能随插拔/重启变化，存的是原始 id 字符串（空串=默认），失配时 `label` 回退「系统默认」。
+
+### 6.3 时隙偏移（U7「发射偏移」，整时隙校准）
+
+- **语义**：`setSlotOffsetMs(offsetMs)` 把**整个时隙网格**平移（正 = 推后，负 = 提前），
+  native 侧只影响 `feed_slot()` 的边界判定（→ 采集窗口起点），Kotlin 侧由 `planTx(..., slotOffsetMs)`
+  把发射起点按同一值平移。两处共用同一个 `slot_offset_ms`，因此「解码窗口」与「发射起点」永远同步。
+- **校准用法**：解码卡片显示的「时间差 DT」即对端信号相对本机窗口起点的偏移（名义 0.5 s 基准，
+  `out->dt = time_sec - 0.5f`）。把该值原样下发（`+1.5s` → `+1500`）后，后续解码 DT 应回到约 0，
+  同时我方发射也落到对端的时隙起点上；负 DT 填负值同理。
+- **范围**：钳制 ±2500 ms。上限来自解码器的搜索窗 —— `ftx_find_candidates` 的
+  `time_offset ∈ [-10, +19]` 个符号块，FT8 符号 0.16 s → 相对窗口起点约 `[-1.6, +3.04]s`
+  （DT 约 `[-2.1, +2.5]s`）；**FT4** 符号仅 0.048 s，搜索窗约 ±0.5 s，偏移过大（尤其正向）会解不出。
+- **口径不变**：`slot_start_ms`、时隙序号、0/1 奇偶、「双方相反周期」判定全部仍按名义 UTC 时隙，
+  本偏移只在时隙内部平移起点（`|offset| < 7.5 s` 时不跨时隙）。热生效；改在时隙中途时当前窗口会
+  错位到下一个网格点才稳定（属预期）。
+
+### 6.4 播放/关流的线程安全（防 use-after-free，真机崩溃修复）
+
+`playTx()` / `playTone()` 是**阻塞写**，`write_blocking()` 会长时间卡在 `AAudioStream_write`。
+而 `stopPlayback()` / `nativeDestroy()`（换协议重建引擎、点「停止发射」、Activity 销毁）随时可能
+在另一线程执行 —— 若直接 `AAudioStream_close` / `free(引擎)`，写入线程就会踩到已释放的
+AudioTrack 共享缓冲（真机 tombstone：`libaudioclient AudioTrack::write` ← `libaaudio
+AudioStreamTrack::write` ← `nativePlayTx` ← `AudioEngine.playTx`）。约定：
+
+- **只在持有 `tx_mutex` 时碰 `out_stream`**：写入线程每次 `AAudioStream_write` 前后都持锁；
+  单次写入超时 0.5 s，保证关流方最多等这么久就能拿到锁。
+- **`out_gen` 代次**：`nativeStopPlayback`/`nativeStartPlayback` 都会 +1；写入线程进入时记下代次，
+  一旦发现代次变了（或 `out_stream == NULL`）立即返回**已写入帧数**（主动中止不算失败）。
+- **`tx_active` 播放调用计数**：`nativePlayTx`/`nativePlay`/`nativePlayTone` 进入即 `tx_enter()`、
+  退出前 `tx_leave()`；`nativeDestroy` 先 `tx_stop_and_close()` 再 `tx_wait_idle(3000ms)`，
+  **只有确认没有播放调用在用引擎才会 `free`**，否则宁可泄漏这点内存也不崩（日志会打
+  `engine leaked to avoid use-after-free`）。
+- **Kotlin 侧三件事**：
+  1. `AudioEngine.handle` 是 `@Volatile`；`release()` **先清零句柄再 `nativeDestroy`**，
+     销毁期间新起的 JNI 调用只会拿到 0 而被拒绝。
+  2. 轮询（`Dispatchers.Default`）不受 native 播放保护：`SessionViewModel.stopPollingAndJoin()`
+     在 `stop()`/`onCleared()` 里 `cancel()` + `join()`，等它从 `pollDecoded()/state()` 返回后才销毁引擎。
+  3. 引擎重建会 +1 一个 `engineGen`：排好队的发射协程带着旧代次，发现自己过期就**丢弃本次发射**
+     （`txJob.cancel()` 打断不了已开始的 JNI 阻塞写），避免把旧协议波形发到新引擎上。
 
 ## 7. 调试接口
 
@@ -219,6 +262,9 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 - **AAudio 回调线程**：只把 PCM 写入无锁 SPSC 环形缓冲，绝不调用重 JNI、加锁或分配内存。
 - **DSP/解码线程**：从环形缓冲取数据 → 重采样 → 按块累积 waterfall → 时隙结束解码，结果进入待轮询队列。
 - **发射线程**：调用 `encode` 生成 PCM，`play()` 内部重采样后阻塞写入 AAudio 播放流。
+  - 与「关流/释放引擎」互斥，见 §6.4：`tx_enter/tx_leave` 计数 + `out_gen` 代次 + 只在持
+    `tx_mutex` 时读 `out_stream`。同一条规则保护 `playTone()`（设置页「测试音」）。
+  - Kotlin 侧：`stopPollingAndJoin()` 保证销毁引擎前轮询已退出；`engineGen` 丢弃跨引擎的迟到发射。
 - native 对象（monitor 等）与创建/使用它的线程绑定；若跨线程调用 JNI 需 `AttachCurrentThread`。
 - MVP 阶段解码结果**拉取返回**，不引入 native → Kotlin 回调。
 

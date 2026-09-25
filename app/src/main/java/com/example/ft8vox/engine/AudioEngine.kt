@@ -1,5 +1,8 @@
 package com.example.ft8vox.engine
 
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
+import com.example.ft8vox.data.settings.clampOutputGainDb
+
 /** VOX 触发方式（对应设置页「VOX 触发」；无 CAT 时用于输入电平判定）。 */
 enum class VoxMode {
     /** 音频检测：输入电平 ≥ 阈值视为触发/有信号。 */
@@ -67,6 +70,14 @@ object AudioEngine {
         System.loadLibrary("ft8")
     }
 
+    /**
+     * native 引擎句柄。
+     *
+     * 所有 JNI 调用都会读它，而换引擎（[release]/[initialize]）可能发生在「发射写入」
+     * 「轮询」等其他线程用着旧句柄时 —— 因此标记 `@Volatile`，且 [release] 会**先清零**、
+     * 再去销毁 native 引擎（见那里的注释）。
+     */
+    @Volatile
     private var handle: Long = 0L
 
     /** 创建引擎（按配置初始化 monitor 会话）。重复调用会先释放旧引擎。 */
@@ -103,13 +114,21 @@ object AudioEngine {
         }
     }
 
-    /** 释放引擎（会先停止采集与播放）。 */
+    /**
+     * 释放引擎（会先停止采集与播放）。
+     *
+     * **先把句柄清零再销毁**：销毁期间（`nativeDestroy` 会 `free` 掉引擎）新起的 JNI 调用
+     * 只会拿到 0 而被拒绝；已经在跑的调用由 native 侧保护 —— 播放写入靠
+     * `tx_enter/tx_wait_idle`（见 `audio_engine.c`），轮询靠调用方先
+     * `stopPollingAndJoin()`。
+     */
     fun release() {
-        if (handle != 0L) {
-            stopCapture()
-            stopPlayback()
-            nativeDestroy(handle)
+        val h = handle
+        if (h != 0L) {
             handle = 0L
+            nativeStopCapture(h)
+            nativeStopPlayback(h)
+            nativeDestroy(h)
         }
     }
 
@@ -198,6 +217,30 @@ object AudioEngine {
         nativeSetInputGain(handle, gainDb.coerceIn(-12, 30))
     }
 
+    /**
+     * 下发输出音量（热生效）。需先 [initialize]；未初始化时静默忽略。
+     *
+     * 对**所有播放的发射音频**生效（FT8/FT4 报文、前导音、设置页「测试音」），
+     * 在 native 写入声卡前按 `10^(dB/20)` 缩放。发射波形本身已是数字满幅，
+     * 所以只能衰减（0 dB = 原样输出），范围见 [clampOutputGainDb]。
+     */
+    fun setOutputGain(gainDb: Int) {
+        if (handle == 0L) return
+        nativeSetOutputGain(handle, clampOutputGainDb(gainDb))
+    }
+
+    /**
+     * 下发时隙偏移（热生效，U7「发射偏移」）。
+     *
+     * **整个时隙一起偏移**：native 的采集窗口起点（解码 DT 的基准）与 Kotlin 的发射起点
+     * 都按同一数值平移（正=推后、负=提前）。需先 [initialize]；未初始化时静默忽略。
+     * 范围与设置页一致（[SLOT_OFFSET_LIMIT_MS]）：FT8 的 DT 搜索窗约 ±2.5 s。
+     */
+    fun setSlotOffsetMs(offsetMs: Int) {
+        if (handle == 0L) return
+        nativeSetSlotOffsetMs(handle, offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS))
+    }
+
     /** 读取当前状态快照。 */
     fun state(): AudioState? {
         if (handle == 0L) return null
@@ -268,6 +311,13 @@ object AudioEngine {
         watchdogMs: Int,
     )
     private external fun nativeSetInputGain(handle: Long, gainDb: Int)
+
+    /** 输出音量（发射音频的数字衰减，热生效，见 [setOutputGain]）。 */
+    private external fun nativeSetOutputGain(handle: Long, gainDb: Int)
+
+    /** 时隙偏移（U7「发射偏移」，热生效，见 [setSlotOffsetMs]）。 */
+    private external fun nativeSetSlotOffsetMs(handle: Long, offsetMs: Int)
+
     private external fun nativeGetState(handle: Long): LongArray
     private external fun nativeUtcNowMs(): Long
     private external fun nativeResample(input: FloatArray, inRate: Int, outRate: Int): FloatArray?

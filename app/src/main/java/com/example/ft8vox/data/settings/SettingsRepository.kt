@@ -84,11 +84,12 @@ private object Keys {
     val txLeadTone = booleanPreferencesKey("tx_lead_tone")
     val txLeadToneMs = intPreferencesKey("tx_lead_tone_ms")
     val outputDevice = stringPreferencesKey("output_device")
+    val outputGainDb = intPreferencesKey("output_gain_db")
     val pttDelayMs = intPreferencesKey("ptt_delay_ms")
     val watchdogMs = intPreferencesKey("watchdog_ms")
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
-    val txOffsetMs = intPreferencesKey("tx_offset_ms")
+    val slotOffsetMs = intPreferencesKey("slot_offset_ms")
     val hlNewCqZone = booleanPreferencesKey("hl_new_cq_zone")
     val hlNewItu = booleanPreferencesKey("hl_new_itu")
     val hlNewEntity = booleanPreferencesKey("hl_new_entity")
@@ -173,11 +174,13 @@ private fun Preferences.toAppSettings(): AppSettings {
         txLeadTone = this[Keys.txLeadTone] ?: defaults.txLeadTone,
         txLeadToneMs = (this[Keys.txLeadToneMs] ?: defaults.txLeadToneMs).coerceIn(0, 2000),
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
+        outputGainDb = clampOutputGainDb(this[Keys.outputGainDb] ?: defaults.outputGainDb),
         pttDelayMs = (this[Keys.pttDelayMs] ?: defaults.pttDelayMs).coerceIn(0, 500),
         watchdogMs = (this[Keys.watchdogMs] ?: defaults.watchdogMs).coerceIn(1000, 60000),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
-        txOffsetMs = (this[Keys.txOffsetMs] ?: defaults.txOffsetMs).coerceIn(0, 15000),
+        slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
+            .coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS),
         highlightNewCqZone = this[Keys.hlNewCqZone] ?: defaults.highlightNewCqZone,
         highlightNewItu = this[Keys.hlNewItu] ?: defaults.highlightNewItu,
         highlightNewEntity = this[Keys.hlNewEntity] ?: defaults.highlightNewEntity,
@@ -237,11 +240,12 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.txLeadTone] = txLeadTone
     prefs[Keys.txLeadToneMs] = txLeadToneMs
     prefs[Keys.outputDevice] = outputDevice
+    prefs[Keys.outputGainDb] = outputGainDb
     prefs[Keys.pttDelayMs] = pttDelayMs
     prefs[Keys.watchdogMs] = watchdogMs
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
-    prefs[Keys.txOffsetMs] = txOffsetMs
+    prefs[Keys.slotOffsetMs] = slotOffsetMs
     prefs[Keys.hlNewCqZone] = highlightNewCqZone
     prefs[Keys.hlNewItu] = highlightNewItu
     prefs[Keys.hlNewEntity] = highlightNewEntity

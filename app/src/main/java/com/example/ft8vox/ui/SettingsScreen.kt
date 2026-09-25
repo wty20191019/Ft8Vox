@@ -52,6 +52,9 @@ import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
+import com.example.ft8vox.data.settings.OUTPUT_GAIN_MAX_DB
+import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
@@ -229,6 +232,17 @@ fun SettingsScreen(
                 label = { id -> AudioDevices.label(outputDevices, id) },
             )
             PrefDivider()
+            PrefStepper(
+                title = "输出音量",
+                subtitle = "发射音频的数字衰减：0 dB = 数字满幅，只能往小调" +
+                    "（波形本身已是满幅，要更大声请调电台/声卡的音量）。" +
+                    "对 FT8/FT4 报文与「测试音」都生效，热生效。",
+                value = app.outputGainDb,
+                range = OUTPUT_GAIN_MIN_DB..OUTPUT_GAIN_MAX_DB,
+                unit = " dB",
+                onChange = { v -> settings.update { it.copy(outputGainDb = v) } },
+            )
+            PrefDivider()
             PrefAction(
                 title = "测试音",
                 subtitle = "发送 1 kHz 单音（2 s），用于 VOX 键控与音量联调",
@@ -292,6 +306,8 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
+                subtitle = "FT8 时隙 15 s、FT4 时隙 7.5 s。运行中切换会自动重建引擎（接收短暂中断，" +
+                    "发送总开关状态保留）；未接收时下次开始接收生效。",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
@@ -299,21 +315,24 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefStepper(
-                title = "发射偏移",
-                value = app.txOffsetMs,
-                range = 0..15000,
+                title = "时隙偏移",
+                value = app.slotOffsetMs,
+                range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
                 step = 100,
                 unit = " ms",
-                subtitle = "在一个时隙内后移发射起点",
-                onChange = { v -> settings.update { it.copy(txOffsetMs = v) } },
-                enabled = false,
-                badge = "U7",
+                signed = true,
+                subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
+                    "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
+                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前；FT8 可到 ±2.5s，" +
+                    "FT4 的搜索窗只有 ±0.5s，偏移过大会解不出。",
+                onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
             )
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "「快」省电、候选更少；「深」更慢但弱信号解码率更高。" +
-                    "OSR 与频率范围需重启接收生效，其余参数即时生效。",
+                subtitle = "预设一键改下面 6 项（时间/频率 OSR、最低得分、LDPC 迭代、候选上限、" +
+                    "单时隙上限）；频率范围不随预设变化。单项手改后显示「自定义」。" +
+                    "OSR 与频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
                     add(DecodePreset.STANDARD)
@@ -333,6 +352,8 @@ fun SettingsScreen(
                 title = "时间 OSR",
                 value = app.decode.timeOsr,
                 range = DecodeSettings.TIME_OSR_RANGE,
+                subtitle = "每个符号在时间上再细分的份数（1–4）。调大：DT 时间分辨率更细、" +
+                    "弱信号同步更稳，计算量成倍上升。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(timeOsr = v) } },
             )
             PrefDivider()
@@ -340,6 +361,8 @@ fun SettingsScreen(
                 title = "频率 OSR",
                 value = app.decode.freqOsr,
                 range = DecodeSettings.FREQ_OSR_RANGE,
+                subtitle = "每个 6.25 Hz 频率格再细分的份数（1–4）。调大：DF 频率估计更准、" +
+                    "邻近信号更易分开，计算量成倍上升。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(freqOsr = v) } },
             )
             PrefDivider()
@@ -347,6 +370,8 @@ fun SettingsScreen(
                 title = "最低得分",
                 value = app.decode.minScore,
                 range = DecodeSettings.MIN_SCORE_RANGE,
+                subtitle = "Costas 同步候选的最低得分（4–40）。调高：候选更少、解码更快，" +
+                    "但更容易漏掉弱信号；调低则更全更慢。",
                 onChange = { v -> settings.updateDecode { it.copy(minScore = v) } },
             )
             PrefDivider()
@@ -355,6 +380,8 @@ fun SettingsScreen(
                 value = app.decode.ldpcIterations,
                 range = DecodeSettings.LDPC_RANGE,
                 step = 5,
+                subtitle = "纠错码最大迭代次数（5–60）。调高：误码多的弱信号更可能解出来，" +
+                    "更慢；调低解码更快但弱台可能解不出。",
                 onChange = { v -> settings.updateDecode { it.copy(ldpcIterations = v) } },
             )
             PrefDivider()
@@ -363,6 +390,8 @@ fun SettingsScreen(
                 value = app.decode.maxCandidates,
                 range = DecodeSettings.MAX_CANDIDATES_RANGE,
                 step = 20,
+                subtitle = "单时隙保留的同步候选数量上限（20–500）。调高：给弱信号更多机会，" +
+                    "更慢；调低时名额先被强台占满、弱台漏解。",
                 onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
             )
             PrefDivider()
@@ -371,6 +400,8 @@ fun SettingsScreen(
                 value = app.decode.maxDecoded,
                 range = DecodeSettings.MAX_DECODED_RANGE,
                 step = 5,
+                subtitle = "一个时隙最多输出的报文条数（5–100）。拥挤波段（如 20m 高峰）" +
+                    "调大可避免已解出的报文被丢弃。",
                 onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
             )
             PrefDivider()
@@ -380,6 +411,8 @@ fun SettingsScreen(
                 range = DecodeSettings.F_MIN_RANGE,
                 step = 50,
                 unit = " Hz",
+                subtitle = "解码搜索与瀑布显示的下边界（默认 200 Hz，即 SSB 通带低端）。" +
+                    "需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
             )
             PrefDivider()
@@ -389,6 +422,8 @@ fun SettingsScreen(
                 range = DecodeSettings.F_MAX_RANGE,
                 step = 50,
                 unit = " Hz",
+                subtitle = "解码搜索与瀑布显示的上边界（默认 3000 Hz）。范围越窄解码越快，" +
+                    "但超出范围的信号不会被解出。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMaxHz = v) } },
             )
             PrefDivider()
@@ -926,6 +961,8 @@ private fun PrefStepper(
     onChange: (Int) -> Unit,
     step: Int = 1,
     unit: String = "",
+    /** 显示正号（用于可正可负的偏移量，如 `+1500 ms`）。 */
+    signed: Boolean = false,
     subtitle: String? = null,
     enabled: Boolean = true,
     badge: String? = null,
@@ -939,7 +976,7 @@ private fun PrefStepper(
                 modifier = Modifier.size(48.dp),
             ) { Text("−") }
             Text(
-                "$value$unit",
+                if (signed && value >= 0) "+$value$unit" else "$value$unit",
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.Center,

@@ -44,9 +44,18 @@
 // 允许在时隙起点后多久开始采集（毫秒）；超过则丢弃等下一个时隙
 #define ALIGN_TOLERANCE_MS 200
 
+// 时隙偏移（发射 + 解码窗口）的允许范围（ms）：FT8 的 DT 搜索窗约 ±2.5s，
+// 超过这个范围既测不出也解不出；与设置页 6.3「时隙偏移」范围一致
+#define SLOT_OFFSET_LIMIT_MS 2500
+
 // 发射前导音：键控 VOX 用的单音（落在 SSB 通带内）与幅度
 #define LEAD_TONE_HZ 1000
 #define LEAD_TONE_AMP 0.6f
+
+// 输出音量（发射音频的数字衰减）允许范围（dB）：发射波形本身已是数字满幅
+// （synth_gfsk 输出 sinf()，峰值 1.0），所以只能往小调；与设置页范围一致
+#define OUT_GAIN_MIN_DB (-30)
+#define OUT_GAIN_MAX_DB 0
 
 // VOX 电平下限（dBFS），低于视为静音
 #define VOX_LEVEL_FLOOR_DB (-100.0f)
@@ -235,6 +244,9 @@ typedef struct
     ftx_session_t* session;
     int slot_ms;
     int slot_samples;
+    /// 整个时隙的偏移（ms，正=推后）：采集窗口起点与发射起点一起平移，
+    /// 使「解码 DT」与「对端收我」同时校准（见 nativeSetSlotOffsetMs）
+    _Atomic int64_t slot_offset_ms;
 
     // 采集
     AAudioStream* in_stream;
@@ -249,6 +261,17 @@ typedef struct
     // 播放
     AAudioStream* out_stream;
     int out_rate;
+    /// 发射写入与「关流 / 释放引擎」的互斥。
+    ///
+    /// `write_blocking` 会阻塞在 `AAudioStream_write`（最长一次调用约 0.5 s），若此时
+    /// 另一线程把流 `AAudioStream_close` 或把整个引擎 `free` 掉，写入线程就会踩到已释放的
+    /// 内存（真机 tombstone：libaudioclient `AudioTrack::write` ← `nativePlayTx`）。
+    /// 约定：**写入线程只在持有 [tx_mutex] 时碰 [out_stream]**；关流/释放前先
+    /// [out_gen]+1 作废旧写入，再拿同一把锁（见 tx_stop_and_close）。
+    pthread_mutex_t tx_mutex;      ///< 保护 out_stream 的打开/关闭与单次写入
+    pthread_cond_t tx_cond;        ///< 播放调用退出时广播（销毁引擎前等它）
+    _Atomic int tx_active;         ///< 正在 nativePlay*/write_blocking 内的线程数
+    _Atomic int out_gen;           ///< 输出流代次：关流/开流都 +1，写入线程据此自我作废
 
     // 解码结果（等待 Kotlin 轮询取走）
     pthread_mutex_t res_mutex;
@@ -272,6 +295,7 @@ typedef struct
 
     // ---- 音频路由 / 增益（U7c） ----
     _Atomic int in_gain_db;        ///< 采集增益（dB），在 DSP 线程对原始样本生效
+    _Atomic int out_gain_db;       ///< 输出音量（dB，≤0 的衰减），写声卡前对整段播放缓冲生效
 
     // ---- VOX 运行状态（dsp 线程写，任意线程读） ----
     _Atomic int vox_level_db_x10;  ///< 平滑后的输入电平（dBFS × 10）
@@ -327,7 +351,9 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
     if (count <= 0)
         return;
 
-    int64_t now = utc_now_ms();
+    // 整个时隙偏移：用「偏移后的时间」判定边界，等价于把时隙网格整体平移
+    // （解码窗口起点随之移动，因此解码 DT 的读数会同步变化 = 校准）
+    int64_t now = utc_now_ms() - atomic_load(&e->slot_offset_ms);
     int64_t slot = now / e->slot_ms;
     int pos = (int)(now % e->slot_ms);
 
@@ -481,6 +507,10 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     e->slot_ms = (protocol == 1) ? (int)(FT4_SLOT_TIME * 1000) : (int)(FT8_SLOT_TIME * 1000);
     e->slot_samples = ftx_session_slot_samples(e->session);
     pthread_mutex_init(&e->res_mutex, NULL);
+    pthread_mutex_init(&e->tx_mutex, NULL);
+    pthread_cond_init(&e->tx_cond, NULL);
+    atomic_store(&e->tx_active, 0);
+    atomic_store(&e->out_gen, 1);
 
     // VOX / PTT 默认值（随后由 Kotlin 下发覆盖）
     atomic_store(&e->vox_trigger, 0);
@@ -494,6 +524,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->vox_candidate, 0);
     atomic_store(&e->vox_change_ms, 0);
     atomic_store(&e->in_gain_db, 0);
+    atomic_store(&e->slot_offset_ms, 0);
     return (jlong)(intptr_t)e;
 }
 
@@ -514,12 +545,94 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetDecodeParams(
     ftx_session_set_decode_params(e->session, &p);
 }
 
+// 前置声明：nativeDestroy 需要先停采集/播放才能安全释放
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeStopCapture(
+    JNIEnv* env, jobject thiz, jlong handle);
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(
+    JNIEnv* env, jobject thiz, jlong handle);
+
+/**
+ * 中止发射写入并（可选）关闭输出流 —— **关流/重建引擎/释放引擎前必须调用**。
+ *
+ * 先给 [out_gen] 加一让所有在跑的写入线程「自我作废」，再拿 [tx_mutex] 等当前
+ * `AAudioStream_write` 返回，最后才关流。这样任何写入线程都不会在 `AAudioStream_close`
+ * 之后碰到已经失效的流（真机崩溃根因：`AudioTrack::write` 踩已释放的共享缓冲）。
+ */
+static void tx_stop_and_close(audio_engine_t* e, bool close_stream)
+{
+    if (e == NULL)
+        return;
+    atomic_fetch_add(&e->out_gen, 1);
+    pthread_mutex_lock(&e->tx_mutex);
+    if (close_stream && e->out_stream != NULL)
+    {
+        AAudioStream_requestStop(e->out_stream);
+        AAudioStream_close(e->out_stream);
+        e->out_stream = NULL;
+    }
+    pthread_mutex_unlock(&e->tx_mutex);
+}
+
+/// 登记「本线程正在播放（nativePlay*/write_blocking）」：释放引擎前会等它归零。
+static void tx_enter(audio_engine_t* e)
+{
+    atomic_fetch_add(&e->tx_active, 1);
+}
+
+/// 注销播放调用并唤醒等待者（见 [tx_wait_idle]）。
+static void tx_leave(audio_engine_t* e)
+{
+    atomic_fetch_sub(&e->tx_active, 1);
+    pthread_mutex_lock(&e->tx_mutex);
+    pthread_cond_broadcast(&e->tx_cond);
+    pthread_mutex_unlock(&e->tx_mutex);
+}
+
+/// 等所有播放调用彻底退出（销毁引擎前调用）；超时返回 false（调用方宁可泄漏也不要 free）。
+static bool tx_wait_idle(audio_engine_t* e, int timeout_ms)
+{
+    bool ok = true;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L)
+    {
+        ts.tv_nsec -= 1000000000L;
+        ts.tv_sec += 1;
+    }
+    pthread_mutex_lock(&e->tx_mutex);
+    while (atomic_load(&e->tx_active) > 0)
+    {
+        if (pthread_cond_timedwait(&e->tx_cond, &e->tx_mutex, &ts) != 0)
+        {
+            ok = false;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&e->tx_mutex);
+    return ok;
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject thiz, jlong handle)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
     if (e == NULL)
         return;
+    // 自保：即使调用方忘了先 stop，也先把采集/播放停干净
+    Java_com_example_ft8vox_engine_AudioEngine_nativeStopCapture(env, thiz, handle);
+    tx_stop_and_close(e, true);
+    if (!tx_wait_idle(e, 3000))
+    {
+        // 设备卡死导致播放调用还没退出：宁可泄漏这点内存，也不能 free 掉它正在用的结构体
+        LOGE("nativeDestroy: playback call still alive, engine leaked to avoid use-after-free");
+        return;
+    }
+    pthread_mutex_destroy(&e->tx_mutex);
+    pthread_cond_destroy(&e->tx_cond);
     pthread_mutex_destroy(&e->res_mutex);
     ftx_session_free(e->session);
     free(e);
@@ -778,22 +891,27 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
     if (device_id > 0)
         AAudioStreamBuilder_setDeviceId(builder, device_id);
     // 不设置数据回调：使用阻塞式 AAudioStream_write
-    aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &e->out_stream);
+    AAudioStream* s = NULL;
+    aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &s);
     AAudioStreamBuilder_delete(builder);
     if (r != AAUDIO_OK)
     {
         LOGE("open output stream failed: %s", AAudio_convertResultToText(r));
-        e->out_stream = NULL;
         return -3;
     }
 
-    e->out_rate = AAudioStream_getSampleRate(e->out_stream);
-    r = AAudioStream_requestStart(e->out_stream);
+    // 新流 = 新时代：顺带作废上一代可能还在跑的写入线程
+    atomic_fetch_add(&e->out_gen, 1);
+    pthread_mutex_lock(&e->tx_mutex);
+    e->out_stream = s;
+    e->out_rate = AAudioStream_getSampleRate(s);
+    pthread_mutex_unlock(&e->tx_mutex);
+
+    r = AAudioStream_requestStart(s);
     if (r != AAUDIO_OK)
     {
         LOGE("start output stream failed: %s", AAudio_convertResultToText(r));
-        AAudioStream_close(e->out_stream);
-        e->out_stream = NULL;
+        tx_stop_and_close(e, true);
         return -4;
     }
     LOGI("playback started: requested=%d actual=%d", preferred_rate, e->out_rate);
@@ -804,20 +922,49 @@ JNIEXPORT void JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(JNIEnv* env, jobject thiz, jlong handle)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    if (e == NULL || e->out_stream == NULL)
+    if (e == NULL)
         return;
-    AAudioStream_requestStop(e->out_stream);
-    AAudioStream_close(e->out_stream);
-    e->out_stream = NULL;
+    // 必须等写入线程让出后再关流（否则正在写的那次 AAudioStream_write 会踩已关闭的流）
+    tx_stop_and_close(e, true);
 }
 
 /// 阻塞写入浮点样本，带看门狗；返回写入的帧数。
 ///
+/**
+ * 施加「输出音量」（U7c 增补）：0 dB = 数字满幅，负值衰减。
+ *
+ * 对整段待写缓冲生效（前导静音/前导音/FT8 报文/测试音一视同仁），超过满幅的样本
+ * 限幅到 [-1, 1] 防回绕（≤ 0 dB 时不会发生，仅作兜底）。
+ */
+static void apply_output_gain(audio_engine_t* e, float* buf, int n)
+{
+    int db = atomic_load(&e->out_gain_db);
+    if (db >= 0)
+        return;
+    float g = powf(10.0f, (float)db / 20.0f);
+    for (int i = 0; i < n; ++i)
+    {
+        float v = buf[i] * g;
+        buf[i] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+    }
+}
+
 /// 看门狗只作「卡死保护」：若音频设备异常导致写入远超本段音频的播放时长
 /// （预期时长 + 3 s），则中止写循环，避免发射协程永久阻塞。合法发射
 /// （FT8 整时隙约 15 s）不会被截断，因此实际生效阈值会按需抬高。
-static int write_blocking(audio_engine_t* e, const float* buf, int n)
+///
+/// 写入前会先按「输出音量」对 [buf] 施加衰减（原地缩放，见 apply_output_gain）。
+///
+/// **线程安全**：只在持有 [tx_mutex] 时读 [out_stream]；每次写前校验 [out_gen] 未变，
+/// 一旦变了就立即返回已写入帧数（说明流已被关掉/重建，见 tx_stop_and_close）。
+/// 调用方（nativePlay*/nativePlayTone）必须已 [tx_enter]，否则 [nativeDestroy] 可能在
+/// 本函数运行中把引擎释放掉。
+static int write_blocking(audio_engine_t* e, float* buf, int n)
 {
+    apply_output_gain(e, buf, n);
+
+    const int gen = atomic_load(&e->out_gen);
+
     int64_t expected_ms =
         (e->out_rate > 0) ? (int64_t)((double)n * 1000.0 / (double)e->out_rate) : 0;
     int64_t wd = (int64_t)atomic_load(&e->watchdog_ms);
@@ -828,7 +975,23 @@ static int write_blocking(audio_engine_t* e, const float* buf, int n)
     int written = 0;
     while (written < n)
     {
-        int32_t w = AAudioStream_write(e->out_stream, buf + written, n - written, 1000000000LL);
+        // 流已被停止/关闭/重建（tx_stop_and_close 会 +1）：本次发射提前结束，不算失败
+        if (atomic_load(&e->out_gen) != gen)
+            break;
+
+        bool valid = false;
+        int32_t w = 0;
+        pthread_mutex_lock(&e->tx_mutex);
+        if (e->out_stream != NULL && atomic_load(&e->out_gen) == gen)
+        {
+            valid = true;
+            // 单次写入超时 0.5 s：保证关流方最多等这么久就能拿到 tx_mutex
+            w = AAudioStream_write(e->out_stream, buf + written, n - written, 500000000LL);
+        }
+        pthread_mutex_unlock(&e->tx_mutex);
+        if (!valid)
+            break;
+
         if (w < 0)
         {
             LOGE("write failed: %s", AAudio_convertResultToText(w));
@@ -922,37 +1085,43 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePlayTx(
     jint ptt_silence_ms, jint lead_tone_ms)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    if (e == NULL || e->out_stream == NULL || pcm == NULL)
+    if (e == NULL || pcm == NULL)
         return -1;
 
+    // 登记本次播放：nativeDestroy 会等它退出后才 free 引擎
+    tx_enter(e);
+
+    int written = 0;
     jsize len = (*env)->GetArrayLength(env, pcm);
-    if (len <= 0)
-        return 0;
+    if (e->out_stream == NULL)
+    {
+        written = -1;
+    }
+    else if (len > 0)
+    {
+        jboolean is_copy = JNI_FALSE;
+        jfloat* data = (*env)->GetFloatArrayElements(env, pcm, &is_copy);
+        if (data == NULL)
+        {
+            written = -1;
+        }
+        else
+        {
+            written = play_pcm(e, data, (int)len, ptt_silence_ms, lead_tone_ms);
+            (*env)->ReleaseFloatArrayElements(env, pcm, data, JNI_ABORT);
+        }
+    }
 
-    jboolean is_copy = JNI_FALSE;
-    jfloat* data = (*env)->GetFloatArrayElements(env, pcm, &is_copy);
-    if (data == NULL)
-        return -1;
-
-    int written = play_pcm(e, data, (int)len, ptt_silence_ms, lead_tone_ms);
-
-    (*env)->ReleaseFloatArrayElements(env, pcm, data, JNI_ABORT);
+    tx_leave(e);
     return written;
 }
 
 /**
- * 播放一段测试单音（用于 VOX 键控/音量联调）。
- * @param freq_hz     单音频率（Hz）
- * @param duration_ms 时长（ms）
+ * 生成并播放一段测试单音（调用方保证已 [tx_enter] 且 [out_stream] 非空）。
  * @return 写入的帧数（<0 表示失败）
  */
-JNIEXPORT jint JNICALL
-Java_com_example_ft8vox_engine_AudioEngine_nativePlayTone(
-    JNIEnv* env, jobject thiz, jlong handle, jint freq_hz, jint duration_ms)
+static int play_tone_locked(audio_engine_t* e, int freq_hz, int duration_ms)
 {
-    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    if (e == NULL || e->out_stream == NULL)
-        return -1;
     if (freq_hz <= 0 || duration_ms <= 0 || e->out_rate <= 0)
         return 0;
 
@@ -985,6 +1154,26 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePlayTone(
 
     int written = write_blocking(e, buf, n);
     free(buf);
+    return written;
+}
+
+/**
+ * 播放一段测试单音（用于 VOX 键控/音量联调）。
+ * @param freq_hz     单音频率（Hz）
+ * @param duration_ms 时长（ms）
+ * @return 写入的帧数（<0 表示失败）
+ */
+JNIEXPORT jint JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativePlayTone(
+    JNIEnv* env, jobject thiz, jlong handle, jint freq_hz, jint duration_ms)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return -1;
+
+    tx_enter(e); // 登记播放调用：销毁引擎前会等它退出
+    int written = (e->out_stream == NULL) ? -1 : play_tone_locked(e, freq_hz, duration_ms);
+    tx_leave(e);
     return written;
 }
 
@@ -1034,6 +1223,54 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetInputGain(
     if (gain_db > 30)
         gain_db = 30;
     atomic_store(&e->in_gain_db, gain_db);
+}
+
+/**
+ * 下发输出音量（发射音频的数字衰减，热生效，U7c 增补）。
+ *
+ * 在播放写入前对整段缓冲按 `10^(dB/20)` 缩放：报文、前导音、测试音都生效。
+ * 发射波形（synth_gfsk）本身已是数字满幅，所以只能衰减；超过满幅的样本
+ * 限幅到 [-1, 1] 防回绕。改设置后**下一次播放**即生效。
+ *
+ * @param gain_db 输出音量（dB），合法范围 -30..0
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetOutputGain(
+    JNIEnv* env, jobject thiz, jlong handle, jint gain_db)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    if (gain_db < OUT_GAIN_MIN_DB)
+        gain_db = OUT_GAIN_MIN_DB;
+    if (gain_db > OUT_GAIN_MAX_DB)
+        gain_db = OUT_GAIN_MAX_DB;
+    atomic_store(&e->out_gain_db, gain_db);
+}
+
+/**
+ * 下发时隙偏移（ms，热生效，U7「发射偏移」）。
+ *
+ * **整个时隙一起偏移**：采集窗口起点（native 侧 UTC 边界判定）与发射起点
+ * （Kotlin 侧 planTx）都按同一数值平移，正=推后、负=提前。
+ *
+ * 校准用法：操作页解码卡片显示的「时间差 DT」即对端信号相对本机时隙起点的偏移；
+ * 把它原样下发（如 +1.5s → +1500）后，DT 会回到约 0，且我方发射也落到对方的时隙起点上。
+ *
+ * @param offset_ms 偏移（ms），合法范围 -2500..2500
+ */
+JNIEXPORT void JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeSetSlotOffsetMs(
+    JNIEnv* env, jobject thiz, jlong handle, jint offset_ms)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return;
+    if (offset_ms < -SLOT_OFFSET_LIMIT_MS)
+        offset_ms = -SLOT_OFFSET_LIMIT_MS;
+    if (offset_ms > SLOT_OFFSET_LIMIT_MS)
+        offset_ms = SLOT_OFFSET_LIMIT_MS;
+    atomic_store(&e->slot_offset_ms, (int64_t)offset_ms);
 }
 
 // -----------------------------------------------------------------------------

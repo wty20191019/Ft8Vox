@@ -111,6 +111,38 @@ class TxParityAutoTest {
         assertEquals(minute + 2 * slot, plan.targetStartMs)
     }
 
+    // ---- 时隙偏移（U7「发射偏移」）：整个时隙一起平移 ----
+
+    @Test
+    fun slotOffsetShiftsTargetStartAndKeepsSlotIndex() {
+        // 名义时隙 10 刚开头 200ms，我方周期为奇 → 无偏移时瞄准时隙 11 的边界
+        val now = 10 * slot + 200L
+        val base = planTx(now, slot, txParity = 1, preambleMs = 50L)
+        assertEquals(11, base.targetSlotIndex)
+        assertEquals(11 * slot, base.targetStartMs)
+
+        // +1.5s 偏移：仍是同一个时隙 11，但起点与播放起点整体推后 1500ms
+        val shifted = planTx(now, slot, txParity = 1, preambleMs = 50L, slotOffsetMs = 1_500L)
+        assertEquals(11, shifted.targetSlotIndex)
+        assertEquals(11 * slot + 1_500L, shifted.targetStartMs)
+        assertEquals(base.startAtMs + 1_500L, shifted.startAtMs)
+    }
+
+    @Test
+    fun slotOffsetMovesInPlaceWindow() {
+        // 偏移 +1.5s 后时隙 10 的起点刚到 100ms：仍走「就地发射」
+        val now = 10 * slot + 1_500L + 100L
+        val plan = planTx(now, slot, txParity = 0, preambleMs = 50L, slotOffsetMs = 1_500L)
+        assertEquals(10, plan.targetSlotIndex)
+        assertEquals(now, plan.startAtMs)
+        assertEquals(now + 50L, plan.targetStartMs)
+
+        // 同一时刻若偏移为负（起点早已过去 3s+）：等下一个我方周期（时隙 12）
+        val late = planTx(now, slot, txParity = 0, preambleMs = 50L, slotOffsetMs = -1_500L)
+        assertEquals(12, late.targetSlotIndex)
+        assertEquals(12 * slot - 1_500L, late.targetStartMs)
+    }
+
     // ---- 回归：解码在时隙结束后才到手，应答必须用「对方时隙的相反周期」 ----
 
     @Test
