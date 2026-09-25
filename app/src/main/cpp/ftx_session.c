@@ -354,11 +354,24 @@ void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* 
 }
 
 // -----------------------------------------------------------------------------
-// SNR 估计：按已知音调序列取信号 bin 功率，与同时段的平均 bin 功率比较。
+// SNR 估计：按已知音调序列取信号 bin 功率，与同时段的噪声底比较。
 // 口径对齐 WSJT-X `ft8b.f90`：解出音调所在的 bin 里同时含信号与噪声，
 // 先减去该 bin 自身的噪声再取比值（xsig/xnoi − 1），最后换算到 2500 Hz 参考带宽。
 // 直接取 signal/noise 会把噪声也算成信号，弱信号会明显偏高。
+//
+// 噪声底的取法很关键：WSJT-X 有专门提交修正过这一点 ——
+// "a large signal in the passband no longer causes the SNR of weaker signals
+//  to be biased low"，做法是改用 `get_spectrum_baseline()` 拟合的**局部下包络**
+// 代替原来的整带平均谱（后者会被带内强台抬高，从而把弱台判低）。
+// 这里用等效的轻量做法：
+//   ① 只在信号左右各 SNR_NOISE_WIN 个 bin 内取噪声（局部，抗带内强台）；
+//   ② 取低分位而不是均值（抗邻道其它 FT8 信号）；
+//   ③ bin 功率服从指数分布，其 p 分位 = -ln(1-p)·均值，故除以 -ln(1-p) 换算回均值（无偏）。
 // -----------------------------------------------------------------------------
+#define SNR_NOISE_WIN 16  // 噪声窗口半宽（bin）；FT8 下 1 bin = 6.25 Hz，即 ±100 Hz
+#define SNR_NOISE_PCT 25  // 取 25 分位
+#define SNR_Q25_FACTOR 0.2876821  // -ln(1-0.25)
+
 static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                          const ftx_message_t* msg)
 {
@@ -375,8 +388,12 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
 
     float signal_sum = 0.0f;
     int signal_n = 0;
-    double noise_sum = 0.0;
+    // 噪声直方图按 8bit mag 索引统计（mag 单调于功率，故分位可直接换算）
+    uint32_t noise_hist[256];
+    memset(noise_hist, 0, sizeof(noise_hist));
     long noise_n = 0;
+    int noise_lo = cand->freq_offset - 2 - SNR_NOISE_WIN;
+    int noise_hi = cand->freq_offset + 9 + SNR_NOISE_WIN;
 
     for (int i = 0; i < num_tones; ++i)
     {
@@ -393,13 +410,15 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
             signal_sum += kMagPowerLut[base[(size_t)fs * wf->num_bins + fbin]];
             signal_n++;
         }
-        // 噪声底：排除整段音调区间（freq_offset .. freq_offset+7）及其邻域，
-        // 避免把信号自身的频谱泄漏算进噪声。
-        for (int b = 0; b < wf->num_bins; ++b)
+        // 噪声底：只取信号两侧的局部窗口，并排除整段音调区间
+        // （freq_offset-2 .. freq_offset+9），避免把信号自身的频谱泄漏算进噪声。
+        int b0 = noise_lo < 0 ? 0 : noise_lo;
+        int b1 = noise_hi >= wf->num_bins ? wf->num_bins - 1 : noise_hi;
+        for (int b = b0; b <= b1; ++b)
         {
             if (b >= cand->freq_offset - 2 && b <= cand->freq_offset + 9)
                 continue;
-            noise_sum += kMagPowerLut[base[(size_t)fs * wf->num_bins + b]];
+            noise_hist[base[(size_t)fs * wf->num_bins + b]]++;
             noise_n++;
         }
     }
@@ -407,9 +426,25 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
     if (signal_n <= 0 || noise_n <= 0)
         return -24.0f;
 
+    // 取 SNR_NOISE_PCT 分位对应的 mag，再按指数分布换算回均值（无偏）
+    uint32_t pct_target = (uint32_t)((noise_n * SNR_NOISE_PCT + 99) / 100);
+    if (pct_target < 1)
+        pct_target = 1;
+    uint32_t pct_acc = 0;
+    int pct_bin = 0;
+    for (int i = 0; i < 256; ++i)
+    {
+        pct_acc += noise_hist[i];
+        if (pct_acc >= pct_target)
+        {
+            pct_bin = i;
+            break;
+        }
+    }
+
     // WSJT-X 口径：信号 bin 内混有噪声，须先扣除单 bin 噪声再取比值。
     double sig = (double)signal_sum / signal_n;
-    double noi = (double)noise_sum / noise_n;
+    double noi = (double)kMagPowerLut[pct_bin] / SNR_Q25_FACTOR;
     double excess = sig / noi - 1.0;
     if (excess < 1.0e-3)
         excess = 1.0e-3; // 与 WSJT-X 相同的下限，最终会被 -24 dB 夹住

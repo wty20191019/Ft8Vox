@@ -61,20 +61,28 @@
 > `DecodeResult` 由 native 直接 `NewObject` 构造，构造签名固定在 `jni_common.h`：
 > `(Ljava/lang/String;IFIIJ)V`。**修改 Kotlin 字段顺序/类型时必须同步更新该签名。**
 
-SNR 估算口径（对齐 WSJT-X `ft8b.f90`）：按解码出的音调序列取信号 bin 功率，排除音调区间（`freq_offset-2 .. freq_offset+9`）后取其余 bin 的平均功率作为噪声底；
+SNR 估算口径（对齐 WSJT-X `ft8b.f90`）：按解码出的音调序列取信号 bin 功率，噪声底取**信号两侧局部窗口**（`±16 bin`，约 ±100 Hz，排除音调区间 `freq_offset-2 .. freq_offset+9`）的 **25 分位**，
+再按 bin 功率服从指数分布换算回均值（`÷ -ln(0.75)`）。
 因解出音调所在的 bin 里同时含信号与噪声，须先扣除该 bin 自身的噪声再取比值，即 `excess = sig/noise − 1`，最后按 `10·log10(excess) + ref` 换算到 2500 Hz 参考带宽。
 其中 FT8 的 `ref = −27.0 dB`（与 WSJT-X 一致），FT4 暂无对照常数、按噪声带宽换算 `10·log10(binHz/2500)`。结果下限为 −24 dB。
 （直接取 `sig/noise` 会把噪声算成信号，弱信号会明显偏高 1~3 dB。）
 
 **实测校核（合成信号，含 1920 点单符号匹配谱对照）**：以「真值」`SNR = P_tone/(N0·2500)` 为准，
-本实现（噪声取全带均值）在 −20..+10 dB 区间**偏低约 0.8~1.1 dB**；WSJT-X 的 `xsnr` 支路（单符号矩形窗 + `mod(tone+4,7)` 单 bin 噪声）偏低约 0.6 dB。
+本实现（噪声取局部 25 分位）在 −20..+10 dB 区间**偏低约 0.2~1.4 dB**；WSJT-X 的 `xsnr` 支路（单符号矩形窗 + `mod(tone+4,7)` 单 bin 噪声）偏低约 0.6 dB。
 即两者口径一致，本实现不存在系统性偏高。若真机对比仍偏高，优先排查**采集链路**而非公式：
 ① AAudio 采集预设（见 §6，已强制 `UNPROCESSED`，避免系统降噪把噪声底压掉）；
-② `fMin/fMax` 设得比实际音频通带更宽时，全带噪声均值会被安静频段拉低 → SNR 虚高。
+② `fMin/fMax` 设得比实际音频通带更宽时，噪声底会被安静频段拉低 → SNR 虚高。
+
+**噪声底为何必须是「局部 + 抗强台」**：WSJT-X 有专门提交修正过这一点 ——
+`Improve FT8 SNR estimates in two ways: ... (ii) a large signal in the passband no longer causes
+the SNR of weaker signals to be biased low.`，做法是用 `get_spectrum_baseline()` 拟合的**局部下包络**
+取代整带平均谱（后者会被带内强台抬高，把弱台判低）。本实现同理：
+旧版取「全带均值」时，弱台（真值 −15 dB）只要同带有一个 +20 dB 以上的强台就被判到 −24 dB 下限；
+改为局部 25 分位后，强台从 +0 升到 +50 dB，读数稳定在 −18.6~−18.8 dB 不变。
 
 > WSJT-X 另有一条默认支路：`xsnr2 = xsig/xbase/3.0e6 − 1`（`xbase=10^(0.1*(sbase−40))`，
 > `sbase` 为 `baseline.f90` 拟合的**局部**噪声基线），源码中 `if(.not.nagain) xsnr=xsnr2`，
-> 即默认显示的是 `xsnr2`。本项目未复刻该支路（常数随版本变动，且与 `xsnr` 应为同一物理量）。
+> 即默认显示的是 `xsnr2`。本项目未复刻该支路（常数随版本变动），但已对齐其「局部、抗强台」这一关键性质。
 
 说明：呼号哈希表由 **native 侧管理**（去重、老化），不通过 JNI 回调，避免频繁跨语言调用。
 
