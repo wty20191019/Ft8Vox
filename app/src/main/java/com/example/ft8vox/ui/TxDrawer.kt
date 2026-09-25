@@ -81,7 +81,6 @@ fun TxDrawer(
     onTxEnabledChange: (Boolean) -> Unit,
     onHoldTxChange: (Boolean) -> Unit,
     onOpenAutoProgram: () -> Unit,
-    onArmAutoProgram: () -> Unit,
     onMacrosChange: (List<String>) -> Unit,
     onEnqueue: (String) -> Unit,
     onRemoveQueued: (Int) -> Unit,
@@ -388,8 +387,9 @@ fun TxDrawer(
                     when {
                         !status.txEnabled ->
                             "发送总开关已关：只接收，不发射任何报文。打开后由「发送」按钮 / 解码卡片手势或自动程序决定发什么。"
-                        status.autoArmed ->
-                            "发送总开关已开，自动程序已启用：选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
+                        status.autoProgram.level.enabled ->
+                            "发送总开关已开，自动程序已启用（等级 ${status.autoProgram.level.shortLabel}）：" +
+                                "选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
                         canSendNow -> "发送总开关已开；当前为我方周期且剩余 >2.5s：点「发送」将立即发射"
                         else -> "发送总开关已开；非我方周期或剩余不足：点「发送」将排到下一个我方发射周期"
                     },
@@ -423,20 +423,15 @@ fun TxDrawer(
                     Text(
                         status.autoProgram.level.shortLabel,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (status.autoProgram.level.enabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = onOpenAutoProgram) { Text("设置…") }
-                    if (status.autoArmed) {
-                        OutlinedButton(onClick = onArmAutoProgram) { Text("关闭") }
-                    } else {
-                        OutlinedButton(
-                            onClick = onArmAutoProgram,
-                            enabled = status.autoProgram.level.enabled,
-                        ) { Text("启用") }
-                    }
                 }
                 Text(
-                    "「发送总开关」只表示允许发射；启用后由自动程序决定选台与整段 QSO 的报文流程。",
+                    "没有独立的启用开关：等级「0 手动选择」＝关闭，1+ ＝开启。" +
+                        "切换等级会弹防误发确认；确认启用时若「发送总开关」为关会自动打开，" +
+                        "随后选台与整段 QSO 的报文流程都交给自动程序。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

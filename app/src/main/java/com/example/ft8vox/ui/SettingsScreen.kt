@@ -57,6 +57,7 @@ import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
+import com.example.ft8vox.qso.AutoLevel
 import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，new_ui.md §6）。
@@ -83,6 +84,8 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
+    // 待确认的「启用自动程序」等级（「0 手动选择」→ 1+ 时的防误发确认）
+    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -390,8 +393,7 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                armed = false,
-                onSetLevel = { lv -> settings.update { s -> s.copy(auto = s.auto.copy(level = lv)) } },
+                onSetLevel = { lv -> requestAutoLevel(lv, sessionStatus, session) { confirmAutoLevel = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
             )
             PrefDivider()
@@ -602,6 +604,18 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text("取消") }
             },
+        )
+    }
+
+    confirmAutoLevel?.let { lv ->
+        AutoEnableConfirmDialog(
+            level = lv,
+            status = sessionStatus,
+            onConfirm = {
+                confirmAutoLevel = null
+                session.setAutoLevel(lv)
+            },
+            onDismiss = { confirmAutoLevel = null },
         )
     }
 }

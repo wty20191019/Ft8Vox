@@ -23,8 +23,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -34,7 +32,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -97,7 +94,6 @@ fun OperateScreen(
     }
     var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
     var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
-    var confirmAuto by remember { mutableStateOf(false) }
     var queryOpen by rememberSaveable { mutableStateOf(false) }
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 发射抽屉当前目标（点选解码行 / 滑呼 / 详情「呼叫」设置）
@@ -306,9 +302,6 @@ fun OperateScreen(
             onTxEnabledChange = { viewModel.setTxEnabled(it) },
             onHoldTxChange = { viewModel.setHoldTxFreq(it) },
             onOpenAutoProgram = onOpenAutoProgram,
-            onArmAutoProgram = {
-                if (status.autoArmed) viewModel.disarmAutoProgram() else confirmAuto = true
-            },
             onMacrosChange = { viewModel.setMacros(it) },
             onEnqueue = { viewModel.enqueueTx(it) },
             onRemoveQueued = { viewModel.removeQueuedTx(it) },
@@ -348,44 +341,6 @@ fun OperateScreen(
                 onOpenLog()
             },
             onDismiss = { detailFor = null },
-        )
-    }
-
-    if (confirmAuto) {
-        AlertDialog(
-            onDismissRequest = { confirmAuto = false },
-            title = { Text("启用自动程序") },
-            text = {
-                Text(
-                    buildString {
-                        append("将按「${status.autoProgram.level.label}」自动发射：选台与整段 QSO 报文流程均由自动程序决定。\n")
-                        append("呼号：${status.myCall}｜发射频率：${status.selectedFreqHz} Hz｜时隙：自动（下一个 ")
-                        append(if (status.txParity == 0) "偶" else "奇")
-                        append("）\n")
-                        append(
-                            if (status.txEnabled) "发送总开关：已开（只表示允许发射）。\n"
-                            else "发送总开关：关 —— 确认启用时会自动打开。\n",
-                        )
-                        if (status.autoProgram.singleQso) {
-                            append("「单次通联」已开：一次 QSO 结束后会自动停止。\n")
-                        } else {
-                            append("「单次通联」已关：将连续自动通联，直到手动关闭。\n")
-                        }
-                        append("请确认电台已就绪。")
-                    },
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmAuto = false
-                        viewModel.armAutoProgram()
-                    },
-                ) { Text("确认启用") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmAuto = false }) { Text("取消") }
-            },
         )
     }
 }

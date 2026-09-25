@@ -102,10 +102,13 @@ data class ReceiverStatus(
     // ---- JTDX 风格操作（阶段 7c） ----
     /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
     val holdTxFreq: Boolean = false,
-    /** 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。 */
+    /**
+     * 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。
+     *
+     * **等级即开关**：`level == MANUAL`（「0 手动选择」）＝自动程序关闭，1+ ＝开启；
+     * 不存在独立的「启用/关闭」状态（见 [SessionViewModel.setAutoLevel]）。
+     */
     val autoProgram: AutoProgramSettings = AutoProgramSettings(),
-    /** 自动程序是否已启用（需用户确认；按「单次通联」在 QSO 结束后自动解除）。 */
-    val autoArmed: Boolean = false,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
     // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
@@ -251,7 +254,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 holdTxFreq = s.holdTxFreq,
                 autoProgram = s.auto,
-                autoArmed = if (s.auto.level == AutoLevel.MANUAL) false else cur.autoArmed,
                 // 运行中不允许改协议（需重建引擎），忽略设置里的旧值
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
@@ -362,16 +364,39 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(holdTxFreq = value) }
     }
 
-    /** 设置自动程序等级；切到「手动」时立即解除启用。 */
+    /**
+     * 设置自动程序等级 —— **等级即开关**：`0 手动选择`＝关闭，1+ ＝开启。
+     *
+     * 由「0 手动选择」切到 1+ 时，UI 需先弹防误发确认（`AutoEnableConfirmDialog`）再调本方法；
+     * 确认后若「发送总开关」为关，先 [setTxEnabled] 打开（总开关此前未锁定时顺带按手机 UTC
+     * 时间锁定发射时隙）—— 总开关仍是「能不能发」的唯一权限。
+     *
+     * 切回「0 手动选择」只停止自动化，**不动「发送总开关」**（手动发送仍需要这个权限）。
+     */
     fun setAutoLevel(level: AutoLevel) {
+        if (level == _status.value.autoProgram.level) return
         if (level == AutoLevel.MANUAL) {
             retryCall = null
             retryLeft = 0
+            _status.update {
+                it.copy(
+                    autoProgram = it.autoProgram.copy(level = level),
+                    status = "自动程序已关闭（等级：0 手动选择，发送总开关不变）",
+                )
+            }
+            persist { it.copy(auto = it.auto.copy(level = level)) }
+            return
         }
+        if (!canOperate) {
+            _status.update { it.copy(status = "请先填写呼号，再启用自动程序") }
+            return
+        }
+        if (!_status.value.txEnabled) setTxEnabled(true)
+        val parity = parityLabel(_status.value.txParity)
         _status.update {
             it.copy(
                 autoProgram = it.autoProgram.copy(level = level),
-                autoArmed = if (level == AutoLevel.MANUAL) false else it.autoArmed,
+                status = "自动程序已启用（${level.label}，$parity）",
             )
         }
         persist { it.copy(auto = it.auto.copy(level = level)) }
@@ -434,40 +459,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(txQueue = emptyList()) }
     }
 
-    /**
-     * 启用自动程序（UI 需先弹防误发确认）。
-     *
-     * **依赖「发送总开关」**：总开关是「能不能发」的唯一权限，自动程序只是「发什么」的策略，
-     * 因此启用时若总开关为关，先 [setTxEnabled] 打开（总开关此前未锁定时顺带按手机 UTC 时间锁定时隙）。
-     */
-    fun armAutoProgram() {
-        val p = _status.value.autoProgram
-        if (p.level == AutoLevel.MANUAL) {
-            _status.update { it.copy(status = "请先选择自动程序等级") }
-            return
-        }
-        if (!canOperate) {
-            _status.update { it.copy(status = "请先填写呼号") }
-            return
-        }
-        if (!_status.value.txEnabled) setTxEnabled(true)
-        val parity = parityLabel(_status.value.txParity)
-        _status.update { it.copy(autoArmed = true, status = "自动程序已启用（${p.level.label}，$parity）") }
-    }
-
-    /**
-     * 关闭自动程序：只停止「自动决定发什么」，**不动「发送总开关」**。
-     *
-     * 反向联动只有一条：关闭总开关（只接收）时会连带解除自动程序 —— 不能发射就没必要挂着自动化。
-     * 这样「切到手动等级」「「单次通联」在 QSO 结束后自动停止」等路径都无需特殊处理：
-     * 它们都只是「自动程序停止」，与发射权限无关。
-     */
-    fun disarmAutoProgram() {
-        retryCall = null
-        retryLeft = 0
-        _status.update { it.copy(autoArmed = false, status = "自动程序已关闭（回到手动，发送总开关不变）") }
-    }
-
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
     fun setBandFreq(name: String, hz: Long) {
         val n = name.trim().takeIf { it.isNotEmpty() } ?: return
@@ -483,10 +474,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 发送总开关（默认关 = 只接收）：唯一回答「**能不能发**」。
      *
      * 它自己**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定，
-     * 见 `TxDrawer` 收起态条与 `armAutoProgram`。
+     * 见 `TxDrawer` 收起态条与 [setAutoLevel]。
      *
      * - 开启：允许发射；总开关此前未锁定时按手机 UTC 时间锁定「下一个来得及准备的时隙」。
-     * - 关闭：立即停发、解除时隙锁定与目标固定，并**连带解除自动程序**（不能发射就没必要挂着自动化）。
+     * - 关闭：立即停发、解除时隙锁定与目标固定；**不动自动程序等级** —— 开回总开关即按原等级继续
+     *   （不能发射时自动程序只是待命，没必要把等级清掉）。
      *
      * 因不再提供周期设置，用户通过在不同时机重开总开关来换发射时隙。
      */
@@ -497,7 +489,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             retryCall = null
             retryLeft = 0
             stopTransmit()
-            _status.update { it.copy(txEnabled = false, autoArmed = false, status = "发送已关闭（只接收）") }
+            _status.update {
+                it.copy(
+                    txEnabled = false,
+                    status = if (it.autoProgram.level.enabled) {
+                        "发送已关闭（只接收）｜自动程序待命（开总开关即继续）"
+                    } else {
+                        "发送已关闭（只接收）"
+                    },
+                )
+            }
             return
         }
         relockAutoParityIfNeeded()
@@ -645,7 +646,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                autoArmed = false,
                 qso = qsoEngine.stop(),
             )
         }
@@ -782,7 +782,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 紧急停止发射：解除武装并中止可能正在进行的播放。 */
+    /**
+     * 紧急停止发射：解除武装并中止可能正在进行的播放。
+     *
+     * **只停本次发射，不动自动程序等级**：等级 ≥1 时自动程序下一时隙会继续（要全停请关
+     * 「发送总开关」，或把等级切回「0 手动选择」）。
+     */
     fun stopTransmit() {
         txJob?.cancel()
         txJob = null
@@ -794,10 +799,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txArmed = false,
                 txing = false,
                 manualTxText = null,
-                autoArmed = false,
                 qso = p,
                 txCountdownMs = 0,
-                status = "已停止发射",
+                status = if (it.autoProgram.level.enabled) {
+                    "已停止发射｜自动程序仍开启（要全停请关「发送总开关」）"
+                } else {
+                    "已停止发射"
+                },
             )
         }
     }
@@ -920,7 +928,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (!isOwnTxSlot) {
                     if (st.qso.active) {
                         applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
-                    } else if (st.autoArmed) {
+                    } else if (st.autoProgram.level.enabled) {
                         runAutoProgram(batch)
                     }
                 }
@@ -962,12 +970,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 else -> Unit
             }
         }
+        // 「单次通联」：一次 QSO 结束即把等级切回「0 手动选择」（＝关闭自动程序），避免无限自动呼叫。
+        // 因为「等级即开关」，这里必须改持久化的等级本身。
+        val stopAuto = finished && _status.value.autoProgram.singleQso &&
+            _status.value.autoProgram.level.enabled
+        if (stopAuto) {
+            retryCall = null
+            retryLeft = 0
+            persist { it.copy(auto = it.auto.copy(level = AutoLevel.MANUAL)) }
+        }
         _status.update {
             it.copy(
                 qso = p,
-                status = "QSO：${p.description}",
-                // 「单次通联」开启时，一次 QSO 结束即解除自动程序，避免无限自动呼叫
-                autoArmed = if (finished && it.autoProgram.singleQso) false else it.autoArmed,
+                status = if (stopAuto) {
+                    "QSO：${p.description}｜单次通联完成，自动程序已关闭（等级切回「0 手动选择」）"
+                } else {
+                    "QSO：${p.description}"
+                },
+                autoProgram = if (stopAuto) it.autoProgram.copy(level = AutoLevel.MANUAL) else it.autoProgram,
             )
         }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
