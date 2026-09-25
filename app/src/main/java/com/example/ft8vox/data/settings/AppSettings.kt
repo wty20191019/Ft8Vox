@@ -6,10 +6,9 @@ import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterTag
 
-/** 发射周期模式：0=偶数周期，1=奇数周期，2=自动（按手机 UTC 时间选下一个来得及的时隙）。 */
+/** 发射时隙奇偶：0=偶数周期，1=奇数周期（具体时隙由「自动」按手机 UTC 时间锁定）。 */
 const val TX_PARITY_EVEN = 0
 const val TX_PARITY_ODD = 1
-const val TX_PARITY_AUTO = 2
 
 /** Call 1st 自动应答策略。 */
 enum class CallFirstMode(val label: String) {
@@ -157,8 +156,6 @@ data class AppSettings(
     val protocolName: String = Protocol.FT8.name,
     /** 音频发射频率（Hz）。 */
     val selectedFreqHz: Int = 1500,
-    /** 我方发射周期：[TX_PARITY_EVEN] / [TX_PARITY_ODD] / [TX_PARITY_AUTO]。 */
-    val txParity: Int = TX_PARITY_AUTO,
     /** 锁定发射频率（应答时不跟随对方频率）。 */
     val holdTxFreq: Boolean = false,
     /** Call 1st 自动应答策略。 */

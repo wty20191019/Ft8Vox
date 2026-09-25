@@ -117,7 +117,7 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 | U7c 音频路由与增益 | ✅ | | `engine/AudioDevices.kt` 枚举输入/输出设备（系统默认恒为首项）；AAudio `setDeviceId` 选择输入（`nativeStartCapture`）与输出（`nativeStartPlayback`）；`nativeSetInputGain` 采集增益在 DSP 线程热生效（含 VOX 电平，限幅防回绕）；设置页 6.1 输出声卡、6.2 输入设备/输入增益点亮，音频速览显示设备与增益；JVM 191 + 设备端 30 测试全绿 |
 | U7d 含我呼号哔声 | ✅ | | 收到 `to == 我呼号` 的报文时用 `ToneGenerator`（通知流）短促提醒；`shouldAlertMyCall` 纯函数判定；设置页 6.4 开关点亮；JVM 198 测试全绿 |
 | U7 其余能力 | ✅（结项） | | 局域网后台、在线日志：本轮不做；离线瓦片：暂缓（缺数据源，维持矢量底图）；FST4：**不做**（`ft8_lib` 无该模式） |
-| U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发射总开关（默认只接收）+ 自动奇偶（按手机 UTC 选下一时隙）；JVM 207 测试全绿 |
+| U8 波段频率与自动发射 | ✅ | | 每波段多频率选择 + 自定义波段/频率 + 发射总开关（收起态条，默认只接收）+ 时隙固定自动（按手机 UTC 选下一时隙，无设置项）+ 默认呼叫 CQ；JVM 全绿 |
 
 ### U2 落地说明（与设计的取舍）
 
@@ -232,10 +232,11 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **波段多频率（`data/BandPlan.kt`）**：`Band` 新增 `freqs: List<DialFreq>`（每波段收录 FT8 / FT4 及少数 DX/Hound 常用刻度，如 20m = 14.074 FT8 / 14.080 FT4 / 14.090 FT8 DX / 14.095 FT8 Hound）；`dialHz` 仍为首项、作为波段默认。新增 `DialFreq.mhz`（4 位小数，可区分 FT4 的 7.0475）、`Band.containsHz`、`BandPlan.hasFreq` / `resolveDialHz` / `parseFreqMhz` / `MAX_FREQ_HZ`。
 - **自定义波段与频率**：`AppSettings` 新增 `dialHz: Long`（0 = 用波段默认）与派生 `resolvedDialHz`；波段名不再限制为内置表（`SettingsRepository` 只做非空、≤16 字符与频率范围钳制），支持如「试验」+ 13.500 MHz。记录通联改用当前 `dialHz`（`SessionViewModel` 写入 `st.dialHz`），自定义波段的 ADIF 导出为自定义 BAND 名 + 精确 FREQ。
 - **「波段与频率」弹窗（`ui/AppChrome.kt` → `BandFreqDialog`）**：顶栏菜单第一项打开；列出各波段与全部常用频率（点选即切换并关闭），底部「自定义波段与频率…」切换为「波段名 + MHz」输入（校验正数）。设置页「台站」组的「波段与频率」`PrefAction` 复用同一弹窗。
-- **发射总开关（默认关 = 只接收）**：`ReceiverStatus` 新增 `txEnabled`（**仅会话内有效、不持久化**，故每次启动都默认只接收）。发射抽屉顶部为 `Switch`；关闭时立即停发并解除周期锁定，开启后 CQ / 应答 / 一次性发射 / Call 1st 才允许。总开关关闭时抽屉「发送」按钮禁用、防误发弹窗的「确认发射」禁用并给出提示。
-- **自动奇偶（像 FT8CN）**：`txParity` 语义扩展为 0=偶 / 1=奇 / 2=自动（默认自动），设置页与抽屉都有「偶/奇/自动」三档。自动规则 = 纯函数 `nextSlotParity(now, slotMs, leadMs)`：按手机 UTC 时间取**下一个距起点 ≥ 前导余量（前导 + 500 ms）的时隙**（当前时隙来不及就跳到再下一个，即「再下一个时隙发射」）；在打开总开关、进入新 QSO / 一次性发射时锁定，QSO 期间保持不变，结束或停发后释放。因解码在时隙结束后到达，应答时天然落在对方相反周期。
-- **接线**：`SessionViewModel.setBandFreq` / `setTxParity(0..2)` / `setTxEnabled`、`lockAutoParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证自动周期已锁定；`applySettings` 同步 `band / dialHz / txParityMode / 生效 txParity`。
-- **测试**：`BandPlanTest` 增补（每波段 ≥2 频率、首项 = 默认、频率在波段内、`resolveDialHz`、`parseFreqMhz`、`DialFreq.mhz`）；新增 `ui/TxParityAutoTest`（下一时隙奇偶、前导余量跳过、边界、零时隙回退、文案）。JVM **207/207** 全绿，`:app:assembleDebug` 通过。
-- **模拟器实测**：顶栏弹窗列出多频率且切换生效（20m → 80m，3.573 生效）、自定义波段/频率表单可用；抽屉「只接收」态与「发送」禁用符合预期。发射时序 / 自动周期与真实电台的配合需真机验证（见 `REGRESSION.md`）。
+- **发射总开关（默认关 = 只接收）**：`ReceiverStatus` 新增 `txEnabled`（**仅会话内有效、不持久化**，故每次启动都默认只接收）。开关放在**发射抽屉收起态 56dp 条**上（`Switch`），便于快速开关；关闭时立即停发并解除时隙锁定，开启后 CQ / 应答 / 一次性发射 / Call 1st 才允许。总开关关闭时「发送」按钮禁用、防误发弹窗的「确认发射」禁用并给出提示。
+- **默认呼叫 CQ**：收起态与抽屉的发送按钮在「无自定义文本、无发送队列、无目标」时默认执行 CQ（走防误发确认弹窗）；已选目标且无文本时默认应答该目标。
+- **时隙固定自动（不再提供设置）**：移除设置页「默认发射周期」与抽屉「偶/奇/自动」三档，`AppSettings.txParity` 与 DataStore `tx_parity` 键一并删除（`ReceiverStatus.txParityMode` 亦移除）。规则 = 纯函数 `nextSlotParity(now, slotMs, leadMs)`：按手机 UTC 时间取**下一个距起点 ≥ 前导余量（前导 + 500 ms）的时隙**（当前时隙来不及就跳到再下一个，即「再下一个时隙发射」）；在打开总开关、进入新 QSO / 一次性发射时锁定，QSO 期间保持不变，结束或停发后释放。用户通过在不同时机重新开关总开关来切换发射时隙。
+- **接线**：`SessionViewModel.setBandFreq` / `setTxEnabled`、`lockAutoParity` / `relockAutoParityIfNeeded`；`txTick` 以 `txEnabled` 为总闸并保证时隙已锁定；`applySettings` 同步 `band / dialHz / 生效 txParity`。
+- **测试**：`BandPlanTest` 增补（每波段 ≥2 频率、首项 = 默认、频率在波段内、`resolveDialHz`、`parseFreqMhz`、`DialFreq.mhz`）；`ui/TxParityAutoTest`（下一时隙奇偶、前导余量跳过、边界、零时隙回退、文案）。JVM 全绿，`:app:assembleDebug` 通过。
+- **模拟器实测**：顶栏弹窗列出多频率且切换生效（20m → 80m，3.573 生效）、自定义波段/频率表单可用；收起态条上的发射开关与「发送 CQ」按钮、抽屉「只接收」态符合预期。发射时序 / 自动周期与真实电台的配合需真机验证（见 `REGRESSION.md`）。
 
 

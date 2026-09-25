@@ -9,7 +9,6 @@ import com.example.ft8vox.data.log.QsoEntity
 import com.example.ft8vox.data.log.QsoRepository
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.SettingsRepository
-import com.example.ft8vox.data.settings.TX_PARITY_AUTO
 import com.example.ft8vox.data.settings.TX_PARITY_EVEN
 import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import com.example.ft8vox.engine.AlertTone
@@ -76,9 +75,7 @@ data class ReceiverStatus(
     // ---- 发射/QSO ----
     /** 发射总开关：false=只接收（默认），true=允许发射；仅会话内有效，不持久化。 */
     val txEnabled: Boolean = false,
-    /** 发射周期模式：0=偶，1=奇，2=自动（见 [txParity] 生效值）。 */
-    val txParityMode: Int = TX_PARITY_AUTO,
-    /** 我方发射所在的周期：0=偶数，1=奇数。 */
+    /** 我方发射所在的周期：0=偶数，1=奇数（自动按手机 UTC 时间锁定）。 */
     val txParity: Int = 0,
     /** 已确认发射（防误发闸门）。 */
     val txArmed: Boolean = false,
@@ -209,16 +206,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 band = s.band,
                 dialHz = s.resolvedDialHz,
                 selectedFreqHz = s.selectedFreqHz,
-                txParityMode = s.txParity,
-                txParity = if (s.txParity == TX_PARITY_AUTO) {
-                    autoParity ?: nextSlotParity(
-                        AudioEngine.utcNowMs(),
-                        (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
-                        AUTO_PARITY_LEAD_MARGIN_MS,
-                    )
-                } else {
-                    s.txParity
-                },
+                // 固定自动周期：未锁定时按手机 UTC 时间取「下一个来得及的时隙」
+                txParity = autoParity ?: nextSlotParity(
+                    AudioEngine.utcNowMs(),
+                    (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
+                    txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
+                ),
                 holdTxFreq = s.holdTxFreq,
                 callFirst = s.callFirst,
                 callFirstArmed = if (s.callFirst == CallFirstMode.OFF) false else cur.callFirstArmed,
@@ -410,20 +403,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 仅切波段（沿用该波段默认频率）。 */
     fun setBand(name: String) = setBandFreq(name, 0L)
 
-    /** 设置发射周期模式：[TX_PARITY_EVEN] / [TX_PARITY_ODD] / [TX_PARITY_AUTO]。 */
-    fun setTxParity(mode: Int) {
-        val v = mode.coerceIn(TX_PARITY_EVEN, TX_PARITY_AUTO)
-        if (v != TX_PARITY_AUTO) autoParity = null
-        val p = if (v == TX_PARITY_AUTO) lockAutoParity() else v
-        _status.update { it.copy(txParityMode = v, txParity = p) }
-        persist { it.copy(txParity = v) }
-    }
-
     /**
      * 发射总开关（默认关 = 只接收）。
      *
-     * 关闭：立即停发并解除周期锁定；开启：自动周期模式下按手机 UTC 时间锁定
-     * 「下一个来得及准备的时隙」，随后在下一个我方时隙发射。
+     * 关闭：立即停发并解除周期锁定；开启：按手机 UTC 时间锁定「下一个来得及准备的时隙」，
+     * 随后在下一个我方时隙发射。因不再提供周期设置，用户通过在不同时机开关总开关来
+     * 决定从哪个时隙开始发射。
      */
     fun setTxEnabled(enabled: Boolean) {
         if (!enabled) {
@@ -432,8 +417,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(txEnabled = false, status = "发射已关闭（只接收）") }
             return
         }
-        val st = _status.value
-        val p = if (st.txParityMode == TX_PARITY_AUTO) lockAutoParity() else st.txParity
+        val p = lockAutoParity()
         _status.update { it.copy(txEnabled = true, txParity = p, status = "发射已开启（${parityLabel(p)}）") }
     }
 
@@ -446,9 +430,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return p
     }
 
-    /** 自动周期模式下重新锁定（进入新 QSO / 一次性发射前调用）。 */
+    /** 重新锁定自动周期（进入新 QSO / 一次性发射前调用）。 */
     private fun relockAutoParityIfNeeded() {
-        if (_status.value.txParityMode != TX_PARITY_AUTO) return
         _status.update { it.copy(txParity = lockAutoParity()) }
     }
 
@@ -915,7 +898,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         var st = _status.value
         if (!st.txEnabled || !st.txArmed || !st.running) return
-        if (st.txParityMode == TX_PARITY_AUTO && autoParity == null) {
+        if (autoParity == null) {
             relockAutoParityIfNeeded()
             st = _status.value
         }

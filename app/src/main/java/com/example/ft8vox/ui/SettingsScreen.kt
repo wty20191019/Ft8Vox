@@ -51,9 +51,6 @@ import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.FontSize
 import com.example.ft8vox.data.settings.SampleRatePref
-import com.example.ft8vox.data.settings.TX_PARITY_AUTO
-import com.example.ft8vox.data.settings.TX_PARITY_EVEN
-import com.example.ft8vox.data.settings.TX_PARITY_ODD
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
@@ -386,21 +383,6 @@ fun SettingsScreen(
                 subtitle = "开启后点解码行只改 RX、不跟随对方频率（split 场景）；关闭则「点谁打谁」。",
                 checked = app.holdTxFreq,
                 onCheckedChange = { v -> settings.update { s -> s.copy(holdTxFreq = v) } },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "默认发射周期",
-                subtitle = "自动：按手机 UTC 时间选下一个来得及的时隙；操作页可临时切换。",
-                options = listOf(TX_PARITY_EVEN, TX_PARITY_ODD, TX_PARITY_AUTO),
-                selected = app.txParity,
-                onSelect = { v -> settings.update { s -> s.copy(txParity = v) } },
-                label = {
-                    when (it) {
-                        TX_PARITY_EVEN -> "偶数"
-                        TX_PARITY_ODD -> "奇数"
-                        else -> "自动"
-                    }
-                },
             )
             PrefDivider()
             PrefChoice(

@@ -58,7 +58,6 @@ private object Keys {
     val dialHz = longPreferencesKey("dial_hz")
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
-    val txParity = intPreferencesKey("tx_parity")
     val holdTxFreq = booleanPreferencesKey("hold_tx_freq")
     val callFirst = stringPreferencesKey("call_first")
     val maxRetries = intPreferencesKey("max_retries")
@@ -144,7 +143,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         dialHz = (this[Keys.dialHz] ?: defaults.dialHz).takeIf { it in 0..BandPlan.MAX_FREQ_HZ } ?: defaults.dialHz,
         protocolName = this[Keys.protocolName] ?: defaults.protocolName,
         selectedFreqHz = this[Keys.selectedFreqHz] ?: defaults.selectedFreqHz,
-        txParity = (this[Keys.txParity] ?: defaults.txParity).coerceIn(TX_PARITY_EVEN, TX_PARITY_AUTO),
         holdTxFreq = this[Keys.holdTxFreq] ?: defaults.holdTxFreq,
         callFirst = enumOr(Keys.callFirst, defaults.callFirst),
         maxRetries = (this[Keys.maxRetries] ?: defaults.maxRetries).coerceIn(1, 20),
@@ -211,7 +209,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.dialHz] = dialHz
     prefs[Keys.protocolName] = protocolName
     prefs[Keys.selectedFreqHz] = selectedFreqHz
-    prefs[Keys.txParity] = txParity
     prefs[Keys.holdTxFreq] = holdTxFreq
     prefs[Keys.callFirst] = callFirst.name
     prefs[Keys.maxRetries] = maxRetries
