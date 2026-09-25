@@ -279,7 +279,6 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
-                subtitle = "FST4 暂不支持：ft8_lib 无该模式，需自研调制解调",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },

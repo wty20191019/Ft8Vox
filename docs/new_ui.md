@@ -234,7 +234,7 @@ AppBar
 
 ### 6.3 FT8
 
-* 模式 FT8/FT4/FST4
+* 模式 FT8/FT4（FST4 不做：`ft8_lib` 无该模式，见 `NEW-UI-PLAN.md`）
 * 发射偏移 0–15s
 * 解码深度 （max_candidates ldpc_iterations rx_time_osr rx_freq_osr 都可以设置）
 * 自动序列参数
