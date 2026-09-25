@@ -365,37 +365,34 @@ void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* 
 }
 
 // -----------------------------------------------------------------------------
-// SNR 估计（JTDX 口径）
+// SNR 估计（照搬 JTDX 口径）
 //
 // 对每个符号 i：
 //   信号功率 P_sig = 该符号**实际发送音调**所在 bin 的功率（含信号 + 本底噪声）；
-//   噪声功率 P_noi = **同一符号内、紧邻信号但排除音调区间**那一段 bin 的**算术平均**
-//                    （只含噪声，且与信号同时、同带）。
-//   噪声参考取算术均值、不使用任何分布假设，故不像旧的「低分位 ÷ 指数分布系数」
-//   那样，在真实电台音频常见的脉冲/结构化噪声下严重低估噪声底、让 SNR 系统性虚高；
-//   同时「只取同一符号、紧邻频段」使其天然抗带内强台与时间起伏。
+//   噪声功率 P_noi = **同一符号内其余音调** bin 的平均功率（只含噪声）。
+//   参考与被测信号同符号、频带紧邻，不使用任何分布假设（不像旧的「低分位 ÷ 指数分布
+//   系数」，后者在真实电台音频的脉冲/结构化噪声下会低估噪声底、让 SNR 虚高），
+//   同时天然抗带内强台与时间起伏。
 // 逐符号取比 r_i = P_sig / P_noi，在**功率域（线性域）** 对全部符号求平均
 // （等价于先逐符号求信噪比再求平均），转 dB 后减去 26.5 dB 折算到 2500 Hz 参考
 // 带宽，最后做经验修正与上下限钳位。
 //
-// 为什么不直接用「同一符号内其余 7 个音调」做噪声参考（JTDX 的原式）：
-//   JTDX 的分析窗是 **1 个符号 + 矩形加权**，8 个音调在窗内严格正交，其余音调 bin
-//   只含噪声。本项目瀑布窗是 **周期 Hann、窗长 = 1 符号周期 × freq_osr**（默认
-//   freq_osr=2，即约 2 个符号），音调之间不再正交，其余音调 bin 会被**信号自身的
-//   跨符号泄漏**污染。该污染与信号幅度成正比，会在强台上把噪声底抬高：
-//   harness（合成白噪声，同一份数据）实测 +10 dB 真值时照搬原式会读到 +2.4 dB
-//   （偏低约 6 dB），而改成本窗口均值后回到 +8.9 dB。故这里是 JTDX 的「无分布假设
-//   的算术均值」+ 本项目窗所允许的噪声窗口位置。
-//
 // 经验修正（两项）：
 //   ① 去偏：噪声参考是 n 个指数分布 bin 的**平均**，E[1/mean_n] = n/((n-1)·N)，
-//      比真值大 n/(n-1) 倍（弱台会因此整体偏高），故逐符号乘回 (n-1)/n。
+//      比真值大 n/(n-1) 倍（FT8 n=7 → +16.7%），故逐符号乘回 (n-1)/n。
 //   ② 窗函数折算：本项目瀑布用周期 Hann 窗，RBW = 1.5·(1/符号周期)/freq_osr，
 //      与 JTDX 的 1 符号矩形窗（≈6.25 Hz）不同，故在 JTDX_SNR_CAL_DB 之外再补
 //      (rbw_db + 26.5)（freq_osr=2 时 = +0.77 dB，「快」/「深」预设各自不同），
 //      避免把窗函数差异算成信号。后续若按实测得到按 SNR 分段的经验曲线，也在此叠加。
+//
+// 已知代价（照搬原式的固有结果，harness 实测，见 docs/JNI-CONTRACT.md §4）：
+//   JTDX 的分析窗是 **1 个符号 + 矩形加权**，8 个音调在窗内严格正交，其余音调 bin
+//   只含噪声。本项目瀑布窗是 **周期 Hann、窗长 = 1 符号周期 × freq_osr**（默认
+//   freq_osr=2，约 2 个符号），音调不再正交，其余音调 bin 会被**信号自身的泄漏**污染。
+//   该污染与信号幅度成正比，会把噪声底抬高，使读数随信号增强而**压缩**：
+//   合成白噪声实测真值 −20/−10/0/+5/+10 dB → 读数约 −21.8/−12.6/−6.3/−2.8/+2.4 dB。
+//   若日后要修掉这段压缩，把噪声窗口挪到音调区间之外即可（见提交 ba8a189 的替代实现）。
 // -----------------------------------------------------------------------------
-#define SNR_NOISE_WIN 16          // 噪声窗口相对音调区间的额外半宽（bin）；FT8 下 1 bin = 6.25 Hz
 #define JTDX_SNR_CAL_DB 26.5f     // JTDX 的 2500 Hz 折算常数
 #define JTDX_SNR_MIN_DB (-24.0f)  // 下限：对齐 WSJT-X 的 -24 dB
 #define JTDX_SNR_MAX_DB 40.0f     // 上限：防强台读数发散（各版本不同，可按实测调整）
@@ -404,6 +401,8 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                          const ftx_message_t* msg)
 {
     int num_symbols = (wf->protocol == FTX_PROTOCOL_FT4) ? FT4_NN : FT8_NN;
+    // 每个符号可选音调数：FT8 为 8-FSK，FT4 为 4-FSK
+    int fsk_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
     uint8_t tones[FT4_NN];
     if (wf->protocol == FTX_PROTOCOL_FT4)
         ft4_encode(msg->payload, tones);
@@ -431,22 +430,17 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
             continue;
         double p_sig = (double)kMagPowerLut[row[sig_bin]];
 
-        // 噪声参考：同一符号内、紧邻信号但排除音调区间的一段 bin 的算术平均。
-        // 排除 [freq_offset-2, freq_offset+9] 是为了躲开信号自身的主瓣/跨符号泄漏，
-        // 否则强台的噪声底会被自己抬高（见文件头说明）。
-        int b0 = cand->freq_offset - 2 - SNR_NOISE_WIN;
-        int b1 = cand->freq_offset + 9 + SNR_NOISE_WIN;
-        if (b0 < 0)
-            b0 = 0;
-        if (b1 > wf->num_bins - 1)
-            b1 = wf->num_bins - 1;
+        // 同一符号内其余音调只含噪声，作为本符号的噪声参考
         double p_noi_sum = 0.0;
         int p_noi_n = 0;
-        for (int b = b0; b <= b1; ++b)
+        for (int k = 0; k < fsk_tones; ++k)
         {
-            if (b >= cand->freq_offset - 2 && b <= cand->freq_offset + 9)
+            if (k == tones[i])
                 continue;
-            p_noi_sum += (double)kMagPowerLut[row[b]];
+            int nb = cand->freq_offset + k;
+            if (nb < 0 || nb >= wf->num_bins)
+                continue;
+            p_noi_sum += (double)kMagPowerLut[row[nb]];
             p_noi_n++;
         }
         if (p_noi_n < 2)
