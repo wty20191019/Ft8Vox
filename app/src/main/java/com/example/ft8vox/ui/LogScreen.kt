@@ -65,7 +65,7 @@ import java.util.Locale
  *
  * 顶部搜索 + 波段 / 模式 / 日期筛选；表格化卡片列表（呼号 / 网格 / 时间 / RST / 模式）；
  * 长按卡片编辑或删除（**删除需二次确认**）；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；
- * 「⋮」菜单里放新增、导入 / 导出 ADIF、局域网后台地址（U7）与清空日志。
+ * 「⋮」菜单里放新增、导入 / 导出 ADIF 与清空日志。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -86,7 +86,6 @@ fun LogScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var clearDialog by remember { mutableStateOf(false) }
-    var lanDialog by remember { mutableStateOf(false) }
 
     val adif = rememberAdifActions(log, myCall, myGrid) { statusText = it }
 
@@ -127,13 +126,6 @@ fun LogScreen(
                         },
                     )
                     HorizontalDivider()
-                    DropdownMenuItem(
-                        text = { Text("局域网后台地址（U7）") },
-                        onClick = {
-                            menuOpen = false
-                            lanDialog = true
-                        },
-                    )
                     DropdownMenuItem(
                         text = { Text("清空日志") },
                         onClick = {
@@ -268,20 +260,6 @@ fun LogScreen(
                 ) { Text("删除全部") }
             },
             dismissButton = { TextButton(onClick = { clearDialog = false }) { Text("取消") } },
-        )
-    }
-
-    if (lanDialog) {
-        AlertDialog(
-            onDismissRequest = { lanDialog = false },
-            title = { Text("局域网后台地址") },
-            text = {
-                Text(
-                    "U7 提供：App 内 HTTP 服务与局域网访问地址，需前台服务常驻。当前版本未启用。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            },
-            confirmButton = { TextButton(onClick = { lanDialog = false }) { Text("知道了") } },
         )
     }
 }

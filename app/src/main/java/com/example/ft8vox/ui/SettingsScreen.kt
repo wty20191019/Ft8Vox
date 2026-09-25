@@ -53,7 +53,6 @@ import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
-import com.example.ft8vox.data.settings.WaterfallPalette
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
@@ -62,7 +61,7 @@ import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，new_ui.md §6）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志与网络 / 关于。
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -502,17 +501,6 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefChoice(
-                title = "瀑布配色",
-                subtitle = "渐变在 native 生成，切换依赖 U7",
-                options = WaterfallPalette.entries,
-                selected = app.waterfallPalette,
-                onSelect = { v -> settings.update { it.copy(waterfallPalette = v) } },
-                label = { it.label },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefChoice(
                 title = "瀑布高度",
                 subtitle = "改动回到操作页立即生效（占用解码列表的可视高度）",
                 options = WaterfallHeight.entries,
@@ -523,22 +511,21 @@ fun SettingsScreen(
             PrefDivider()
             PrefAction(
                 title = "恢复布局",
-                subtitle = "瀑布高度 / 字体 / 瀑布配色回到默认",
+                subtitle = "瀑布高度 / 字体回到默认",
                 buttonLabel = "恢复",
                 onClick = {
                     settings.update {
                         it.copy(
                             waterfallHeight = WaterfallHeight.NORMAL,
                             fontSize = FontSize.MEDIUM,
-                            waterfallPalette = WaterfallPalette.CLASSIC,
                         )
                     }
                 },
             )
         }
 
-        // ---------- 6.6 日志 / 网络 ----------
-        SettingsGroup("日志与网络") {
+        // ---------- 6.6 日志 ----------
+        SettingsGroup("日志") {
             PrefInfo(
                 title = "ADIF 路径",
                 subtitle = "通过系统文件选择器（SAF）导入 / 导出，不需要存储权限",
@@ -566,42 +553,6 @@ fun SettingsScreen(
                 subtitle = "共 ${entries.size} 条，删除后不可撤销",
                 buttonLabel = "清空",
                 onClick = { confirmClear = true },
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "CloudLog 上传",
-                subtitle = "需要服务器地址与 API Key",
-                checked = app.cloudLogEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(cloudLogEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "LoTW 上传",
-                subtitle = "需要 TQSL 凭据",
-                checked = app.lotwEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(lotwEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "eQSL 上传",
-                subtitle = "需要账号凭据",
-                checked = app.eqslEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(eqslEnabled = v) } },
-                enabled = false,
-                badge = "U7",
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "局域网后台",
-                subtitle = "需要前台服务常驻（阶段 9）",
-                checked = app.lanServerEnabled,
-                onCheckedChange = { v -> settings.update { it.copy(lanServerEnabled = v) } },
-                enabled = false,
-                badge = "U7",
             )
         }
 
