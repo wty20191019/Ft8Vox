@@ -133,10 +133,91 @@ class QsoEngineTest {
         // 我方发过 CQ、对方用网格回应 → 已发出报告，等对方的 R 报告
         val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertEquals(QsoState.WAIT_REPORT, s0.state)
-        // 对方直接发报告（未加 R）
+        // 双方同时进入「发报告」阶段：对方发来报告（未加 R）
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -03")))
         assertEquals(QsoState.WAIT_RR73, s.state)
-        assertEquals("GJ0KYZ F4FSY R-03", s.txText)
+        // 回**我自己的**报告（R-11），不回显对方的 -03（那是他测到的我）
+        assertEquals("GJ0KYZ F4FSY R-11", s.txText)
+    }
+
+    @Test
+    fun finishesWhenPartnerRogersWhileWaitingRr73() {
+        val q = engine()
+        // 双方同时进入「发报告」→ 各自回 R 报告 → 同时停在「等 RR73」：
+        // 真机 bug 就是这里两端互相重复 R 报告（R-02 / R-10 每 30 s 交替）。
+        val s0 = q.respondToReport("GJ0KYZ", theirReport = -12, snr = -7)
+        assertEquals(QsoState.WAIT_RR73, s0.state)
+        assertEquals("GJ0KYZ F4FSY R-07", s0.txText)
+
+        // 对方也发来 R 报告（对撞）：应直接回 RR73 收尾并记日志，而不是再回一次 R
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-09", snr = -5)))
+        assertEquals(QsoState.DONE, s.state)
+        assertEquals("GJ0KYZ F4FSY RR73", s.txText)
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-7, log!!.reportSent)
+        assertEquals(-12, log.reportReceived)
+    }
+
+    @Test
+    fun responderFinishesWhenPartnerRogersBeforeReport() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 已发网格、还没发报告，却收到对方的 R 报告：按标准 FT8 直接回 RR73 完成
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-04", snr = -7)))
+        assertEquals(QsoState.DONE, s.state)
+        assertEquals("GJ0KYZ F4FSY RR73", s.txText)
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-7, log!!.reportSent)
+        assertEquals(-4, log.reportReceived)
+    }
+
+    @Test
+    fun responderTurnsCallerWhenPartnerAlsoAnswers() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 双方同时在应答对方：对方发来「我的呼号 + 他的网格」→ 转主叫，直接发报告
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -9)))
+        assertEquals(QsoRole.CALLER, s.role)
+        assertEquals(QsoState.WAIT_REPORT, s.state)
+        assertEquals("GJ0KYZ F4FSY -09", s.txText)
+    }
+
+    @Test
+    fun bothAnsweringConvergeWithoutRepeatingReports() {
+        // 两端都自动运行、同时应答对方（真机 bug 的最小复现）：交替时隙交换报文，
+        // 应在几步内双方都完成并各记一条日志，且空中不出现「重复的 R 报告」。
+        val a = QsoEngine(maxRetries = 6).apply { configure("A1AAA", "JN25") }
+        val b = QsoEngine(maxRetries = 6).apply { configure("B2BBB", "IO90") }
+        a.startResponderQso("B2BBB", "IO90")
+        b.startResponderQso("A1AAA", "JN25")
+        var aText = a.progress().txText
+        var bText = b.progress().txText
+        val air = mutableListOf<String>()
+        repeat(12) { i ->
+            if (i % 2 == 0) {
+                aText?.let { t ->
+                    air += t
+                    b.onDecoded(listOf(decoded(t, snr = -10)))
+                    a.onTransmitted()
+                }
+                bText = b.progress().txText
+            } else {
+                bText?.let { t ->
+                    air += t
+                    a.onDecoded(listOf(decoded(t, snr = -10)))
+                    b.onTransmitted()
+                }
+                aText = a.progress().txText
+            }
+        }
+        assertEquals(QsoState.DONE, a.progress().state)
+        assertEquals(QsoState.DONE, b.progress().state)
+        assertNotNull("A 应记入一条通联", a.consumeCompleted())
+        assertNotNull("B 应记入一条通联", b.consumeCompleted())
+        // 同一条报文不得重复出现（死循环特征：R 报告反复重发）
+        assertEquals("空中不应出现重复报文：$air", air.size, air.distinct().size)
     }
 
     @Test

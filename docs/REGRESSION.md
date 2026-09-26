@@ -335,6 +335,46 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 
 ---
 
+### R. 双方互回信号报告（真机 bug：`R-02` / `R-10` 交替死循环）
+
+背景：两台手机互测（一端 `BG7ZJW`、另一端自造 `GB7AAA`，两端都开自动程序）复现：
+解码列表里 `BG7ZJW GB7AAA R-10`（14:35:00 / 14:35:30）与 `GB7AAA BG7ZJW R-02`
+（14:35:15 / 14:35:45）每 30 s 交替重复，两端都停在「发 R 报告 → 等 RR73」，
+谁也不发 RR73；筛选条「回复 6」＝这 6 条全是 R 报告。
+
+根因（第 1 层状态机缺少「收到 R → 发 RR73」这条标准 FT8 规则）：
+
+- 两端同时在应答对方（各自发来 `<我> <对方> <网格>`）时，会双双进入「发信号报告」阶段；
+- 各自回 `R<报告>` 后**双方都停在 `WAIT_RR73` 等对方的 RR73**，而对方也在等自己发 RR73
+  → 每 30 s 重发一次 R 报告，永不结束；
+- 重试耗尽后第 2 层又各自用 `respondToRoger` 收尾，还会各写一条「假通联」日志。
+
+修复：
+
+1. `WAIT_REPLY`(RESPONDER/CALLER) 与 `WAIT_RR73` 收到 `R<报告>` 一律按「对方已确认收到我的
+   报告」处理：回 `RR73` 并直接记日志，**不再回一次 R 报告**（WSJT-X 语义，死循环的直接解药）。
+2. `WAIT_REPLY`(RESPONDER) 收到 `<我> <对方> <网格>`（双方同时在应答对方）时，
+   按标准 FT8 阶梯**转为主叫**并直接发信号报告，不再死等对方永远不会发的报告。
+3. `WAIT_REPORT` 收到对方报告（未加 R）时回**自己实测的** `R<报告>`（原实现回显对方报告值，
+   等于把对方测到的我当成我的报告发出去）。
+
+验收（JVM 单测 `QsoEngineTest`，已通过）：
+
+- [x] `responderFinishesWhenPartnerRogersBeforeReport`：应答方还没发报告就收到 R → `RR73` + 完成。
+- [x] `finishesWhenPartnerRogersWhileWaitingRr73`：`WAIT_RR73` 收到对方 R（对撞）→ `RR73` + 完成。
+- [x] `handlesDirectReportInsteadOfRoger`：回自己的 `R-11`（不再回显对方的 `-03`）。
+- [x] `responderTurnsCallerWhenPartnerAlsoAnswers`：双方同时对呼 → 转主叫发报告。
+- [x] `bothAnsweringConvergeWithoutRepeatingReports`：两端交替时隙全流程模拟 → 双方都 `DONE`
+  并各记一条日志，且空中**无重复报文**（死循环特征消失）。
+
+真机复测（`HMQ4C19C03003348` + 对端）：
+
+- [ ] 两端都开自动程序互测 3 分钟以上，解码列表不再出现 `R-02` / `R-10` 交替重复。
+- [ ] 每段 QSO 只写入 1 条日志，状态由「等待 RR73」推进到「已完成」。
+
+
+---
+
 ## 3. 结果记录
 
 | 小节 | 结果（通过/失败） | 备注 / 复现步骤 |
@@ -356,6 +396,7 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 | O UI 性能（帧率 / CPU） | | |
 | P 发射时机（报文时长窗口）/ 左滑呼叫 | | |
 | Q 输出声卡挂起（真机 bug：发送几次后再也发不出去） | 真机已通过（2026-09-26） | 单击/连点/空闲 20 s 后均有声；logcat `tryMMap = false for output`，无 `Suspending stream` / `processData TIMEOUT` / 重开风暴 |
+| R 双方互回信号报告（真机 bug：`R-02`/`R-10` 死循环） | 单测已通过（2026-09-26） | 5 条用例（4 新增 + 1 更新）；真机两台互测待复测（列表不再交替重复 R 报告、每段 QSO 只 1 条日志） |
 
 ---
 
