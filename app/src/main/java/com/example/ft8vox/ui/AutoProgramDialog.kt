@@ -117,7 +117,7 @@ fun AutoProgramPanel(
         AutoSection("应答选台规则（第 2 层使用）")
         AutoOptionRow(
             title = "允许重复通联",
-            subtitle = "不勾选时从候选列表里剔除已通联过的呼号",
+            subtitle = "不勾选时不再主动应答已通联台发的 CQ；对方直接呼叫我方时仍会应答",
             checked = program.allowRepeat,
             onChange = { v -> onOption { it.copy(allowRepeat = v) } },
         )

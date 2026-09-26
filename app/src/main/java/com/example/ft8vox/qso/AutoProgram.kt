@@ -69,7 +69,7 @@ data class AutoProgramSettings(
     val mode: AutoMode = AutoMode.MANUAL,
     /** 解码时机（当前架构两种等价，见 [DecodeTiming]）。 */
     val decodeTiming: DecodeTiming = DecodeTiming.IN_GAP,
-    /** 允许重复通联：不勾选时把已通呼号从候选里剔除。 */
+    /** 允许重复通联：不勾选时不再主动应答已通呼号发的 **CQ**（定向呼叫仍会应答）。 */
     val allowRepeat: Boolean = false,
     /** 排序依据。 */
     val sortBy: AutoSort = AutoSort.SNR,
@@ -85,7 +85,7 @@ data class AutoProgramSettings(
     val stopAfterTxTotal: Boolean = false,
     val txTotalMinutes: Int = 30,
 ) {
-    /** 已通联台是否可作为目标（不勾「允许重复通联」即过滤掉）。 */
+    /** 已通联台是否可作为**主动应答 CQ**的目标（不勾「允许重复通联」即过滤；定向呼叫不受此限）。 */
     val allowsWorked: Boolean get() = allowRepeat
 }
 
@@ -171,7 +171,6 @@ object AutoProgramSelector {
             if (!DecodeFilter.matches(p, filter, worked, myCall)) continue
 
             val workedCall = worked.hasWorkedCall(from)
-            if (workedCall && !program.allowsWorked) continue
 
             val kind: AutoTargetKind
             val report: Int?
@@ -200,6 +199,10 @@ object AutoProgramSelector {
                 continue
             }
             if (!seen.add(from)) continue
+            // 「已通联」过滤只用于**挑 CQ 台应答**；定向报文（CALL/REPORT/ROGER）是对方
+            // 直接呼叫我，一律处理 —— 否则两端都开自动程序、且历史已通过联时会互相不应答
+            // （真机 bug：一端反复发 `<对方> <我> <网格>`，另一端一直发 CQ 不回报告）。
+            if (kind == AutoTargetKind.CQ && workedCall && !program.allowsWorked) continue
             out.add(
                 AutoTarget(
                     call = from,

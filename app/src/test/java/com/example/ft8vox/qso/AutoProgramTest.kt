@@ -114,6 +114,31 @@ class AutoProgramTest {
         assertTrue(allowed[0].worked)
     }
 
+    @Test
+    fun collectKeepsDirectedCallFromWorkedStation() {
+        // 真机 bug：已通联的台直接呼叫我（`<我> <对方> <网格>`）时若也按「已通联」过滤掉，
+        // 两端都开自动程序就会互相不应答（一端反复发网格、另一端一直发 CQ）。
+        val worked = WorkedIndex(calls = listOf("JA1ABC"))
+        val list = AutoProgramSelector.collect(
+            listOf(decoded("F4FSY JA1ABC PM95", snr = -6)),
+            program,
+            worked = worked,
+            myCall = "F4FSY",
+        )
+        assertEquals(1, list.size)
+        assertEquals(AutoTargetKind.CALL, list[0].kind)
+        assertTrue("仍标记为已通联（供日志/展示）", list[0].worked)
+
+        // 但「已通联」的台在发 CQ 时仍不应答（避免重复挑台）
+        val cq = AutoProgramSelector.collect(
+            listOf(decoded("CQ JA1ABC PM95", snr = -6)),
+            program,
+            worked = worked,
+            myCall = "F4FSY",
+        )
+        assertTrue(cq.isEmpty())
+    }
+
     // ---- 选台：排序 ----
 
     @Test
