@@ -59,7 +59,7 @@ private object Keys {
     val dialHz = longPreferencesKey("dial_hz")
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
-    val holdTxFreq = booleanPreferencesKey("hold_tx_freq")
+    val sameFreqTx = booleanPreferencesKey("same_freq_tx")
     // 自动程序（文档 §五菜单）
     val autoMode = stringPreferencesKey("auto_mode")
     val autoDecodeTiming = stringPreferencesKey("auto_decode_timing")
@@ -150,7 +150,7 @@ private fun Preferences.toAppSettings(): AppSettings {
         dialHz = (this[Keys.dialHz] ?: defaults.dialHz).takeIf { it in 0..BandPlan.MAX_FREQ_HZ } ?: defaults.dialHz,
         protocolName = this[Keys.protocolName] ?: defaults.protocolName,
         selectedFreqHz = this[Keys.selectedFreqHz] ?: defaults.selectedFreqHz,
-        holdTxFreq = this[Keys.holdTxFreq] ?: defaults.holdTxFreq,
+        sameFreqTx = this[Keys.sameFreqTx] ?: defaults.sameFreqTx,
         auto = AutoProgramSettings(
             mode = enumOr(Keys.autoMode, defaults.auto.mode),
             decodeTiming = enumOr(Keys.autoDecodeTiming, defaults.auto.decodeTiming),
@@ -224,7 +224,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.dialHz] = dialHz
     prefs[Keys.protocolName] = protocolName
     prefs[Keys.selectedFreqHz] = selectedFreqHz
-    prefs[Keys.holdTxFreq] = holdTxFreq
+    prefs[Keys.sameFreqTx] = sameFreqTx
     prefs[Keys.autoMode] = auto.mode.name
     prefs[Keys.autoDecodeTiming] = auto.decodeTiming.name
     prefs[Keys.autoAllowRepeat] = auto.allowRepeat

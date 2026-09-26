@@ -161,10 +161,15 @@ data class AppSettings(
     // ---- 操作 ----
     /** 协议名（存名字而非 ordinal，避免枚举顺序变化导致旧数据错位）。 */
     val protocolName: String = Protocol.FT8.name,
-    /** 音频发射频率（Hz）。 */
+    /** 音频发射频率（Hz）＝瀑布上的红线位置（「异频发射」时的设定频率）。 */
     val selectedFreqHz: Int = 1500,
-    /** 锁定发射频率（应答时不跟随对方频率）。 */
-    val holdTxFreq: Boolean = false,
+    /**
+     * 同频发射：选台时把发射频率（红线）跟到目标频率。
+     *
+     * - `true`（默认）＝**同频发射**：「点谁打谁」，应答/呼叫我方时红线移到对方频率。
+     * - `false`＝**异频发射**（split）：发射固定在 [selectedFreqHz]，选台不改红线（只由用户拖动红线设置）。
+     */
+    val sameFreqTx: Boolean = true,
     /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
 

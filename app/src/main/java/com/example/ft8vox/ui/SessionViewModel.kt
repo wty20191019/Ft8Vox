@@ -100,11 +100,11 @@ data class ReceiverStatus(
     /** 最近一次发射的报文与所属时隙起点。 */
     val lastTxText: String? = null,
     val lastTxSlotMs: Long = 0,
-    /** 选中的收听/应答频率（对应瀑布绿线）；未选时为 null。 */
-    val rxFreqHz: Int? = null,
     // ---- JTDX 风格操作（阶段 7c） ----
-    /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
-    val holdTxFreq: Boolean = false,
+    /**
+     * 同频发射：true＝选台时发射频率（红线）跟到目标频率；false＝异频发射（发射固定在设定频率）。
+     */
+    val sameFreqTx: Boolean = true,
     /**
      * 自动程序策略（来自设置；对应《QSO 自动系统设计文档》§五菜单）。
      *
@@ -245,6 +245,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
     private var lastSlotOffsetMs: Int? = null
 
+    /** 发射频率（红线）拖动期间的落盘防抖任务（见 [setTxFreq]）。 */
+    private var txFreqPersistJob: Job? = null
+
     /**
      * 引擎代次：每次重建 native 引擎（[start]）都 +1。
      *
@@ -305,7 +308,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
                     txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
                 ),
-                holdTxFreq = s.holdTxFreq,
+                sameFreqTx = s.sameFreqTx,
                 autoProgram = s.auto,
                 // 协议绑定在 native 引擎上（时隙长度 15s/7.5s 与调制方式），运行中不能直接改：
                 // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
@@ -425,25 +428,36 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(protocolName = protocol.name) }
     }
 
-    fun selectFrequency(hz: Int) {
+    /**
+     * 「移动红线」：把发射频率直接设到 [hz]（瀑布单击 / 拖动，以及任何显式设定）。
+     *
+     * 拖动会高频调用本方法，落盘做了 250 ms 防抖（[txFreqPersistJob]），UI 状态仍逐帧更新。
+     */
+    fun setTxFreq(hz: Int) {
         val v = clampFreq(hz)
-        val hold = _status.value.holdTxFreq
-        _status.update {
-            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-        }
-        if (!hold) persist { it.copy(selectedFreqHz = v) }
-    }
-
-    /** 直接微调我方发射频率（TX）。 */
-    fun nudgeTxFreq(delta: Int) {
-        val v = clampFreq(_status.value.selectedFreqHz + delta)
+        if (_status.value.selectedFreqHz == v) return
         _status.update { it.copy(selectedFreqHz = v) }
-        persist { it.copy(selectedFreqHz = v) }
+        txFreqPersistJob?.cancel()
+        txFreqPersistJob = viewModelScope.launch {
+            delay(250)
+            settingsRepo.update { it.copy(selectedFreqHz = v) }
+        }
     }
 
-    fun setHoldTxFreq(value: Boolean) {
-        _status.update { it.copy(holdTxFreq = value) }
-        persist { it.copy(holdTxFreq = value) }
+    /**
+     * 选台：**同频发射**时把红线移到目标频率 [hz]；**异频发射**时保持设定频率不动。
+     *
+     * 用于点解码行 / 应答 CQ / 自动程序选到目标（实际发射频率一律取红线位置 [ReceiverStatus.selectedFreqHz]）。
+     */
+    fun selectTargetFreq(hz: Int) {
+        if (!_status.value.sameFreqTx) return
+        setTxFreq(hz)
+    }
+
+    /** 同频发射（true，选台时红线跟随目标）/ 异频发射（false，红线固定在设定频率）。 */
+    fun setSameFreqTx(value: Boolean) {
+        _status.update { it.copy(sameFreqTx = value) }
+        persist { it.copy(sameFreqTx = value) }
     }
 
     /**
@@ -871,15 +885,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "请先打开「发射」开关") }
             return
         }
-        // 未锁定时把 TX 跟到对方的 DF（点谁打谁）
-        if (theirDf != null && theirDf > 0) {
-            val hold = _status.value.holdTxFreq
-            val v = clampFreq(theirDf)
-            _status.update {
-                it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-            }
-            if (!hold) persist { it.copy(selectedFreqHz = v) }
-        }
+        // 同频发射：把红线跟到对方频率（异频发射则保持设定频率）
+        if (theirDf != null && theirDf > 0) selectTargetFreq(theirDf)
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
@@ -1139,14 +1146,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _messages.update { current -> (decoded + current).take(200) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
-            // 发给我的报文自动把 RX 跟过去（便于瀑布绿线指示当前对手）
-            val my = _status.value.myCall
-            decoded.forEach { m ->
-                if (m.df > 0 && MessageParser.parse(m.text).addressedTo(my)) {
-                    _status.update { s -> s.copy(rxFreqHz = m.df) }
-                }
-            }
             // U7d：有报文叫我呼号时短促提示
+            val my = _status.value.myCall
             if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {
                 alertTone.beep()
             }
@@ -1341,12 +1342,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
 
         lastTxSlotIndex = -1L
-        val hold = st.holdTxFreq
-        val v = clampFreq(t.df)
-        _status.update {
-            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-        }
-        if (!hold) persist { it.copy(selectedFreqHz = v) }
+        // 同频发射：把红线跟到目标频率（异频发射则保持设定频率）
+        if (st.sameFreqTx) setTxFreq(t.df)
 
         val p = when (t.kind) {
             AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid)
