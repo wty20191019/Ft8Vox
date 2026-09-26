@@ -128,7 +128,8 @@ fun TxDrawer(
     var editingMacro by remember { mutableStateOf<Int?>(null) }
 
     val target = status.qso.theirCall ?: targetCall
-    val kind = TxCompose.kindOf(composeText.ifBlank { status.qso.txText }, status.myCall)
+    // 下一次计划发射的完整报文（发射中＝实际在播的那条，见 ReceiverStatus.displayTxText）
+    val displayTxText = status.displayTxText
     val report = TxCompose.reportFor(messages, target)
     // 立即发判据：报文波形 + 前导必须能在本时隙剩余时间内播完（否则排下一个我方周期）
     val canSendNow = TxScheduler.canSendNow(
@@ -292,31 +293,41 @@ fun TxDrawer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    "→ ${target ?: "无目标"}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f),
-                )
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // 左：目标 + 「下一次会发射什么」的完整报文（发射中冻结为实际在播的那条）
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        kind?.label ?: "空闲",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "→ ${target ?: "无目标"}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    Text(
+                        when {
+                            displayTxText == null -> "空闲（无待发报文）"
+                            status.txing -> "发射中 $displayTxText"
+                            else -> "待发 $displayTxText"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         if (status.txEnabled) "允许发射" else "只接收",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (status.txEnabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (status.txArmed) {
+                    if (status.txArmed && !status.txing) {
                         Text(
-                            if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
+                            "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
