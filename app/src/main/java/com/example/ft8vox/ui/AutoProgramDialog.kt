@@ -139,12 +139,6 @@ fun AutoProgramPanel(
                 onClick = { onOption { it.copy(sortBy = s) } },
             )
         }
-        AutoOptionRow(
-            title = "报告信息优先",
-            subtitle = "发给我方的定向报文优先于 CQ 与排队",
-            checked = program.reportPriority,
-            onChange = { v -> onOption { it.copy(reportPriority = v) } },
-        )
 
         AutoSection("重发机制（第 1 层使用）")
         AutoOptionRow(
@@ -386,9 +380,8 @@ internal fun autoProgramSummary(p: AutoProgramSettings): String {
         AutoSort.DISTANCE -> "距离优先"
     }
     val flags = buildList {
-        add(if (p.allowRepeat) "允许重复通联" else "跳过已通联")
+        add(if (p.allowRepeat) "允许重复通联" else "跳过已通联 CQ")
         add(sort)
-        if (p.reportPriority) add("报告优先")
         if (p.giveUpAfterRetry) add("重发 ${p.retryLimit} 次放弃") else add("不放弃")
     }
     return "模式：${p.mode.label}｜${flags.joinToString("｜")}"

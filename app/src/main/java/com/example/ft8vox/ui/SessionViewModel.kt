@@ -1,6 +1,7 @@
 package com.example.ft8vox.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ft8vox.SessionService
@@ -61,6 +62,15 @@ import kotlinx.coroutines.runBlocking
  * 所以这里提示「已标记重开，请重试」，而不是含糊的「已发射（0 帧）」。
  */
 private const val OUT_STALLED_FAIL = "输出声卡无响应（已标记重开，请重试）"
+
+/**
+ * 同一呼号在此窗口内重复「完成」时只记一次日志（防止上一段残留报文被第 2 层重新挑起而重复入库）。
+ * 只影响**写日志**，不影响「有人呼叫我方一定应答」。
+ */
+private const val QSO_LOG_DEDUP_MS = 90_000L
+
+/** QSO/自动程序决策的诊断日志标签（logcat：`adb logcat -s Ft8VoxQso`）。 */
+private const val TAG_QSO = "Ft8VoxQso"
 
 /** 接收会话的非瀑布状态（供状态栏/控制区使用）。 */
 data class ReceiverStatus(
@@ -244,6 +254,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失。
      */
     private var pendingAutoFinish = false
+
+    /** 最近写库的呼号 → 时刻（ms），用于 [QSO_LOG_DEDUP_MS] 去重。 */
+    private val lastLoggedMs = HashMap<String, Long>()
 
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
@@ -1242,7 +1255,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                             // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
                             runAutoProgram(incoming, s.utcNowMs)
                         } else {
-                            applyQsoProgress(qsoEngine.onDecoded(incoming, s.utcNowMs), s.utcNowMs)
+                            val p = qsoEngine.onDecoded(incoming, s.utcNowMs)
+                            Log.i(
+                                TAG_QSO,
+                                "engine n=${incoming.size} their=${st.qso.theirCall} " +
+                                    "state=${st.qso.state} -> ${p.state} retries=${p.retries} " +
+                                    "msgs=${incoming.map { it.text }}",
+                            )
+                            applyQsoProgress(p, s.utcNowMs)
                         }
                     } else if (st.autoProgram.mode.enabled) {
                         runAutoProgram(incoming, s.utcNowMs)
@@ -1277,8 +1297,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (p.state == QsoState.FAILED) pinnedTxParity = null
         _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
-            // 记入冷却：防止第 2 层（含手动 QSO 恢复后）立刻把对手残留报文当成新 QSO
-            scheduler.noteCompleted(entry.theirCall, utcNowMs)
+            // 同一台短时间内重复「完成」多为上一段残留报文被第 2 层重新挑起（重发/R 残留）：
+            // 只回报文、不重复入库（但**不影响应答** —— 定向呼叫一律照常处理）
+            val key = entry.theirCall.trim().uppercase()
+            val last = lastLoggedMs[key]
+            if (last != null && utcNowMs > 0 && utcNowMs - last < QSO_LOG_DEDUP_MS) {
+                _status.update { it.copy(status = "已忽略重复通联记录：${entry.theirCall}") }
+                return@let
+            }
+            if (utcNowMs > 0) lastLoggedMs[key] = utcNowMs
             val st = _status.value
             val entity = QsoEntity(
                 theirCall = entry.theirCall,
@@ -1310,7 +1337,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (wasManual || !_status.value.autoProgram.mode.enabled) return
         if (p.txText == null) {
             // 没有收尾报文（例如重试超限失败）：立刻让第 2 层决定下一步
-            runAutoAction(scheduler.onQsoFinished(p.state == QsoState.DONE, utcNowMs, p.theirCall))
+            runAutoAction(scheduler.onQsoFinished(p.state == QsoState.DONE, utcNowMs))
         } else {
             // 还有 RR73/73 要发：发完再收口（见 txTick）
             pendingAutoFinish = true
@@ -1330,6 +1357,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             filter = currentFilter(),
             worked = _worked.value,
             utcNowMs = utcNowMs,
+        )
+        Log.i(
+            TAG_QSO,
+            "auto mode=${st.autoProgram.mode.name} phase=${scheduler.currentPhase()} " +
+                "paused=${scheduler.paused} n=${batch.size} -> ${action::class.simpleName} " +
+                "msgs=${batch.map { it.text }}",
         )
         publishAutoState()
         runAutoAction(action)
@@ -1406,6 +1439,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
         }
         if (!p.active && p.state != QsoState.DONE) return
+        Log.i(TAG_QSO, "auto start kind=${t.kind} call=${t.call} -> ${p.state} tx=${p.txText}")
         _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}") }
         // ROGER 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
@@ -1460,7 +1494,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (finished && pendingAutoFinish) {
                     pendingAutoFinish = false
                     runAutoAction(
-                        scheduler.onQsoFinished(p.state == QsoState.DONE, AudioEngine.utcNowMs(), p.theirCall),
+                        scheduler.onQsoFinished(p.state == QsoState.DONE, AudioEngine.utcNowMs()),
                     )
                 }
             }

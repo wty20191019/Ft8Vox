@@ -200,7 +200,7 @@ class AutoProgramTest {
 
     @Test
     fun callerModeHandlesRespondersInOrder() {
-        val settings = program.copy(reportPriority = false, sortBy = AutoSort.SNR)
+        val settings = program.copy(sortBy = AutoSort.SNR)
         val s = scheduler(settings)
         // 本批收到两个回应者（强台优先）→ 先处理强台，另一个排队
         val a = s.onDecoded(
@@ -223,8 +223,8 @@ class AutoProgramTest {
     }
 
     @Test
-    fun reportPriorityHandlesDirectedBeforeCq() {
-        val settings = program.copy(reportPriority = true)
+    fun directedIsHandledBeforeCq() {
+        val settings = program
         val s = scheduler(settings)
         val a = s.onDecoded(
             listOf(
@@ -272,7 +272,7 @@ class AutoProgramTest {
 
     @Test
     fun pauseKeepsQueueAndResumeRestores() {
-        val settings = program.copy(reportPriority = false)
+        val settings = program
         val s = scheduler(settings)
         s.onDecoded(
             listOf(
@@ -297,36 +297,49 @@ class AutoProgramTest {
         assertEquals("JA1ABC", next.target.call)
     }
 
-    // ---- 完成后的冷却（防止第 2 层重新挑起同一段而跑死 / 重复记日志） ----
+    // ---- 「有人呼叫我方一定应答」 ----
 
     @Test
-    fun recentlyCompletedCallIsNotReengagedByDirectedMessages() {
+    fun directedMessageIsAnsweredEvenWhenPaused() {
+        // 手动接管（第 3 层暂停）期间，别人直接呼叫我方仍要应答（真机 bug 的直接要求）
         val s = scheduler()
-        s.noteCompleted("JA1ABC", 10_000L)
-        // 冷却期内：对方的定向报文被过滤 → 回到发 CQ（不重新挑起同一段）
-        assertEquals(
-            AutoAction.SendCq,
-            s.onDecoded(listOf(decoded("F4FSY JA1ABC -12", snr = -5)), utcNowMs = 20_000L),
+        s.pause()
+        val a = s.onDecoded(
+            listOf(decoded("F4FSY JA1ABC PM95", snr = -7, slotUtcMs = 30_000L)),
+            utcNowMs = 30_000L,
         )
-        // 冷却期外：正常处理
-        val b = s.onDecoded(
-            listOf(decoded("F4FSY JA1ABC -12", snr = -5)),
-            utcNowMs = 200_000L,
-        ) as AutoAction.HandleDirected
-        assertEquals("JA1ABC", b.target.call)
+        assertTrue(a is AutoAction.HandleDirected)
+        assertEquals("JA1ABC", (a as AutoAction.HandleDirected).target.call)
+        assertEquals(AutoTargetKind.CALL, a.target.kind)
+        // 但没有定向报文时，暂停期间仍不主动发 CQ
+        assertEquals(AutoAction.None, s.onDecoded(emptyList(), utcNowMs = 31_000L))
     }
 
     @Test
-    fun cooldownDoesNotBlockCqFromRecentlyCompletedCall() {
+    fun directedMessageIsAnsweredInMixedAnsweringPhase() {
+        // 混合模式「应答状态」也要处理定向报文，而不是只扫 CQ
         val s = scheduler(program.copy(mode = AutoMode.MIXED))
-        repeat(4) { s.onDecoded(emptyList(), utcNowMs = 2_000L + it) } // 进入应答状态
+        repeat(4) { s.onDecoded(emptyList(), utcNowMs = 2_000L + it) }
         assertEquals(AutoScheduler.Phase.ANSWERING, s.currentPhase())
-        s.noteCompleted("JA1ABC", 10_000L)
         val a = s.onDecoded(
-            listOf(decoded("CQ JA1ABC PM95", snr = -9, slotUtcMs = 20_000L)),
+            listOf(decoded("F4FSY JA1ABC -12", snr = -5)),
+            utcNowMs = 6_000L,
+        )
+        assertTrue(a is AutoAction.HandleDirected)
+        assertEquals(AutoTargetKind.REPORT, (a as AutoAction.HandleDirected).target.kind)
+    }
+
+    @Test
+    fun directedCallIsAnsweredRightAfterQsoFinished() {
+        // 刚完成一段 QSO 后，对方再直接呼叫我方，仍要应答（不做长时间冷却过滤）
+        val s = scheduler()
+        s.onQsoFinished(success = true, utcNowMs = 10_000L)
+        val a = s.onDecoded(
+            listOf(decoded("F4FSY JA1ABC PM95", snr = -6, slotUtcMs = 20_000L)),
             utcNowMs = 20_000L,
         )
-        assertTrue("对方的 CQ 不受冷却限制", a is AutoAction.AnswerCq)
+        assertTrue(a is AutoAction.HandleDirected)
+        assertEquals("JA1ABC", (a as AutoAction.HandleDirected).target.call)
     }
 
     // ---- 保护限制 ----

@@ -7,15 +7,6 @@ import com.example.ft8vox.grid.Geo
 const val MIXED_CQ_NO_REPLY_LIMIT = 3
 
 /**
- * 一段 QSO 结束后，对同一呼号的**定向报文**（CALL / REPORT / ROGER）在此冷却期内不再
- * 作为新 QSO 的起点（CQ 不受限）。
- *
- * 用途：防止「对方还在发上一段的残留报文 → 第 2 层重新挑起同一段 → 状态机从错误阶段
- * 重启 → 再次跑死 / 重复记日志」的抖动（真机 bug：`-08` / `R-10` 交替永不结束）。
- */
-const val QSO_REENGAGE_COOLDOWN_MS = 120_000L
-
-/**
  * 自动程序工作模式（对应《QSO 自动系统设计文档》§五「工作模式」）。
  *
  * 取代旧的「等级 0/1/2/3/4+」：旧方案里等级 1/2/3（首先解码 / 解码窗口中 / 解码后）
@@ -73,7 +64,12 @@ data class AutoProgramSettings(
     val allowRepeat: Boolean = false,
     /** 排序依据。 */
     val sortBy: AutoSort = AutoSort.SNR,
-    /** 报告信息优先：发给我方的定向报文优先于 CQ / 排队。 */
+    /**
+     * 报告信息优先（**字段保留、已不再作为开关**）。
+     *
+     * 定向报文（CALL/REPORT/ROGER）现在**始终**优先于 CQ 与排队，即「有人呼叫我方一定应答」，
+     * 因此原「报告优先」开关已无实际作用；保留字段只为兼容旧持久化数据、避免设置迁移。
+     */
     val reportPriority: Boolean = true,
     /** 已选台回应无反应 [retryLimit] 次后放弃（第 1 层重发机制）。 */
     val giveUpAfterRetry: Boolean = true,
@@ -150,7 +146,8 @@ sealed interface AutoAction {
  * - **发给我** 的定向报文：呼叫我 / 给我报告 / Roger 我的报告。
  * `RR73`/`73` 表示通联已结束，不作为新 QSO 的起点。
  *
- * 与显示列表共用 [DecodeFilter]，避免「列表里看不到、自动却应答」的不一致。
+ * 与显示列表共用 [DecodeFilter] 只作用于 **CQ 台**；**发给我方的定向报文一律入选**
+ * （「有人呼叫我方一定应答」），只有显式「忽略该呼号」才会被挡住。
  */
 object AutoProgramSelector {
 
@@ -168,16 +165,24 @@ object AutoProgramSelector {
             val p = MessageParser.parse(m.text)
             val from = p.from?.trim()?.uppercase() ?: continue
             if (from.equals(myCall, ignoreCase = true)) continue
-            if (!DecodeFilter.matches(p, filter, worked, myCall)) continue
+            // 显式「忽略该呼号」任何时候都生效（这是用户主动屏蔽，不是显示筛选）
+            if (from in filter.ignoredCalls) continue
 
             val workedCall = worked.hasWorkedCall(from)
+            val directed = p.addressedTo(myCall)
+
+            // 「有人呼叫我方一定应答」：**发给我方**的定向报文不受解码列表的
+            // 标签/搜索筛选影响 —— 否则用户把列表切到「CQ/73/已通联」等页签时，
+            // 别人直接呼叫我方也会被显示筛选一并丢掉、永远不应答（真机 bug）。
+            // CQ 台仍按显示筛选挑，保持「列表里看不到、自动却去应答」的一致性。
+            if (!directed && !DecodeFilter.matches(p, filter, worked, myCall)) continue
 
             val kind: AutoTargetKind
             val report: Int?
             if (p.isCq) {
                 kind = AutoTargetKind.CQ
                 report = null
-            } else if (p.addressedTo(myCall)) {
+            } else if (directed) {
                 // 定向报文；RR73/73/RRR 表示通联已结束，不据此开启新 QSO
                 if (DecodeFilter.is73(p)) continue
                 when {
@@ -283,9 +288,6 @@ class AutoScheduler {
     /** 保护限制已触发（停止后再不产出动作，直到 [enable] / [disable]）。 */
     private var protectedStop = false
 
-    /** 最近完成的呼号 → 完成时刻（ms），用于 [QSO_REENGAGE_COOLDOWN_MS] 冷却。 */
-    private val recentlyCompleted = HashMap<String, Long>()
-
     fun configure(s: AutoProgramSettings, myCall: String, myGrid: String) {
         settings = s
         this.myCall = myCall.trim().uppercase()
@@ -314,24 +316,6 @@ class AutoScheduler {
         lastValidQsoMs = 0L
         txAccumMs = 0L
         protectedStop = false
-        recentlyCompleted.clear()
-    }
-
-    /**
-     * 记录一段完成的 QSO（无论第 2 层是否在跑），用于之后的冷却过滤。
-     *
-     * 手动接管的 QSO 也走这里 —— 否则第 2 层恢复后会立刻把对手的残留报文当成新 QSO。
-     */
-    fun noteCompleted(call: String?, utcNowMs: Long) {
-        val c = call?.trim()?.uppercase().orEmpty()
-        if (c.isEmpty() || utcNowMs <= 0) return
-        recentlyCompleted[c] = utcNowMs
-    }
-
-    private fun isRecentlyCompleted(call: String, nowMs: Long): Boolean {
-        if (nowMs <= 0) return false
-        val t = recentlyCompleted[call.trim().uppercase()] ?: return false
-        return nowMs - t < QSO_REENGAGE_COOLDOWN_MS
     }
 
     /** 第 3 层接管（用户手动设目标）。 */
@@ -397,24 +381,31 @@ class AutoScheduler {
     ): AutoAction {
         if (!settings.mode.enabled) return AutoAction.None
         checkProtection(utcNowMs)?.let { return AutoAction.Stop(it) }
-        if (paused || protectedStop) return AutoAction.None
+        if (protectedStop) return AutoAction.None
 
         val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
-            .filter { it.kind == AutoTargetKind.CQ || !isRecentlyCompleted(it.call, utcNowMs) }
         val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
         val cqs = candidates.filter { it.kind == AutoTargetKind.CQ }
 
-        // 报告信息优先：发给我方的定向报文（多半是进行中 QSO 的续报）先处理
-        if (settings.reportPriority && directed.isNotEmpty()) {
+        // 「有人呼叫我方一定应答」：任何发给我方的定向报文（CALL / REPORT / ROGER）都优先处理，
+        // **不受手动接管（第 3 层暂停）与工作模式/阶段限制** —— 否则用户手动发过一次 CQ 或设过
+        // 目标后，别人呼叫我方就再也不应答（真机 bug：一端反复发网格、另一端只发 CQ）。
+        // 多个台同时呼叫我方时，其余按选台规则排队（见 callingStep 的队列分支）。
+        if (directed.isNotEmpty()) {
+            enqueue(AutoProgramSelector.rank(directed, settings, myGrid))
             noReplyStreak = 0
             cqPending = false
-            return AutoAction.HandleDirected(best(directed))
+            return AutoAction.HandleDirected(queue.removeFirst())
         }
+
+        // 手动接管期间不主动发 CQ / 排队，只保持接收
+        if (paused) return AutoAction.None
+
         return when (settings.mode) {
             AutoMode.MANUAL -> AutoAction.None
-            AutoMode.CALLER -> callingStep(directed, cqs)
+            AutoMode.CALLER -> callingStep(cqs)
             AutoMode.MIXED ->
-                if (phase == Phase.CALLING) callingStep(directed, cqs)
+                if (phase == Phase.CALLING) callingStep(cqs)
                 else answeringStep(cqs)
         }
     }
@@ -424,8 +415,7 @@ class AutoScheduler {
      *
      * 失败目标已从队列移除（开始时就出队），这里只决定「继续队列 / 回到 CQ / 切回主叫」。
      */
-    fun onQsoFinished(success: Boolean, utcNowMs: Long, theirCall: String? = null): AutoAction {
-        noteCompleted(theirCall, utcNowMs)
+    fun onQsoFinished(success: Boolean, utcNowMs: Long): AutoAction {
         if (!settings.mode.enabled || protectedStop) return AutoAction.None
         if (success) {
             lastValidQsoMs = utcNowMs
@@ -449,14 +439,7 @@ class AutoScheduler {
     // ---- 主叫 / 应答两个状态 ----
 
     /** 主叫状态：优先处理回应者队列，无人回应则发 CQ；混合模式连续无回应则转应答。 */
-    private fun callingStep(directed: List<AutoTarget>, cqs: List<AutoTarget>): AutoAction {
-        if (directed.isNotEmpty()) {
-            // 收集本批回应者（先按选台规则排序，再去重）后取队首，其余排队
-            enqueue(AutoProgramSelector.rank(directed, settings, myGrid))
-            noReplyStreak = 0
-            cqPending = false
-            return AutoAction.HandleDirected(queue.removeFirst())
-        }
+    private fun callingStep(cqs: List<AutoTarget>): AutoAction {
         if (queue.isNotEmpty()) {
             cqPending = false
             return AutoAction.HandleDirected(queue.removeFirst())
