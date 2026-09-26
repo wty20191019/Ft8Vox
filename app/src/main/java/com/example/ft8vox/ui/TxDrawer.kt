@@ -79,7 +79,7 @@ fun TxDrawer(
     onSendOnce: (String) -> Unit,
     onStopTx: () -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
-    onHoldTxChange: (Boolean) -> Unit,
+    onSameFreqChange: (Boolean) -> Unit,
     onOpenAutoProgram: () -> Unit,
     onMacrosChange: (List<String>) -> Unit,
     onEnqueue: (String) -> Unit,
@@ -399,15 +399,29 @@ fun TxDrawer(
 
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-                // 7) 自动序列（Hold Tx / 自动程序）；发射周期固定为「自动」
+                // 7) 自动序列（同频/异频发射 / 自动程序）；发射周期固定为「自动」
                 Text("自动序列", style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(
-                        selected = status.holdTxFreq,
-                        onClick = { onHoldTxChange(!status.holdTxFreq) },
-                        label = { Text("Hold Tx") },
+                        selected = status.sameFreqTx,
+                        onClick = { onSameFreqChange(true) },
+                        label = { Text("同频发射") },
+                    )
+                    FilterChip(
+                        selected = !status.sameFreqTx,
+                        onClick = { onSameFreqChange(false) },
+                        label = { Text("异频发射") },
                     )
                 }
+                Text(
+                    if (status.sameFreqTx) {
+                        "同频发射：「点谁打谁」——选台时红线（发射频率）跟到对方的频率。"
+                    } else {
+                        "异频发射：发射固定在红线位置，选台不改红线（拖动瀑布上的红线设定频率）。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     "发射时隙：自动按手机 UTC 时间取下一个来得及的时隙，" +
                         "当前锁定${if (status.txParity == 0) "偶" else "奇"}周期；" +

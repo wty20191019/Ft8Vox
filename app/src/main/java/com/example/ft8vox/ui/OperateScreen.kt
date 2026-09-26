@@ -239,9 +239,8 @@ fun OperateScreen(
             waterfall = waterfall,
             status = status,
             settings = settings,
-            onSelectFrequency = { viewModel.selectFrequency(it) },
+            onMoveTxFreq = { viewModel.setTxFreq(it) },
             onLongPress = { hz ->
-                viewModel.selectFrequency(hz)
                 val near = rows.minByOrNull { kotlin.math.abs(it.msg.df - hz) }
                 if (near != null && (near.parsed.from != null || near.parsed.isCq)) detailFor = near
             },
@@ -304,7 +303,7 @@ fun OperateScreen(
                             row = row,
                             myCall = status.myCall,
                             onClick = {
-                                viewModel.selectFrequency(row.msg.df)
+                                viewModel.selectTargetFreq(row.msg.df)
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
@@ -315,7 +314,7 @@ fun OperateScreen(
                             onSwipeTarget = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
-                                    viewModel.selectFrequency(row.msg.df)
+                                    viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 }
                             },
@@ -349,7 +348,7 @@ fun OperateScreen(
             onSendOnce = { viewModel.sendOnce(it) },
             onStopTx = { viewModel.stopTransmit() },
             onTxEnabledChange = { viewModel.setTxEnabled(it) },
-            onHoldTxChange = { viewModel.setHoldTxFreq(it) },
+            onSameFreqChange = { viewModel.setSameFreqTx(it) },
             onOpenAutoProgram = onOpenAutoProgram,
             onMacrosChange = { viewModel.setMacros(it) },
             onEnqueue = { viewModel.enqueueTx(it) },
@@ -402,14 +401,14 @@ fun WaterfallHeight.screenFraction(): Float = when (this) {
 }
 
 /**
- * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + RX/TX 读数。
+ * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + TX 读数。
  */
 @Composable
 private fun WaterfallBox(
     waterfall: WaterfallFrame?,
     status: ReceiverStatus,
     settings: AppSettings,
-    onSelectFrequency: (Int) -> Unit,
+    onMoveTxFreq: (Int) -> Unit,
     onLongPress: (Int) -> Unit,
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -425,9 +424,8 @@ private fun WaterfallBox(
             frame = waterfall,
             selectedFreqHz = status.selectedFreqHz,
             slotParity = status.slotParity,
-            onSelectFrequency = onSelectFrequency,
+            onMoveTxFreq = onMoveTxFreq,
             modifier = Modifier.fillMaxSize(),
-            rxFreqHz = status.rxFreqHz,
             txing = status.txing,
             onLongPress = onLongPress,
         )
@@ -441,14 +439,9 @@ private fun WaterfallBox(
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
         )
 
-        // RX / TX 读数（右下）
+        // 发射频率读数（右下；红线＝发射频率，拖动红线即可调整）
         Text(
-            String.format(
-                Locale.US,
-                "RX %s   TX %d Hz",
-                status.rxFreqHz?.toString() ?: "--",
-                status.selectedFreqHz,
-            ),
+            String.format(Locale.US, "TX %d Hz", status.selectedFreqHz),
             style = MaterialTheme.typography.labelSmall,
             fontFamily = FontFamily.Monospace,
             color = Color(0xCCFFFFFF),

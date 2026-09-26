@@ -428,10 +428,11 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefSwitch(
-                title = "Hold Tx Freq",
-                subtitle = "开启后点解码行只改 RX、不跟随对方频率（split 场景）；关闭则「点谁打谁」。",
-                checked = app.holdTxFreq,
-                onCheckedChange = { v -> settings.update { s -> s.copy(holdTxFreq = v) } },
+                title = "同频发射",
+                subtitle = "开：选台时发射频率（瀑布红线）跟到对方频率（「点谁打谁」）。" +
+                    "关：异频发射（split），发射固定在红线位置，选台不改红线。",
+                checked = app.sameFreqTx,
+                onCheckedChange = { v -> settings.update { s -> s.copy(sameFreqTx = v) } },
             )
             PrefDivider()
             Text(
