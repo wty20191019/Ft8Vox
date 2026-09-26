@@ -68,7 +68,8 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
  *
  * 底图资产缺失/解码失败时退回原来的纯色世界矩形，保证地图页始终可用。
  * 本组件只负责绘制，视口（缩放/平移）与命中测试由 [GridScreen] 管理。
- * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动。
+ * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动；**以 lambda 传入**，
+ * 使其只在 Canvas 的绘制作用域被读取 —— 相位变化因此只触发重绘、不触发整页重组。
  */
 @Composable
 fun GridMap(
@@ -82,7 +83,7 @@ fun GridMap(
     showCqSnr: Boolean,
     showLinkText: Boolean,
     selectedCall: String?,
-    linkPhase: Float,
+    linkPhase: () -> Float,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -207,7 +208,7 @@ fun GridMap(
             }
 
             // ---- 信号连线（只画最近一个时隙） ----
-            val phase = linkPhase.coerceIn(0f, 1f)
+            val phase = linkPhase().coerceIn(0f, 1f)
             for (l in links) {
                 val fa = p.toScreen(l.fromLat, l.fromLon)
                 val tb = p.toScreen(l.toLat, l.toLon)
@@ -246,7 +247,9 @@ fun GridMap(
             // ---- 呼号标记（蓝/黄/红，半径随 SNR） ----
             val baseR = 3.2.dp.toPx()
             val spanR = 5.0.dp.toPx()
-            for (m in callMarkers.toList().asReversed()) { // 旧的先画，新的压在上面
+            // 注意：用下标倒序，避免每帧 `toList().asReversed()` 的额外分配
+            for (ci in callMarkers.indices.reversed()) { // 旧的先画，新的压在上面
+                val m = callMarkers[ci]
                 val s = p.toScreen(m.lat, m.lon)
                 val x = s.x.toFloat()
                 val y = s.y.toFloat()
