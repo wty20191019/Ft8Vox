@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.engine.Protocol
@@ -365,7 +366,7 @@ fun BandFreqDialog(
     )
 }
 
-/** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与触发配置）。 */
+/** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与判定配置）。 */
 @Composable
 private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
     val context = LocalContext.current
@@ -389,13 +390,15 @@ private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
             "电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}",
             style = MaterialTheme.typography.labelSmall,
         )
+        // 指示语义随「VOX 触发」方式变化：音频检测命中＝有信号；静音检测命中＝静音
+        val voxSignal = voxHasSignal(appSettings.voxTrigger, status.voxOpen)
         Text(
-            "状态  ${if (!status.running) "未运行" else if (status.voxOpen) "触发" else "空闲"}",
+            "状态  ${voxStateLabel(appSettings.voxTrigger, status.voxOpen, status.running)}",
             style = MaterialTheme.typography.labelSmall,
-            color = if (status.voxOpen) MaterialTheme.colorScheme.primary
+            color = if (status.running && voxSignal) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text("触发  ${appSettings.voxTrigger.label} / ${appSettings.voxThresholdDb} dB", style = MaterialTheme.typography.labelSmall)
+        Text("判定  ${appSettings.voxTrigger.label} / ${appSettings.voxThresholdDb} dB", style = MaterialTheme.typography.labelSmall)
         Text(
             "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
             style = MaterialTheme.typography.labelSmall,
@@ -442,7 +445,7 @@ fun BottomStatusBar(
     queueCount: Int,
     timeWarning: String?,
     voxLevelDb: Float = -100f,
-    voxOpen: Boolean = false,
+    voxSignal: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -465,9 +468,9 @@ fun BottomStatusBar(
                 color = if (txing) VoxTxRed else VoxRxGreen,
             )
             Text(
-                voxLabel(voxLevelDb, voxOpen, running),
+                voxLabel(voxLevelDb, voxSignal, running),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (voxOpen) MaterialTheme.colorScheme.primary
+                color = if (voxSignal) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text("解码 $decodePerMin/min", style = MaterialTheme.typography.labelSmall)
@@ -483,9 +486,31 @@ fun BottomStatusBar(
     }
 }
 
-/** 底部状态条「VOX」文案：电平（dBFS）+ 触发点。 */
-internal fun voxLabel(levelDb: Float, open: Boolean, running: Boolean): String {
+/** 底部状态条「VOX」文案：电平（dBFS）+ 有信号圆点。 */
+internal fun voxLabel(levelDb: Float, signal: Boolean, running: Boolean): String {
     if (!running) return "VOX --"
     val lv = if (levelDb <= -99.5f) "--" else "${levelDb.toInt()} dB"
-    return if (open) "VOX $lv ●" else "VOX $lv"
+    return if (signal) "VOX $lv ●" else "VOX $lv"
+}
+
+/**
+ * 是否检测到输入信号：把 native 的触发布尔量按所选「VOX 触发」方式翻译过来。
+ *
+ * native 的 `vox_open` 只是「命中判定规则」，本身不等于「有信号」：
+ *  - 音频检测：电平 ≥ 阈值 → `open = true` → 有信号；
+ *  - 静音检测：电平 < 阈值 → `open = true` → **静音**（`open = false` 才是有信号）。
+ */
+internal fun voxHasSignal(trigger: VoxTrigger, open: Boolean): Boolean =
+    if (trigger == VoxTrigger.SILENCE) !open else open
+
+/**
+ * VOX 状态词（顶栏「音频」速览与设置页电平条共用）。
+ *
+ * 无信号时的用词按方式区分：音频检测＝「空闲」，静音检测＝「静音」。
+ */
+internal fun voxStateLabel(trigger: VoxTrigger, open: Boolean, running: Boolean): String = when {
+    !running -> "未运行"
+    voxHasSignal(trigger, open) -> "有信号"
+    trigger == VoxTrigger.SILENCE -> "静音"
+    else -> "空闲"
 }

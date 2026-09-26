@@ -417,8 +417,9 @@ static float block_level_db(const float* x, int n)
  *
  * 无 CAT 时 App 无法读取电台真实的 PTT/VOX 键控状态，这里用**输入音频电平**
  * 近似判定信道是否活动，仅供状态栏/音频速览显示，不参与发射门控：
- *  - 音频检测：电平 ≥ 阈值 视为「触发/有信号」；
- *  - 静音检测：电平 < 阈值 视为「静音/空闲」；
+ *  - 音频检测：电平 ≥ 阈值 视为「有信号」；
+ *  - 静音检测：电平 < 阈值 视为「静音」（即无信号）。
+ * 因此 `vox_open` 只是「命中判定规则」，UI 需结合当前方式翻译成可读状态。
  * 候选状态需持续 [vox_delay_ms] 才翻转，避免抖动。
  */
 static void update_vox(audio_engine_t* e, const float* x, int n)

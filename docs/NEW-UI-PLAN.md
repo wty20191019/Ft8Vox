@@ -665,4 +665,27 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **测试**：`SessionViewModel` 侧无逻辑改动（只改了注释），`assembleDebug` + `testDebugUnitTest`
   **BUILD SUCCESSFUL**、JVM **266 例 / 30 suite** 全过（无单测覆盖 UI 确认框，故数量不变）。
 
+### 补记：VOX 指示文案随触发方式翻译（修「静音检测也显示触发」）
+
+用户问「VOX 触发（音频检测 / 静音检测）是干什么用的，FT8CN 都没有，要不要删」。结论：**保留功能、只修文案**
+（用户拍板）。
+
+- **它是什么**：`voxOpen` 来自 native 对**输入音频**的 RMS 平滑电平按 `mode`/`thresholdDb`/`delayMs`
+  判出的布尔量，**只用于状态指示，不参与发射门控**（发射时序由 `pttDelayMs` / `leadToneMs` / `watchdogMs`
+  决定）。显示在底栏 `VOX -xx dB`、顶栏「音频」速览、设置页 6.1 电平条三处。FT8CN 没有这个「无 CAT 时的
+  信道活动近似指示」，属本项目自造；用户选择不删（电平条还是校「输入增益」的唯一参考）。
+- **修的 bug**：原实现三处一律把 `voxOpen=true` 显示成「触发 / `●` / （触发）」。但 `voxOpen` 的含义随方式反转
+  （静音检测下 `true` 表示**安静**），于是「静音检测」在安静信道反而亮起「触发」，语义相反。
+- **改法**（`ui/AppChrome.kt` 新增两个纯函数，UI 三处统一走它们）：
+  - `voxHasSignal(trigger, open)`：`SILENCE` 取反、`AUDIO` 直通 → 归一成「有信号」；
+  - `voxStateLabel(trigger, open, running)` → 「未运行 / 有信号 / 空闲（音频检测）/ 静音（静音检测）」；
+  - 高亮与底栏 `●` 一律以「有信号」为准；`voxLabel(levelDb, signal, running)` 参数由 `open` 改名 `signal`，
+    `BottomStatusBar` 的同名参数改为 `voxSignal`（`MainShell` 传入翻译后的值）；
+  - 设置页 `VoxLevelRow(status, trigger)` 用同一套文案；「VOX 触发」副标题与「VOX 阈值」副标题补上
+    「仅作状态指示，不影响发射」；顶栏速览里 `触发  …` 一行改为 `判定  …`。
+- **文档**：`new_ui.md` §6.1、`REGRESSION.md` K 组（VOX 指示项按新语义改写 + 组首说明）、`JNI-CONTRACT.md`
+  （`mode`/`thresholdDb` 说明 + 「Kotlin 侧必须按 mode 翻译」）。native 只改注释，无行为改动。
+- **测试**：`VoxPlanTest` 13→14（新增 `VOX 指示随触发方式翻译…`：四种组合的有信号判定 + 状态词 + 未运行），
+  JVM **267 例 / 30 suite** 全过，`assembleDebug` **BUILD SUCCESSFUL**。
+
 

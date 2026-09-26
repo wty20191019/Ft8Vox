@@ -119,7 +119,7 @@ data class ReceiverStatus(
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
     // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
-    /** VOX 判定为已触发。 */
+    /** VOX 判定命中（含义随「VOX 触发」方式：音频检测＝有信号，静音检测＝静音）。 */
     val voxOpen: Boolean = false,
     /** 平滑后的输入电平（dBFS，下限约 -100）。 */
     val voxLevelDb: Float = -100f,
