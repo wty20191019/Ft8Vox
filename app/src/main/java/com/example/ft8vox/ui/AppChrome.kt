@@ -177,7 +177,7 @@ fun Ft8VoxTopBar(
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("自动程序　${status.autoProgram.level.shortLabel}") },
+                        text = { Text("自动程序　${status.autoProgram.mode.shortLabel}") },
                         onClick = {
                             menuOpen = false
                             onAutoProgram()

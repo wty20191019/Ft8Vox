@@ -165,10 +165,8 @@ data class AppSettings(
     val selectedFreqHz: Int = 1500,
     /** 锁定发射频率（应答时不跟随对方频率）。 */
     val holdTxFreq: Boolean = false,
-    /** 自动程序（等级 + 策略；对应 FT8CN「自动程序」菜单）。 */
+    /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
-    /** 自动序列最大重试次数。 */
-    val maxRetries: Int = 6,
 
     // ---- 解码列表过滤（显示层，new_ui §3.2） ----
     /** 已选中的筛选项；空集表示「一个都没开」。 */

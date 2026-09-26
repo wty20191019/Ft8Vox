@@ -63,7 +63,7 @@ import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.AutoLevel
+import com.example.ft8vox.qso.AutoMode
 import com.example.ft8vox.ui.theme.BarCq
 import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
@@ -100,8 +100,8 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
-    // 待确认的「启用自动程序」等级（「0 手动选择」→ 1+ 时的防误发确认）
-    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
+    // 待确认的「启用自动程序」模式（「0 手动模式」→ 1/2 时的防误发确认）
+    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -441,16 +441,12 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                onSetLevel = { lv -> requestAutoLevel(lv, sessionStatus, session) { confirmAutoLevel = it } },
+                onSetMode = { m -> requestAutoMode(m, sessionStatus, session) { confirmAutoMode = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
             )
-            PrefDivider()
-            PrefStepper(
-                title = "最大重试次数",
-                value = app.maxRetries,
-                range = 1..20,
-                unit = " 次",
-                onChange = { v -> settings.update { s -> s.copy(maxRetries = v) } },
+            PrefNote(
+                "第 1 层（QSO 引擎）按「重发机制」对同一目标重发；" +
+                    "第 2 层（自动程序）负责选台、排队、主叫/混合模式切换与保护限制。",
             )
             PrefDivider()
             PrefAction(
@@ -670,15 +666,15 @@ fun SettingsScreen(
         )
     }
 
-    confirmAutoLevel?.let { lv ->
+    confirmAutoMode?.let { m ->
         AutoEnableConfirmDialog(
-            level = lv,
+            mode = m,
             status = sessionStatus,
             onConfirm = {
-                confirmAutoLevel = null
-                session.setAutoLevel(lv)
+                confirmAutoMode = null
+                session.setAutoMode(m)
             },
-            onDismiss = { confirmAutoLevel = null },
+            onDismiss = { confirmAutoMode = null },
         )
     }
 }
