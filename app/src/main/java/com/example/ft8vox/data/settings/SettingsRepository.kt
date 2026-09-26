@@ -82,9 +82,6 @@ private object Keys {
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
     val mapCqShowSnr = booleanPreferencesKey("map_cq_show_snr")
     val mapShowLinkText = booleanPreferencesKey("map_show_link_text")
-    val voxTrigger = stringPreferencesKey("vox_trigger")
-    val voxDelayMs = intPreferencesKey("vox_delay_ms")
-    val voxThresholdDb = intPreferencesKey("vox_threshold_db")
     val txLeadTone = booleanPreferencesKey("tx_lead_tone")
     val txLeadToneMs = intPreferencesKey("tx_lead_tone_ms")
     val outputDevice = stringPreferencesKey("output_device")
@@ -175,9 +172,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
         mapCqFlagShowSnr = this[Keys.mapCqShowSnr] ?: defaults.mapCqFlagShowSnr,
         mapShowLinkText = this[Keys.mapShowLinkText] ?: defaults.mapShowLinkText,
-        voxTrigger = enumOr(Keys.voxTrigger, defaults.voxTrigger),
-        voxDelayMs = (this[Keys.voxDelayMs] ?: defaults.voxDelayMs).coerceIn(50, 1000),
-        voxThresholdDb = (this[Keys.voxThresholdDb] ?: defaults.voxThresholdDb).coerceIn(-60, -20),
         txLeadTone = this[Keys.txLeadTone] ?: defaults.txLeadTone,
         txLeadToneMs = (this[Keys.txLeadToneMs] ?: defaults.txLeadToneMs).coerceIn(0, 2000),
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
@@ -244,9 +238,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall
     prefs[Keys.mapCqShowSnr] = mapCqFlagShowSnr
     prefs[Keys.mapShowLinkText] = mapShowLinkText
-    prefs[Keys.voxTrigger] = voxTrigger.name
-    prefs[Keys.voxDelayMs] = voxDelayMs
-    prefs[Keys.voxThresholdDb] = voxThresholdDb
     prefs[Keys.txLeadTone] = txLeadTone
     prefs[Keys.txLeadToneMs] = txLeadToneMs
     prefs[Keys.outputDevice] = outputDevice

@@ -157,7 +157,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 | `setInputGain(gainDb: Int)` | 下发采集增益（热生效，−12..30 dB，见 6.2） |
 | `setOutputGain(gainDb: Int)` | 下发输出音量（发射音频的数字衰减，热生效，−30..0 dB，见 6.2） |
 | `setSlotOffsetMs(offsetMs: Int)` | 下发**整时隙偏移**（热生效，±2500 ms，见 6.3）：采集窗口起点与发射起点一起平移，用于按解码 DT 校准本机时钟/时延 |
-| `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxOpen` / `voxLevelDb`） |
+| `state(): AudioState?` | 状态快照（`running` / `inSlot` / 输入输出采样率 / 时隙进度 / 丢帧 / 已解码时隙数 / UTC 时间 / `voxLevelDb` 输入电平读数） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间（用于时隙倒计时/对齐） |
 
 `startCapture` 错误码：`-1` 未初始化、`-2` 无法创建 stream builder、`-3` 打开输入流失败、`-4` DSP 线程创建失败、`-5` 启动输入流失败。
@@ -191,17 +191,19 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 
 | 字段 | 默认 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| `mode` | `AUDIO` | `AUDIO` / `SILENCE` | 电平判定口径：音频检测 / 静音检测（仅影响「有信号/空闲/静音」指示） |
-| `thresholdDb` | -40 | -60..-20 | 状态指示的判定门限（dBFS） |
-| `delayMs` | 300 | 0..2000 | 候选状态翻转去抖时长 |
 | `pttDelayMs` | 0 | 0..500 | 数据前的前导静音（留给声卡路由/电台起键） |
 | `leadToneMs` | 0 | 0..2000 | 数据前的前导单音（1 kHz），用于抢先键控 VOX |
 | `watchdogMs` | 10000 | 1000..60000 | 发射写入看门狗（卡死保护） |
 
-- **VOX 电平/触发**：native 在 DSP 线程对原始输入块计算 RMS 电平（快攻击/慢释放平滑），按 `mode`/`thresholdDb`/`delayMs` 维护 `voxOpen`。无 CAT 无法读取电台真实键控状态，该状态仅为**输入音频活动的近似**，用于状态栏与音频速览显示，**不参与发射门控**（发射仍按时隙）。`voxOpen` 本身只是「命中判定规则」，**Kotlin 侧必须按 `mode` 翻译**成可读状态：`AUDIO` 命中＝有信号（否则空闲）、`SILENCE` 命中＝静音（否则有信号）——见 `ui/AppChrome.kt` 的 `voxHasSignal` / `voxStateLabel`。
+- **输入电平读数**：native 在 DSP 线程对原始输入块计算 RMS 电平（快攻击/慢释放平滑）并暴露为
+  `voxLevelDb`（下限 `VOX_LEVEL_FLOOR_DB`）。**纯显示用**（观察输入、校准 6.2 的「输入增益」），
+  **不做任何触发判定、不参与发射门控**（发射仍按时隙）。
+  2026-09-26 前曾有一套「VOX 触发（音频/静音检测）+ 阈值 + 去抖」判定与「触发/空闲」指示，
+  已按用户要求整体删除（无 CAT 时该判定只是对输入音频活动的近似，徒增误解）。
 - **前导与对齐**：`playTx()` 把 `pttDelayMs` 静音与 `leadToneMs` 单音插在数据之前；调用方（`planTx`）相应提前播放起点，保证数据落在时隙起点。
 - **看门狗**：`write_blocking()` 以「本段音频预期播放时长 + 3 s」为实际阈值（不低于 `watchdogMs`），避免截断合法的整时隙发射；仅在音频设备卡死时中止写循环。
-- `nativeGetState` 返回 12 个 `Long`：索引 0–9 同前，`[10]=vox_open`、`[11]=vox_level_db×10`。
+- `nativeSetVox(handle, pttDelayMs, leadToneMs, watchdogMs)` 只下发 PTT 三项。
+- `nativeGetState` 返回 11 个 `Long`：索引 0–9 同前，`[10]=vox_level_db×10`。
 
 ### 6.2 音频路由与增益（U7c）
 
@@ -209,7 +211,7 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 - **路由**：`startCapture(preferredRate, deviceId)` / `startPlayback(preferredRate, deviceId)` 在 `deviceId > 0` 时调用 `AAudioStreamBuilder_setDeviceId`；`<= 0` 走系统默认。设备选择只在**建流时**生效：
   - 输入设备变化需重开采集流（运行中提示「下次开始接收生效」）；
   - 输出设备变化时 `stopPlayback()` 关闭旧流，下次发射用新设备重开（发射中提示「下次发射生效」）。
-- **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**包含 VOX 电平判定**的整条链路，故调增益会同时改变状态栏 VOX 读数。
+- **采集增益**：`nativeSetInputGain(handle, gainDb)` 钳制 −12..30 dB，DSP 线程对原始采集块乘 `10^(dB/20)`，超过满幅限幅到 [−1,1] 防回绕。增益作用于**含输入电平计算**的整条链路，故调增益会同时改变状态栏的电平读数。
 - **输出音量**：`nativeSetOutputGain(handle, gainDb)` 钳制 **−30..0 dB**，在 `write_blocking()` 写入声卡前对**整段播放缓冲**原地乘 `10^(dB/20)`（前导静音/前导音/FT8 报文/测试音一视同仁），超过满幅限幅到 [−1,1] 防回绕。**只能衰减**：发射波形由 `synth_gfsk()` 合成、本身已是数字满幅（`sinf()`，峰值 1.0 ≈ 0 dBFS），放大只会削顶并破坏频谱；0 dB = 原样输出（默认）。改设置后**下一次播放**生效。
 - **设备 id 易变**：设备 id 可能随插拔/重启变化，存的是原始 id 字符串（空串=默认），失配时 `label` 回退「系统默认」。
 
