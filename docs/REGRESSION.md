@@ -297,6 +297,44 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 
 ---
 
+### Q. 输出声卡挂起（真机 bug：「发送几次测试音后再也发不出去」）
+
+背景：真机（华为 `LRA-AL00` / EMUI 10 / Android 10 / `HMQ4C19C03003348`）复现，logcat 实证链路：
+
+- 「共享 + 低延迟」时 AAudio 会把输出流选为 **MMAP**（`builder_createStream  tryMMap = true for output`）。
+- 该 HAL 的 MMAP 输出流**空闲数秒**后即被 AAudio 服务端挂起：
+  `AAudioServiceStreamBase: writeUpMessageQueue(): Queue full. Did client stop? Suspending stream.`；
+- 此后客户端每次 `AAudioStream_write` 都在 0.5 s 后返回 **0 帧**
+  （`AudioStreamInternal_Client: processData(): TIMEOUT after 500000000 nanos`），
+  而流句柄仍非空、状态仍 STARTED —— 于是之后**所有**发射/试音永久写 0 帧，
+  用户看到的就是「发送几次测试音后再也发不出去」，只能重启 App。
+- 实测「空闲时周期性写静音保活（240 帧 / 1.5 s）」**拦不住**这次挂起（挂起照旧发生，
+  保活反而不断把流标坏并反复重开，进一步搅乱设备路由）。
+
+修复：
+
+1. 输出流改用 `AAUDIO_PERFORMANCE_MODE_NONE` → 走**传统 AudioTrack 共享路径，不再走 MMAP**。
+   FT8/FT4 是时隙级时序，不需要 MMAP 的低延迟；换路后真机日志 `tryMMap = false for output`，
+   `Suspending stream` 与 `processData(): TIMEOUT` 全部消失。
+2. 保留「写 0 帧 / 报错 / 看门狗触发 → 标记坏流 → 下次播放前关流重开」的自愈路径
+   （`out_bad` + `out_ensure_open`，试音在重开后立刻再放一次），作为其它机型的兜底；
+   因此已删除原先的输出流保活线程（它既不解决问题，又制造重开风暴）。
+3. 采集仍走 MMAP（真机采集正常），本次不动。
+4. 按 `AAudioStream_getChannelCount()` 的**实际声道数**交错写入（单声道请求可能被 AAudio
+   静默回退成立体声，否则越界读 + 波形错乱）。
+
+验收（真机 `HMQ4C19C03003348`，2026-09-26 已实测通过）：
+
+- [x] 设置页「播放」测试音**单击即出声**（修复前单击无声、连点两次才出声、且声音时长异常）。
+- [x] 连点 5 次以上（每次间隔 3~5 s）每次都出声；中途**故意空闲 20 s 以上**再点，仍正常出声。
+- [x] logcat 全程只有 **1 条** `playback started: requested=48000 actual=48000 channels=1`
+  （无重开风暴），无 `output write stalled` / `tx watchdog abort`。
+- [x] logcat 无 `writeUpMessageQueue(): ... Suspending stream.`、无 `processData(): TIMEOUT`。
+- [x] 发射（`nativePlayTx`）与试音共用同一条输出流，行为一致；N 组（发射中关机类操作）回归不受影响。
+
+
+---
+
 ## 3. 结果记录
 
 | 小节 | 结果（通过/失败） | 备注 / 复现步骤 |
@@ -317,6 +355,7 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 | N 发射中关机类操作（use-after-free 回归） | | |
 | O UI 性能（帧率 / CPU） | | |
 | P 发射时机（报文时长窗口）/ 左滑呼叫 | | |
+| Q 输出声卡挂起（真机 bug：发送几次后再也发不出去） | 真机已通过（2026-09-26） | 单击/连点/空闲 20 s 后均有声；logcat `tryMMap = false for output`，无 `Suspending stream` / `processData TIMEOUT` / 重开风暴 |
 
 ---
 
@@ -339,6 +378,10 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 - 日志页筛选（搜索/波段/模式/日期区间）、表格卡片、长按编辑/删除、底部统计与波段柱图、清空日志确认框。
 - ADIF 导出文件名与往返（导入两次的判重计数）。
 - 设置页 6.1 可改（前导音、测试音、PTT 延迟、看门狗）；点「测试音」后状态栏与设置页的「输入电平」刷新（模拟器无输入，读数偏低或 `--`）。
+- **输出流不走 MMAP**（模拟器/真机都可用日志验收，无需听声音）：点设置页「测试音」后，
+  `adb logcat -d | findstr "builder_createStream"` 中输出流应为 `tryMMap = false for output`
+  （MMAP 输出在真机华为 EMUI 10 上空闲会被服务端挂起 → 「发几次后再也发不出去」，见 Q 组）；
+  日志中不应出现 `writeUpMessageQueue(): ... Suspending stream.` 或 `processData(): TIMEOUT`。
 - 设置页 6.1「输出声卡」与 6.2「输入设备」下拉展开列出「系统默认」+ 实际设备（模拟器可见内置扬声器/麦克风/通话/远端混音）；6.2「输入增益」可步进；6.1「输出音量」可步进（范围 −30~0 dB：`+` 到 0 后置灰，0 为默认）。
 - 顶栏「波段与频率」弹窗多频率切换、自定义波段/频率表单；抽屉收起态条上的「发送总开关」默认关（只接收，打开不发射报文）、展开面板「发送」的默认动作与禁用态。
 - **抽屉跟手展开 / 收起**（模拟器可直接验证，无需音频输入）：按住收起态 56dp 条身向上拖动

@@ -58,6 +58,12 @@
 // （主线程 → ANR）。4096 帧在 48 kHz 下约 85 ms，中止延迟与关流等待都被限制在这个量级。
 #define TX_WRITE_CHUNK_FRAMES 4096
 
+// 输出流**不使用 MMAP**（性能模式 NONE），见 out_open_locked 的说明：
+// 真机华为 EMUI 10 上 MMAP 输出流空闲数秒后会被 AAudio 服务端挂起
+// （`writeUpMessageQueue(): Queue full. Did client stop? Suspending stream.`），
+// 此后所有 write 都在 0.5 s 后返回 0 帧且永不恢复 —— 「发几次测试音后再也发不出去」的真凶。
+// 走传统 AudioTrack 共享路径即可彻底绕开该 HAL 缺陷（实测喂静音保活无法拦住该挂起）。
+
 // 输出音量（发射音频的数字衰减）允许范围（dB）：发射波形本身已是数字满幅
 // （synth_gfsk 输出 sinf()，峰值 1.0），所以只能往小调；与设置页范围一致
 #define OUT_GAIN_MIN_DB (-30)
@@ -278,6 +284,11 @@ typedef struct
     pthread_cond_t tx_cond;        ///< 播放调用退出时广播（销毁引擎前等它）
     _Atomic int tx_active;         ///< 正在 nativePlay*/write_blocking 内的线程数
     _Atomic int out_gen;           ///< 输出流代次：关流/开流都 +1，写入线程据此自我作废
+    pthread_mutex_t out_mutex;     ///< 串行化「流的开/关」：多个线程可能同时想重开
+    _Atomic int out_channels;      ///< 输出流实际声道数（单声道请求可能被 AAudio 回退成立体声）
+    _Atomic int out_bad;           ///< 输出流判定为「卡死」：下次播放前必须关流重开
+    _Atomic int out_req_rate;      ///< 上次请求的输出采样率（重开时复用）
+    _Atomic int out_device_id;     ///< 上次请求的输出设备 id（重开时复用）
 
     // 解码结果（等待 Kotlin 轮询取走）
     pthread_mutex_t res_mutex;
@@ -460,6 +471,7 @@ static void* dsp_thread_fn(void* arg)
 // -----------------------------------------------------------------------------
 // 生命周期
 // -----------------------------------------------------------------------------
+
 JNIEXPORT jlong JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     JNIEnv* env, jobject thiz,
@@ -489,6 +501,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     pthread_mutex_init(&e->res_mutex, NULL);
     pthread_mutex_init(&e->tx_mutex, NULL);
     pthread_cond_init(&e->tx_cond, NULL);
+    pthread_mutex_init(&e->out_mutex, NULL);
     atomic_store(&e->tx_active, 0);
     atomic_store(&e->out_gen, 1);
 
@@ -499,6 +512,11 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->vox_level_db_x10, (int)(VOX_LEVEL_FLOOR_DB * 10.0f));
     atomic_store(&e->in_gain_db, 0);
     atomic_store(&e->slot_offset_ms, 0);
+    atomic_store(&e->out_channels, 1);
+    atomic_store(&e->out_bad, 0);
+    atomic_store(&e->out_req_rate, 0);
+    atomic_store(&e->out_device_id, 0);
+
     return (jlong)(intptr_t)e;
 }
 
@@ -528,25 +546,37 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopPlayback(
     JNIEnv* env, jobject thiz, jlong handle);
 
 /**
- * 中止发射写入并（可选）关闭输出流 —— **关流/重建引擎/释放引擎前必须调用**。
+ * 中止发射写入并关闭输出流 —— **关流/重建引擎/释放引擎前必须调用**。
  *
  * 先给 [out_gen] 加一让所有在跑的写入线程「自我作废」，再拿 [tx_mutex] 等当前
  * `AAudioStream_write` 返回，最后才关流。这样任何写入线程都不会在 `AAudioStream_close`
  * 之后碰到已经失效的流（真机崩溃根因：`AudioTrack::write` 踩已释放的共享缓冲）。
+ *
+ * **调用方必须持有 [out_mutex]**（流的开/关整体串行，见 out_open）。
  */
-static void tx_stop_and_close(audio_engine_t* e, bool close_stream)
+static void out_close_locked(audio_engine_t* e)
 {
-    if (e == NULL)
-        return;
     atomic_fetch_add(&e->out_gen, 1);
     pthread_mutex_lock(&e->tx_mutex);
-    if (close_stream && e->out_stream != NULL)
+    if (e->out_stream != NULL)
     {
         AAudioStream_requestStop(e->out_stream);
         AAudioStream_close(e->out_stream);
         e->out_stream = NULL;
     }
     pthread_mutex_unlock(&e->tx_mutex);
+}
+
+static void tx_stop_and_close(audio_engine_t* e, bool close_stream)
+{
+    if (e == NULL)
+        return;
+    pthread_mutex_lock(&e->out_mutex);
+    if (close_stream)
+        out_close_locked(e);
+    else
+        atomic_fetch_add(&e->out_gen, 1);
+    pthread_mutex_unlock(&e->out_mutex);
 }
 
 /// 登记「本线程正在播放（nativePlay*/write_blocking）」：释放引擎前会等它归零。
@@ -607,6 +637,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject th
     }
     pthread_mutex_destroy(&e->tx_mutex);
     pthread_cond_destroy(&e->tx_cond);
+    pthread_mutex_destroy(&e->out_mutex);
     pthread_mutex_destroy(&e->res_mutex);
     ftx_session_free(e->session);
     free(e);
@@ -843,21 +874,29 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePollWaterfall(
 // -----------------------------------------------------------------------------
 // 播放（阻塞写：无回调，由调用线程直接 write）
 // -----------------------------------------------------------------------------
-JNIEXPORT jint JNICALL
-Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
-    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate, jint device_id)
+/**
+ * 真正打开输出流（[nativeStartPlayback] 与「卡死重开」共用）。返回实际采样率，<0 失败。
+ *
+ * **调用方必须持有 [out_mutex]**：否则多个线程可能同时通过
+ * 「out_stream == NULL」检查而各开一条流（多出来的流既泄漏又会打乱设备路由）。
+ */
+static int out_open_locked(audio_engine_t* e, int preferred_rate, int device_id)
 {
-    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    if (e == NULL)
-        return -1;
-    if (e->out_stream != NULL)
-        return e->out_rate;
-
     AAudioStreamBuilder* builder = NULL;
     if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
         return -2;
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    // 输出流走**传统 AudioTrack 共享路径**（性能模式 NONE），**不要 MMAP**。
+    //
+    // 真机实证（华为 LRA-AL00 / EMUI 10 / Android 10）：性能模式 LOW_LATENCY 时 AAudio
+    // 会选 MMAP（日志 `builder_createStream tryMMap = true for output`）。该 HAL 的 MMAP
+    // 输出流只要空闲几秒，AAudio 服务端就把它挂起：
+    //     AAudioServiceStreamBase: writeUpMessageQueue(): Queue full. Did client stop? Suspending stream.
+    // 此后客户端每次 `AAudioStream_write` 都在 0.5 s 后返回 **0 帧**（服务端不再从环形缓冲
+    // 取数），而流本身仍是「已打开」—— 于是「发几次测试音后再也发不出去」，直到重启 App。
+    // 实测「周期性写静音保活」拦不住这次挂起；换传统路径可彻底绕开（FT8/FT4 是时隙级
+    // 时序，对输出延迟不敏感，不需要 MMAP 的低延迟）。
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(builder, 1);
     AAudioStreamBuilder_setSampleRate(builder, preferred_rate);
@@ -874,22 +913,88 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
         return -3;
     }
 
+    // 有的 HAL 不支持单声道快混音（如华为 EMUI 10），AAudio 会静默回退成立体声：
+    // 之后必须按「实际声道数」交错写入，否则既越界读又把波形写坏（见 write_blocking）。
+    int ch = AAudioStream_getChannelCount(s);
+    if (ch <= 0)
+        ch = 1;
+
     // 新流 = 新时代：顺带作废上一代可能还在跑的写入线程
     atomic_fetch_add(&e->out_gen, 1);
     pthread_mutex_lock(&e->tx_mutex);
     e->out_stream = s;
     e->out_rate = AAudioStream_getSampleRate(s);
+    atomic_store(&e->out_channels, ch);
+    atomic_store(&e->out_req_rate, preferred_rate);
+    atomic_store(&e->out_device_id, device_id);
+    atomic_store(&e->out_bad, 0);
     pthread_mutex_unlock(&e->tx_mutex);
 
     r = AAudioStream_requestStart(s);
     if (r != AAUDIO_OK)
     {
         LOGE("start output stream failed: %s", AAudio_convertResultToText(r));
-        tx_stop_and_close(e, true);
+        out_close_locked(e); // 已持 out_mutex，不能走 tx_stop_and_close（会重入）
         return -4;
     }
-    LOGI("playback started: requested=%d actual=%d", preferred_rate, e->out_rate);
+    LOGI("playback started: requested=%d actual=%d channels=%d", preferred_rate, e->out_rate, ch);
     return e->out_rate;
+}
+
+/// [out_open_locked] 的加锁入口（流的开/关整体串行）。
+static int out_open(audio_engine_t* e, int preferred_rate, int device_id)
+{
+    pthread_mutex_lock(&e->out_mutex);
+    int r = out_open_locked(e, preferred_rate, device_id);
+    pthread_mutex_unlock(&e->out_mutex);
+    return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_ft8vox_engine_AudioEngine_nativeStartPlayback(
+    JNIEnv* env, jobject thiz, jlong handle, jint preferred_rate, jint device_id)
+{
+    audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
+    if (e == NULL)
+        return -1;
+    // 复用已开的流；若它已被判定卡死（out_bad），留给播放线程重开
+    // （关一个卡死的 MMAP 流可能耗时，不能在 UI 线程做）
+    if (e->out_stream != NULL)
+        return e->out_rate;
+    return out_open(e, preferred_rate, device_id);
+}
+
+/**
+ * 播放前保证输出流可用：判为卡死或已不存在时关流重开（复用上次请求的采样率/设备）。
+ *
+ * **只允许在播放线程调用**：关流要拿 [tx_mutex]，且 `AAudioStream_close`
+ * 在卡死的流上可能耗时，调用方若是 UI 线程会卡界面。
+ */
+static bool out_ensure_open(audio_engine_t* e)
+{
+    pthread_mutex_lock(&e->out_mutex);
+
+    if (atomic_load(&e->out_bad))
+    {
+        LOGW("output stream marked bad, closing and reopening");
+        atomic_store(&e->out_bad, 0);
+        out_close_locked(e);
+    }
+
+    pthread_mutex_lock(&e->tx_mutex);
+    bool ok = (e->out_stream != NULL);
+    pthread_mutex_unlock(&e->tx_mutex);
+
+    if (!ok)
+    {
+        int rate = atomic_load(&e->out_req_rate);
+        if (rate <= 0)
+            rate = 48000;
+        ok = (out_open_locked(e, rate, atomic_load(&e->out_device_id)) > 0);
+    }
+
+    pthread_mutex_unlock(&e->out_mutex);
+    return ok;
 }
 
 JNIEXPORT void JNICALL
@@ -949,6 +1054,10 @@ static void apply_output_gain(audio_engine_t* e, float* buf, int n)
 ///
 /// 写入前会先按「输出音量」对 [buf] 施加衰减（原地缩放，见 apply_output_gain）。
 ///
+/// 异常检测：`AAudioStream_write` 0.5 s 只写进 0 帧（服务端把流挂起了）、返回错误、
+/// 或看门狗触发，都会把 [out_bad] 置位 —— 下次播放前 [out_ensure_open] 会关流重开
+/// （真机华为 MMAP 输出空闲被挂起后的自愈路径）。
+///
 /// **线程安全**：只在持有 [tx_mutex] 时读 [out_stream]；每次写前校验 [out_gen] 未变，
 /// 一旦变了就立即返回已写入帧数（说明流已被关掉/重建，见 tx_stop_and_close）。
 /// 调用方（nativePlay*/nativePlayTone）必须已 [tx_enter]，否则 [nativeDestroy] 可能在
@@ -958,6 +1067,21 @@ static int write_blocking(audio_engine_t* e, float* buf, int n)
     apply_output_gain(e, buf, n);
 
     const int gen = atomic_load(&e->out_gen);
+    const int ch = atomic_load(&e->out_channels);
+
+    // 多声道输出（单声道请求被 AAudio 回退成立体声，见 out_open）：按帧交错复制一份。
+    // 不做这一步，AAudio 会把单声道缓冲当 frames*ch 个 float 读 → 越界读 + 波形错乱。
+    float* inter = NULL;
+    if (ch > 1)
+    {
+        int cap = (TX_WRITE_CHUNK_FRAMES < n) ? TX_WRITE_CHUNK_FRAMES : n;
+        inter = (float*)malloc((size_t)cap * (size_t)ch * sizeof(float));
+        if (inter == NULL)
+        {
+            LOGE("interleave buffer alloc failed (ch=%d)", ch);
+            return -1;
+        }
+    }
 
     int64_t expected_ms =
         (e->out_rate > 0) ? (int64_t)((double)n * 1000.0 / (double)e->out_rate) : 0;
@@ -985,8 +1109,20 @@ static int write_blocking(audio_engine_t* e, float* buf, int n)
         if (e->out_stream != NULL && atomic_load(&e->out_gen) == gen)
         {
             valid = true;
+            const float* src = buf + written;
+            if (ch > 1)
+            {
+                for (int32_t i = 0; i < want; ++i)
+                {
+                    float v = buf[written + i];
+                    float* dst = inter + (size_t)i * (size_t)ch;
+                    for (int32_t c = 0; c < ch; ++c)
+                        dst[c] = v;
+                }
+                src = inter;
+            }
             // 单次写入超时 0.5 s：保证关流方最多等这么久就能拿到 tx_mutex
-            w = AAudioStream_write(e->out_stream, buf + written, want, 500000000LL);
+            w = AAudioStream_write(e->out_stream, src, want, 500000000LL);
         }
         pthread_mutex_unlock(&e->tx_mutex);
         if (!valid)
@@ -995,15 +1131,28 @@ static int write_blocking(audio_engine_t* e, float* buf, int n)
         if (w < 0)
         {
             LOGE("write failed: %s", AAudio_convertResultToText(w));
+            atomic_store(&e->out_bad, 1); // 设备报错：下次播放前关流重开
+            break;
+        }
+        if (w == 0)
+        {
+            // 0.5 s 一帧都没写进去：输出流已被 AAudio 服务端挂起（真机华为 MMAP：
+            // `writeUpMessageQueue(): Queue full ... Suspending stream.`）。标坏让下次
+            // 播放关流重开 —— 否则这个流会一直「看起来打开」却永远写不出声音。
+            LOGW("output write stalled (0/%d frames in 500 ms), marking stream bad", want);
+            atomic_store(&e->out_bad, 1);
             break;
         }
         written += w;
         if (utc_now_ms() > deadline)
         {
             LOGW("tx watchdog abort: %d/%d frames (wd=%lld ms)", written, n, (long long)wd);
+            atomic_store(&e->out_bad, 1); // 卡死保护触发：同样按坏流处理
             break;
         }
     }
+    if (inter != NULL)
+        free(inter);
     return written;
 }
 
@@ -1093,7 +1242,9 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePlayTx(
 
     int written = 0;
     jsize len = (*env)->GetArrayLength(env, pcm);
-    if (e->out_stream == NULL)
+    // 输出流可能已被判定卡死（见 write_blocking）：在播放线程里关流重开
+    // （`AAudioStream_close` 可能耗时，绝不能放到 UI 线程）
+    if (!out_ensure_open(e))
     {
         written = -1;
     }
@@ -1172,7 +1323,13 @@ Java_com_example_ft8vox_engine_AudioEngine_nativePlayTone(
         return -1;
 
     tx_enter(e); // 登记播放调用：销毁引擎前会等它退出
-    int written = (e->out_stream == NULL) ? -1 : play_tone_locked(e, freq_hz, duration_ms);
+    int written = out_ensure_open(e) ? play_tone_locked(e, freq_hz, duration_ms) : -1;
+    if (written == 0 && atomic_load(&e->out_bad))
+    {
+        // 刚判定卡死（write_blocking 置位）：重开后立刻再放一次，用户点一下就该听到声音
+        if (out_ensure_open(e))
+            written = play_tone_locked(e, freq_hz, duration_ms);
+    }
     tx_leave(e);
     return written;
 }
