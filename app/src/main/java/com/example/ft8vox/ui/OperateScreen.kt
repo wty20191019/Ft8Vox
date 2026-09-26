@@ -98,19 +98,12 @@ fun OperateScreen(
                 PackageManager.PERMISSION_GRANTED,
         )
     }
-    var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
-    var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
+    // 录音权限申请期间暂存的待执行动作（不再有「确认发射」弹窗：点了就直接发）
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
     var queryOpen by rememberSaveable { mutableStateOf(false) }
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 发射抽屉当前目标（点选解码行 / 滑呼 / 详情「呼叫」设置）
     var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
-
-    fun execute(action: PendingTx) {
-        when (action) {
-            PendingTx.Cq -> viewModel.startCq()
-            is PendingTx.Reply -> viewModel.answer(action.call, action.grid, action.df)
-        }
-    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -118,19 +111,21 @@ fun OperateScreen(
         permissionGranted = granted
         val action = afterPermission
         afterPermission = null
-        if (granted) {
-            if (action == null) viewModel.start() else execute(action)
-        }
+        if (granted) action?.invoke()
     }
 
-    fun request(action: PendingTx?) {
+    /** 执行一个需要录音权限的动作：已授权直接执行，否则先申请、授权后补执行。 */
+    fun request(action: () -> Unit) {
         if (permissionGranted) {
-            if (action == null) viewModel.start() else execute(action)
+            action()
         } else {
             afterPermission = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
+
+    /** 开始接收（水位图不提供 ▶ 按钮，空态点按与首次进入都走这里）。 */
+    fun requestStart() = request { viewModel.start() }
 
     // 进入操作页且已授权时自动开始接收（水位图不再提供 ▶ 按钮）
     LaunchedEffect(permissionGranted) {
@@ -288,7 +283,7 @@ fun OperateScreen(
                     modifier = Modifier
                         .padding(horizontal = 24.dp)
                         .then(
-                            if (!status.running) Modifier.clickable { request(null) } else Modifier,
+                            if (!status.running) Modifier.clickable { requestStart() } else Modifier,
                         ),
                 )
             } else {
@@ -316,9 +311,9 @@ fun OperateScreen(
                                     targetCall = from
                                     viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」一致，
-                                    // 先进防误发确认框；确认后由第 3 层接管，本时隙来得及就本时隙发
-                                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
+                                    // 直接开始（闸门只有「发送总开关」），本时隙来得及就本时隙发
+                                    request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                                 }
                             },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },
@@ -345,8 +340,8 @@ fun OperateScreen(
                 targetCall = null
                 viewModel.clearTargetSlot()
             },
-            onStartCq = { pendingTx = PendingTx.Cq },
-            onAnswer = { call, grid, df -> pendingTx = PendingTx.Reply(call, grid, df) },
+            onStartCq = { request { viewModel.startCq() } },
+            onAnswer = { call, grid, df -> request { viewModel.answer(call, grid, df) } },
             onSendNow = { viewModel.sendNow(it) },
             onSendOnce = { viewModel.sendOnce(it) },
             onStopTx = { viewModel.stopTransmit() },
@@ -361,18 +356,6 @@ fun OperateScreen(
         )
     }
 
-    pendingTx?.let { pending ->
-        TxConfirmDialog(
-            pending = pending,
-            status = status,
-            onConfirm = {
-                pendingTx = null
-                request(pending)
-            },
-            onDismiss = { pendingTx = null },
-        )
-    }
-
     detailFor?.let { row ->
         DecodeDetailSheet(
             row = row,
@@ -384,7 +367,7 @@ fun OperateScreen(
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                     targetCall = from
                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                    request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                 }
             },
             onOpenLog = {
