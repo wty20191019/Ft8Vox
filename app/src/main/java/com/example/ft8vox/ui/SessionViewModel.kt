@@ -1445,6 +1445,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val plan = planTx(
             now, slotMs, st.txParity, preambleMs,
             slotOffsetMs = latestSettings.slotOffsetMs.toLong(),
+            messageMs = st.protocol.messageMs.toLong(),
         )
 
         // 距数据起点的倒计时（用于 UI）
@@ -1476,7 +1477,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 本次发射的完整前导时长（ms）。 */
-    private fun txPreambleMs(): Int = txPreambleParts().let { it.first + it.second }
+    private fun txPreambleMs(): Int = latestSettings.txPreambleMs
 
     /**
      * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
@@ -1674,9 +1675,10 @@ internal data class TxPlan(
  * 计算本次发射的目标时隙与播放起点（纯函数，便于单测）。
  *
  * - 当前处于**对方周期**：瞄准下一个我方周期（必到），用完整前导提前启动。
- * - 当前处于**我方周期**且「时隙内已过时间 + 前导」仍在 [startWindowMs] 内：**就地发射**，
- *   立刻开始写播放、前导完整保留（数据起点相应后移几百毫秒）。解码结果正好在我方时隙
- *   开头几百毫秒到达，这条路径让应答落在**紧邻的时隙**，而不是白等一个完整周期。
+ * - 当前处于**我方周期**且「时隙内已过时间 + 前导」仍在 [startWindowMs] 内，**或**整条报文仍能
+ *   在本时隙内播完（[messageMs] 非 0 时，报文时长 + 前导 + 已过时间 ≤ 时隙长）：**就地发射**，
+ *   立刻开始写播放、前导完整保留（数据起点相应后移几百毫秒）。解码结果在时隙结束后几百毫秒
+ *   才到手，这条路径让应答落在**紧邻的时隙**，而不是白等一个完整周期。
  * - 否则（我方周期但已等太久）：瞄准下一个我方周期（+2）。
  *
  * 真正决定数据起点的是「播放起点 + 前导」；[TxPlan.targetStartMs] 即该值。
@@ -1695,6 +1697,14 @@ internal fun planTx(
      * 「发射起点」同步平移：把解码卡片显示的「时间差」原样填进来即可同时校准两端。
      */
     slotOffsetMs: Long = 0L,
+    /**
+     * 单条报文的波形时长（ms，0=未知）：非 0 时放宽「就地发射」窗口 —— 只要**整条报文能在
+     * 本时隙内播完**（已过时间 + 前导 + 报文 ≤ 时隙长）就直接本时隙发射，不必白等一个周期。
+     *
+     * FT8 报文 12.64 s 远短于时隙 15 s（FT4 4.48 s / 7.5 s），而解码结果在时隙结束后几百
+     * 毫秒才到手，所以应答通常正好落在紧邻的时隙。传 0 时退回只按 [startWindowMs] 判定。
+     */
+    messageMs: Long = 0L,
 ): TxPlan {
     require(slotMs > 0) { "slotMs must be positive" }
     val pre = preambleMs.coerceAtLeast(0L)
@@ -1710,8 +1720,12 @@ internal fun planTx(
         return TxPlan(targetIdx, targetStart, targetStart - pre)
     }
     val posInSlot = shiftedNow - slotIdx * slotMs
-    if (posInSlot + pre <= startWindowMs) {
-        // 我方周期且刚过（偏移后的）起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
+    val msg = messageMs.coerceAtLeast(0L)
+    // 就地发射：① 刚过（偏移后的）起点（旧窗口）；② 整条报文能在本时隙内播完
+    val inPlace = posInSlot + pre <= startWindowMs ||
+        (msg > 0L && posInSlot + pre + msg <= slotMs)
+    if (inPlace) {
+        // 前导照旧，数据起点 = 现在 + 前导（数据尾仍落在本时隙内）
         return TxPlan(slotIdx, nowMs + pre, nowMs)
     }
     // 已过太久：下一个我方周期

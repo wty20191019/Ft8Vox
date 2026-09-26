@@ -316,6 +316,9 @@ fun OperateScreen(
                                     targetCall = from
                                     viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
+                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」一致，
+                                    // 先进防误发确认框；确认后由第 3 层接管，本时隙来得及就本时隙发
+                                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
                                 }
                             },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },

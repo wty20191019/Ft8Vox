@@ -168,6 +168,19 @@ class TxParityAutoTest {
     }
 
     @Test
+    fun answeringWithFullMessageLengthLandsInTheSameSlot() {
+        // 对方在时隙 N（偶）发 CQ，解码在 N+1（我方奇）开头 800ms 才轮到轮询
+        val heard = minute + 30_000L
+        val deliveredAt = heard + slot + 800L
+        val myParity = oppositeSlotParity(heard, slot)!!
+        val plan = planTx(deliveredAt, slot, myParity, preambleMs = 50L, messageMs = 12_640L)
+        // 800 + 50 + 12640 = 13490 ≤ 15000：本时隙就能把整条报文播完，不必再等一个周期
+        assertEquals(heard / slot + 1, plan.targetSlotIndex)
+        assertEquals(deliveredAt, plan.startAtMs)
+        assertEquals(deliveredAt + 50L, plan.targetStartMs)
+    }
+
+    @Test
     fun qsoProgressLandsInTheFollowingOwnSlot() {
         // 我方为 CQ 方（偶），在对方周期收到报告：下一个我方时隙就要发出去
         val receivedAt = minute + slot + 300L    // 对方时隙开头 300ms 到手

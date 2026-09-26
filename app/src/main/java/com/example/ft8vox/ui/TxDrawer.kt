@@ -94,7 +94,13 @@ fun TxDrawer(
     val target = status.qso.theirCall ?: targetCall
     val kind = TxCompose.kindOf(composeText.ifBlank { status.qso.txText }, status.myCall)
     val report = TxCompose.reportFor(messages, target)
-    val canSendNow = TxScheduler.canSendNow(status.slotParity, status.txParity, status.msToNextSlot)
+    // 立即发判据：报文波形 + 前导必须能在本时隙剩余时间内播完（否则排下一个我方周期）
+    val canSendNow = TxScheduler.canSendNow(
+        status.slotParity,
+        status.txParity,
+        status.msToNextSlot,
+        TxScheduler.minSendNowMs(status.protocol.messageMs, settings.txPreambleMs),
+    )
 
     fun targetInfo(): Pair<String?, Int?> {
         val t = target ?: return null to null
@@ -390,8 +396,8 @@ fun TxDrawer(
                         status.autoProgram.mode.enabled ->
                             "发送总开关已开，自动程序已启用（${status.autoProgram.mode.shortLabel}）：" +
                                 "选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
-                        canSendNow -> "发送总开关已开；当前为我方周期且剩余 >2.5s：点「发送」将立即发射"
-                        else -> "发送总开关已开；非我方周期或剩余不足：点「发送」将排到下一个我方发射周期"
+                        canSendNow -> "发送总开关已开；当前为我方周期且剩余时间够播完本条报文：点「发送」将立即发射"
+                        else -> "发送总开关已开；非我方周期或剩余时间不足以播完本条报文：点「发送」将排到下一个我方发射周期"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

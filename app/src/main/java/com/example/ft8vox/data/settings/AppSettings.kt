@@ -271,6 +271,14 @@ data class AppSettings(
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
 
+    /**
+     * 发射前导总时长（ms）＝ PTT 前导静音 [pttDelayMs] + 发射前导音 [txLeadToneMs]。
+     *
+     * 供「立即发」判定使用：报文波形 + 前导都能在本时隙剩余时间内播完才允许立即发射。
+     */
+    val txPreambleMs: Int
+        get() = pttDelayMs.coerceAtLeast(0) + if (txLeadTone) txLeadToneMs.coerceAtLeast(0) else 0
+
     /** 当前实际使用的刻度频率（Hz）：自定义波段或波段内频率优先，否则取波段默认。 */
     val resolvedDialHz: Long
         get() = BandPlan.resolveDialHz(band, dialHz)
