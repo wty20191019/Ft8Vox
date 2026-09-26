@@ -3,6 +3,7 @@ package com.example.ft8vox.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,11 +61,14 @@ import com.example.ft8vox.qso.TxScheduler
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
+/** 收起条上滑多少 dp 就展开抽屉（new_ui.md §3.4）。 */
+private const val DRAWER_SWIPE_DP = 40
+
 /**
  * 发射控制抽屉（new_ui.md §3.4）。
  *
- * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；点击条身或「展开」上拉 Bottom Sheet，
- * 内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
+ * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；点击条身、长按或**向上滑动约 40dp**
+ * 都展开 Bottom Sheet，内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -154,12 +159,22 @@ fun TxDrawer(
         if (fromQueue && direct) onRemoveQueued(0)
     }
 
-    // ---- 收起态 56dp 条 ----
+    // ---- 收起态 56dp 条（点击 / 长按 / 上滑都能展开） ----
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .pointerInput(Unit) {
+                // 上滑超过约 40dp 即打开抽屉（抽屉本体仍用自己的弹出动画）
+                val threshold = DRAWER_SWIPE_DP.dp.toPx()
+                var dragged = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { dragged = 0f },
+                    onDragEnd = { if (dragged <= -threshold) expanded = true },
+                    onDragCancel = { dragged = 0f },
+                ) { _, dy -> dragged += dy }
+            }
             .combinedClickable(
                 onClick = { expanded = true },
                 onLongClick = { expanded = true },

@@ -60,20 +60,30 @@ fun AutoProgramDialog(
  *
  * [onOption] 接收一个「就地变换」，便于对 [AutoProgramSettings] 做单字段 copy。
  * 工作模式行只上报点击，防误发确认由调用方处理。
+ *
+ * [nestedScroll] = true 时面板自带内层滚动（弹窗需要，高度封顶）；嵌在设置页等
+ * 本身可滚动的页面里时应传 false，让内容完全展开、跟随页面一起滚，避免出现「二级滑动菜单」。
  */
 @Composable
 fun AutoProgramPanel(
     program: AutoProgramSettings,
     onSetMode: (AutoMode) -> Unit,
     onOption: ((AutoProgramSettings) -> AutoProgramSettings) -> Unit,
+    nestedScroll: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val enabled = program.mode.enabled
+    val scroll = rememberScrollState()
     Column(
         modifier
             .fillMaxWidth()
-            .heightIn(max = 460.dp)
-            .verticalScroll(rememberScrollState()),
+            .then(
+                if (nestedScroll) {
+                    Modifier.heightIn(max = 460.dp).verticalScroll(scroll)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Text(
             "模式即开关：「0 手动模式」＝关闭，1 主叫 / 2 混合 ＝开启。" +
