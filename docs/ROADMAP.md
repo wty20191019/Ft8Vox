@@ -463,6 +463,44 @@ com/example/ft8vox/
 >   **设置页传 `false`**：面板完全展开、跟随整页滚动。
 >   模拟器已实测（慢速上滑中途截图确认跟手、返回键只收抽屉、拨开关不展开、点遮罩收起、冷启动无残留）；
 >   首启曾发现面板内部滚动位置停在底部，已加「收起后 `scrollTo(0)`」的保险。验收见 `REGRESSION.md` §4 与 E 组。
+> - **真机 Bug 修复：输出声卡空闲被挂起 →「发送几次测试音后再也发不出去」（2026-09-26）**：
+>   用户真机（华为 `LRA-AL00` / EMUI 10 / Android 10 / `HMQ4C19C03003348`）报告「发送几次测试音后
+>   无法发送了」。用 logcat 实证到完整链路：输出流在「共享 + 低延迟」下被 AAudio 选为 **MMAP**
+>   （`builder_createStream tryMMap = true for output`）；该 HAL 的 MMAP 输出流**空闲几秒**后即被
+>   AAudio 服务端挂起（`AAudioServiceStreamBase: writeUpMessageQueue(): Queue full. Did client stop?
+>   Suspending stream.`），此后客户端每次 `AAudioStream_write` 都在 0.5 s 后返回 **0 帧**
+>   （`AudioStreamInternal_Client: processData(): TIMEOUT after 500000000 nanos`），而流句柄仍非空、
+>   状态仍 STARTED —— 于是所有发射/试音永久写 0 帧，只能重启 App。**先试的「空闲时周期性写静音
+>   保活（240 帧 / 1.5 s）」实测拦不住该挂起**（挂起照旧发生，保活反把流不断标坏重开，制造重开风暴
+>   并进一步搅乱设备路由，表现为「单击无声、连点两次才出声且时长异常」）。最终修复：输出流改用
+>   `AAUDIO_PERFORMANCE_MODE_NONE`，**走传统 AudioTrack 共享路径、不再走 MMAP**（FT8/FT4 是时隙级
+>   时序，不需要低延迟），并删除保活线程；保留「写 0 帧 / 报错 / 看门狗 → 标记坏流 → 下次播放前
+>   关流重开」的自愈路径作兜底（试音在重开后立刻再放一次），同时按 `AAudioStream_getChannelCount()`
+>   的**实际声道数**交错写入（单声道请求会被 AAudio 静默回退成立体声）。真机实测通过：单击即出声、
+>   连点 5 次以上每次都有声、**空闲 20 s 后再点仍正常**，logcat 全程只 **1 条** `playback started`、
+>   `tryMMap = false for output`、无 `Suspending stream` / `processData TIMEOUT` / 无重开风暴；
+>   验收清单见 `REGRESSION.md` Q 组。采集仍走 MMAP（真机采集正常），本次未动。
+> - **真机 Bug 修复：两台机器互回信号报告（`R-02` / `R-10` 交替死循环，2026-09-26）**：
+>   用户两台手机互测（一端 `BG7ZJW`、一端自造 `GB7AAA`，两端都开自动程序）出现
+>   `BG7ZJW GB7AAA R-10` 与 `GB7AAA BG7ZJW R-02` 每 30 s 交替重复，两端都不进 RR73。
+>   根因在第 1 层状态机缺少标准 FT8 的「收到 R → 发 RR73」规则：两端同时在应答对方时
+>   会双双进入「发信号报告」阶段，各自回 `R<报告>` 后**双方都停在 `WAIT_RR73` 等对方的
+>   RR73**，而对方也在等自己发 → 每 30 s 重发一次 R 报告；重试耗尽后第 2 层又各自
+>   `respondToRoger` 收尾，还会各写一条「假通联」日志。修复：① `WAIT_REPLY`（两种角色）与
+>   `WAIT_RR73` 收到 `R<报告>` 一律按「对方已确认收到我的报告」处理 → 回 `RR73` 并直接记日志，
+>   **不再回一次 R 报告**（WSJT-X 语义）；② `WAIT_REPLY`(RESPONDER) 收到 `<我> <对方> <网格>`
+>   （双方同时对呼）时按标准阶梯**转为主叫**直接发报告，不再死等；③ `WAIT_REPORT` 收到未加 R 的
+>   报告时回**自己实测的** `R<报告>`（原实现回显对方报告值）。新增 4 条 JVM 单测（含两端交替
+>   时隙的全流程模拟，断言空中无重复报文），验收见 `REGRESSION.md` R 组。
+> - **顶栏 / 抽屉「发射报文」文案冻结（2026-09-26）**：顶栏第三行（`发射中 CQ BG7ZJW OM89`）
+>   原取「下一次计划」的报文，发射途中改目标 / QSO 状态推进就让文案在**本条还没播完时**
+>   提前换成下一条，与真正在天上的报文不符。现把「计划」与「在播」收敛为 `ReceiverStatus`
+>   的两个派生只读属性（顶栏与抽屉共用同一事实来源）：`pendingTxText`（下一次计划，
+>   与发射调度 `txTick` 一致：一次性手动 > QSO 引擎计划）与 `displayTxText`
+>   （**发射中固定取 `lastTxText`**、其余时刻取 `pendingTxText`）。同时把发射抽屉收起条由
+>   「报文类型（CQ / 回复 / …）」改为**完整显示下一次会发射的报文**
+>   （`待发 <报文>` / 发射中 `发射中 <报文>` / 无待发时「空闲（无待发报文）」）。
+>   新增 7 条 JVM 单测 `TxDisplayTextTest`，验收见 `REGRESSION.md` S 组。
 > - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。
 - 真机机型矩阵验证（尤其 USB 音频与重采样路径）。
