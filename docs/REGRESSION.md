@@ -373,6 +373,63 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 - [ ] 每段 QSO 只写入 1 条日志，状态由「等待 RR73」推进到「已完成」。
 
 
+### R2. QSO 状态机改「报文驱动收敛阶梯」（真机 bug：`-08` / `R-10` 仍交替跑死）
+
+背景（用户 2026-09-26 复现，一端 `BG7ZJW`、一端 `GB7AAA`）：
+
+```
+0  -1 dB -0.1s  BG7ZJW GB7AAA R-10   15:25:00
+1 -11 dB +0.3s  GB7AAA BG7ZJW -08    15:24:45
+0  +2 dB -0.1s  BG7ZJW GB7AAA R-10   15:24:30
+1 -10 dB +0.4s  GB7AAA BG7ZJW -08    15:24:15
+```
+
+一端停在 `WAIT_RR73`（已发 `R-10`）、另一端停在 `WAIT_REPORT`（还在发纯报告 `-08`），
+每 30 s 交替、永不结束。用户反馈「整个 QSO 逻辑有问题、没有自动切换自己是 CQ 方还是
+应答方的能力、两台机器经常在某一个阶段跑死」。
+
+根因（三个叠加）：
+
+1. **状态机是「角色优先的固定脚本」**：`WAIT_RR73` 收到**纯报告**时不匹配任何转移，
+   只能一直重发 R，直到重试耗尽；能否收敛完全依赖「对方听到我的 R」这一条脆弱的假设。
+2. **重试按「每过一个空时隙 +1」**：两端周期相反时，每 30 s 就 +2，`maxRetries=3` → 约
+   45 s 就提前放弃；放弃后第 2 层又挑同一个台、从错误阶段重启，形成
+   「放弃 → 重启 → 再跑死」的抖动。
+3. **自听过滤用「本批时隙最大值」整批丢弃**（`SessionViewModel`）：本批若同时含自听信号
+   与对方回复，会把对方回复一起丢掉，状态机收不到回应 → 反复重发。另外第 2 层没有
+   「刚完成冷却」，会把对手的残留报文当成新 QSO 重新挑起（并重复记日志）。
+
+修复：
+
+1. `QsoEngine` 改为**报文驱动的收敛阶梯**（类注释），任意非终态收到任意形态报文都算出
+   正确下一步，角色（主叫/应答）由报文内容动态推断：
+   - 收 `73` → 完成不发；收 `RR73` → 回 `73` 完成；收 `R<报告>` → 回 `RR73` 完成；
+   - 收**纯报告**：若我已在 `ROGER`（回过 R 却没被对方听到）→ **直接回 `RR73` 收尾打破
+     死循环**；否则转应答方、回**我自己实测的** `R<报告>`；
+   - 收**网格**：仅在我尚未发报告时转主叫发报告，已发报告后的重复/滞后网格忽略。
+2. 重试改为**按实际重发次数**累计（`onTransmitted` 后收到的下一个解码批次仍未推进才 +1），
+   不再掐着空时隙提前放弃。
+3. `SessionViewModel` 自听过滤改为**逐条**丢弃「落在我方发射时隙」的解码（空批仍交给调度器
+   推进「连续无回应」计数）。
+4. `AutoScheduler` 增加**完成后冷却** `QSO_REENGAGE_COOLDOWN_MS = 120 s`：同一呼号的
+   定向报文（CALL/REPORT/ROGER）在冷却期内不再作为新 QSO 起点（CQ 不受限），
+   手动接管的 QSO 也计入（`noteCompleted`）。
+
+验收（JVM 单测，已通过）：
+
+- [x] `alreadySentRRecoversWhenPartnerKeepsSendingReport`：已发 R 后收到对方纯报告 → 直接 `RR73` + 完成（死循环解药）。
+- [x] `asymmetricCollisionConvergesWithoutDeadlock`：截图场景双引擎模拟（一端 ROGER / 一端 REPORT）→ 双方 `DONE`、各 1 条日志、空中无重复报文。
+- [x] `silentSlotsDoNotCountAsRetriesUntilTransmitted` / `givesUpAfterMaxRetries` / `neverGivesUpWhenRetryMechanismDisabled`：重试按重发次数累计。
+- [x] `staleGridAfterReportIsIgnored`：已发报告后忽略滞后网格。
+- [x] `recentlyCompletedCallIsNotReengagedByDirectedMessages` / `cooldownDoesNotBlockCqFromRecentlyCompletedCall`：完成冷却过滤定向报文、但不禁 CQ。
+
+真机复测（`HMQ4C19C03003348` + 对端）：
+
+- [ ] 两端都开自动程序互测 3 分钟以上，不再出现 `-08` / `R-10` 交替跑死。
+- [ ] 任意阶段进入都能收敛到「已完成」，每段 QSO 只 1 条日志。
+- [ ] 完成一端不再重复记同一条通联（冷却生效）。
+
+
 ### S. 顶栏 / 抽屉「发射报文」文案冻结（发射中不再跟着目标变）
 
 背景：顶栏第三行（`发射中 CQ BG7ZJW OM89`）取的是「下一次计划发射」的报文，而不是「本次在播」
@@ -427,6 +484,7 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 | P 发射时机（报文时长窗口）/ 左滑呼叫 | | |
 | Q 输出声卡挂起（真机 bug：发送几次后再也发不出去） | 真机已通过（2026-09-26） | 单击/连点/空闲 20 s 后均有声；logcat `tryMMap = false for output`，无 `Suspending stream` / `processData TIMEOUT` / 重开风暴 |
 | R 双方互回信号报告（真机 bug：`R-02`/`R-10` 死循环） | 单测已通过（2026-09-26） | 5 条用例（4 新增 + 1 更新）；真机两台互测待复测（列表不再交替重复 R 报告、每段 QSO 只 1 条日志） |
+| R2 QSO 状态机改报文驱动收敛阶梯（真机 bug：`-08`/`R-10` 仍跑死） | 单测已通过（2026-09-26） | 6 条用例；含双引擎死锁复现、重试语义、完成冷却；真机两台互测待复测 |
 | S 顶栏/抽屉发射报文文案冻结（`displayTxText`） | 单测已通过（2026-09-26） | 7 条用例 `TxDisplayTextTest`；真机/模拟器观感待复测（发射中改目标文案不变、抽屉显示完整待发报文） |
 
 ---

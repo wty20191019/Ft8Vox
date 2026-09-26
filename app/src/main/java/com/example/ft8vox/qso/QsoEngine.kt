@@ -68,29 +68,48 @@ data class QsoProgress(
 /**
  * FT8/FT4 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
  *
- * 支持两种角色（对应《QSO 自动系统设计文档》§1.3 / §1.4）：
- * - **CALLER**（主叫 QSO，[startCallerQso]）：发 `<对方> <我> <报告>` → 收到 `R<报告>` 后发 `RR73` → 完成。
- * - **RESPONDER**（应答 QSO，[startResponderQso]）：发 `<对方> <我> <网格>` → 收到报告后发 `R<报告>` → 收到 `RR73`/`73` 后发 `73` → 完成。
- * - **CQ**（[startCq]）：发 `CQ <我> <网格>`，之后由第 2 层自动程序收集回应者（见 [QsoProgress.awaitingResponders]）。
+ * ### 设计：报文驱动的收敛阶梯
  *
- * **对撞处理**（两端都自动运行时必然出现，见 [applyMessage]）：
- * - 收到对方的 `R<报告>`（Roger）＝对方已确认收到我的报告 → 无论我当时处于哪个阶段，
- *   都直接发 `RR73` 收尾并记日志。**绝不**再回一次 `R<报告>`，否则两端会互相重复信号报告
- *   （真机 bug：`R-02` / `R-10` 每 30 s 交替、永不结束）。
- * - 我为 RESPONDER 时收到对方发来**我的呼号 + 他的网格**（`<我> <对方> <网格>`）＝双方都在
- *   应答对方，按标准 FT8 阶梯转为主叫并直接发信号报告，而不是死等对方的报告。
+ * 早期版本是「角色优先的固定脚本」（先假定自己是主叫或应答方），只在很窄的
+ * 状态转移上推进。两台机器同时自动运行时，只要一端停在 `WAIT_RR73`（已发 R）、
+ * 另一端停在 `WAIT_REPORT`（还在发纯报告），前者收到的报文不匹配任何转移，就会
+ * 一直重发 R 直到重试耗尽；而重试耗尽后第 2 层又会重新挑同一个台、从错误阶段重启，
+ * 于是两个台在同一段上反复跑死（真机现象：`-08` / `R-10` 每 30 s 交替、永不结束）。
  *
- * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]；
- * 若该时隙没有带来状态推进，会自动累计重试次数，超过 [maxRetries] 则放弃
- * （[giveUp] 为 false 时永不放弃，用于「已选台回应无反应 N 次后放弃」关闭的情形）。
+ * 现在改成：**任何一个非终态下收到对方任一形态的报文，都用同一条阶梯算出正确的下一步**，
+ * 角色（主叫 / 应答）由报文内容动态推断，而不是开局写死。阶梯（按优先级）：
+ *
+ * 1. 收到 `73`：对方收尾 → 直接完成，不再发。
+ * 2. 收到 `RR73`：回 `73` 并完成。
+ * 3. 收到 `R<报告>`（Roger）：对方已确认收到我的报告 → 回 `RR73` 并完成。
+ * 4. 收到**纯报告** `<我> <对方> <报告>`：
+ *    - 我已在 `ROGER`（回过 R）：说明对方没收到我的 R，**直接回 `RR73` 收尾**
+ *      （两颗报告其实已互换），从而打破死循环；
+ *    - 否则：对方是主叫（senior），我转为应答方，回**我自己实测的** `R<报告>`。
+ * 5. 收到**网格** `<我> <对方> <网格>`（对方在应答我 / 双方同时应答）：我为主叫
+ *    （senior），直接发**我自己实测的**信号报告；已发过报告之后的重复网格忽略。
+ *
+ * 这样任意两端从任意阶段进入，都会在若干步内收敛到 `DONE`，且空中不出现重复报文。
+ *
+ * ### 重试
+ *
+ * 重试次数按**实际重发次数**累计（`onTransmitted` 后收到的下一个解码批次若没带来
+ * 推进才 +1），而不是每过一个空时隙就 +1；否则两端周期相反时会在真正放弃前提前
+ * 触发「放弃 → 第 2 层重启」的抖动。
+ *
+ * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]。
  */
 class QsoEngine(private var maxRetries: Int = 3) {
+
+    /** 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。 */
+    private enum class Step { NONE, CQ, GRID, REPORT, ROGER, RR73, SEVENTY3 }
 
     private var myCall: String = ""
     private var myGrid: String = ""
 
     private var role = QsoRole.NONE
     private var state = QsoState.IDLE
+    private var step = Step.NONE
     private var theirCall: String? = null
     private var theirGrid: String? = null
     private var reportSent: Int? = null
@@ -98,6 +117,12 @@ class QsoEngine(private var maxRetries: Int = 3) {
     private var txText: String? = null
     private var retries = 0
     private var logEntry: QsoLogEntry? = null
+
+    /** 通过重试耗尽而放弃（用于 [QsoState.FAILED]）。 */
+    private var failed = false
+
+    /** 上一次发射后是否还没收到任何有价值的回复（决定是否累计一次重试）。 */
+    private var awaitingReplySinceTx = false
 
     /** 超过 [maxRetries] 是否放弃（false＝一直重发，仅用于关闭「重发机制」时）。 */
     private var giveUp = true
@@ -143,32 +168,31 @@ class QsoEngine(private var maxRetries: Int = 3) {
 
     /**
      * 通知状态机：本轮 [QsoProgress.txText] 已实际发射完毕。
-     * 若 QSO 已结束（DONE/FAILED），清空 txText，避免无限重发。
+     *
+     * 若 QSO 已结束（DONE/FAILED），清空 txText，避免无限重发；否则标记「本轮已发，
+     * 等回复」，供 [onDecoded] 判断是否累计一次重试。
      */
     fun onTransmitted() {
         if (state == QsoState.DONE || state == QsoState.FAILED) {
             txText = null
         }
+        awaitingReplySinceTx = true
     }
 
     /** 开始呼叫 CQ。 */
     fun startCq(): QsoProgress {
         require(canOperate) { "未配置呼号" }
+        reset()
         role = QsoRole.CALLER
-        state = QsoState.WAIT_REPLY
-        theirCall = null
-        theirGrid = null
-        reportSent = null
-        reportReceived = null
-        retries = 0
-        logEntry = null
         awaitingResponders = true
-        txText = listOf("CQ", myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+        step = Step.CQ
+        render()
+        syncState()
         return progress()
     }
 
     /**
-     * 第 1 层「应答 QSO」（文档 §1.4）：我应答对方的 CQ。
+     * 第 1 层「应答 QSO」：我应答对方的 CQ。
      *
      * 先发 `<对方> <我> <网格>`（让 CQ 台拿到我的网格），随后等报告 → 发 `R<报告>` →
      * 等 RR73 → 发 73 收尾。
@@ -177,21 +201,18 @@ class QsoEngine(private var maxRetries: Int = 3) {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
+        reset()
         role = QsoRole.RESPONDER
-        state = QsoState.WAIT_REPLY
         theirCall = their
         theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
-        reportSent = null
-        reportReceived = null
-        retries = 0
-        logEntry = null
-        awaitingResponders = false
-        txText = listOf(their, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+        step = Step.GRID
+        render()
+        syncState()
         return progress()
     }
 
     /**
-     * 第 1 层「主叫 QSO」（文档 §1.3）：我方发过 CQ，[call] 是回应者。
+     * 第 1 层「主叫 QSO」：我方发过 CQ，[call] 是回应者。
      *
      * 直接从「发信号报告」开始（对方已经用网格/报告回应了我方的 CQ）：
      * 发 `<对方> <我> <报告>` → 等 `R<报告>` → 发 RR73 → 完成。
@@ -205,16 +226,14 @@ class QsoEngine(private var maxRetries: Int = 3) {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
+        reset()
         role = QsoRole.CALLER
-        state = QsoState.WAIT_REPORT
         theirCall = their
         theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
         reportSent = reportFromSnr(snr)
-        reportReceived = null
-        retries = 0
-        logEntry = null
-        awaitingResponders = false
-        txText = "$their $myCall ${MessageParser.formatReport(reportSent!!)}"
+        step = Step.REPORT
+        render()
+        syncState()
         return progress()
     }
 
@@ -231,16 +250,14 @@ class QsoEngine(private var maxRetries: Int = 3) {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
+        reset()
         role = QsoRole.RESPONDER
-        state = QsoState.WAIT_RR73
         theirCall = their
-        theirGrid = null
         reportReceived = theirReport
         reportSent = reportFromSnr(snr)
-        retries = 0
-        logEntry = null
-        awaitingResponders = false
-        txText = "$their $myCall R${MessageParser.formatReport(reportSent!!)}"
+        step = Step.ROGER
+        render()
+        syncState()
         return progress()
     }
 
@@ -256,44 +273,28 @@ class QsoEngine(private var maxRetries: Int = 3) {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
+        reset()
         role = QsoRole.RESPONDER
-        state = QsoState.DONE
         theirCall = their
-        theirGrid = null
         reportReceived = theirReport
         reportSent = reportFromSnr(snr)
-        retries = 0
-        awaitingResponders = false
-        txText = "$their $myCall RR73"
-        logEntry = QsoLogEntry(
-            theirCall = their,
-            theirGrid = null,
-            reportSent = reportSent,
-            reportReceived = reportReceived,
-            utcMs = if (utcMs > 0) utcMs else 0L,
-        )
+        step = Step.RR73
+        render()
+        finish(utcMs = if (utcMs > 0) utcMs else 0L, slotUtcMs = 0L)
         return progress()
     }
 
     /** 中止当前 QSO。 */
     fun stop(): QsoProgress {
-        role = QsoRole.NONE
-        state = QsoState.IDLE
-        theirCall = null
-        theirGrid = null
-        reportSent = null
-        reportReceived = null
-        txText = null
-        retries = 0
-        logEntry = null
-        awaitingResponders = false
+        reset()
         return progress()
     }
 
     /**
      * 处理一个接收时隙的解码结果，推进状态机。
      *
-     * 每次调用只消费一条有效报文；未产生推进时累计重试。
+     * 每次调用只消费一条有效报文；未产生推进时累计重试（仅在上一轮**确实发射过**、
+     * 即等过一次回复后才 +1）。
      */
     fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
         if (!canOperate) return progress()
@@ -316,121 +317,96 @@ class QsoEngine(private var maxRetries: Int = 3) {
 
         if (advanced) {
             retries = 0
-        } else {
+            awaitingReplySinceTx = false
+            // 非终态转移只改了 step，需要把对外 state 同步过来（终态分支里 finish 已同步，幂等）
+            syncState()
+        } else if (awaitingReplySinceTx) {
+            // 上一轮发了报文、本批解码没能推进 → 计一次无效重发
+            awaitingReplySinceTx = false
             retries++
             // giveUp=false（关闭「重发机制」）时一直重发，不主动放弃
             if (giveUp && retries > maxRetries) {
-                state = QsoState.FAILED
+                failed = true
+                step = Step.NONE
                 txText = null
+                theirCall = null
+                theirGrid = null
+                syncState()
             }
         }
         return progress()
     }
 
-    /** 尝试用一条报文推进状态；返回是否发生推进。 */
+    /**
+     * 用一条报文推进状态；返回是否发生推进。
+     *
+     * 见类注释的「收敛阶梯」：这里对**任意非终态**都接受任意形态的报文，并按阶梯
+     * 决定下一步，从而保证两端无论从哪个阶段进入都能收敛。
+     */
     private fun applyMessage(p: ParsedMessage, m: DecodeResult, utcMs: Long): Boolean {
         val them = theirCall ?: p.from ?: return false
-        return when (state) {
-            QsoState.WAIT_REPLY -> when (role) {
-                QsoRole.CALLER -> {
-                    // 收到应答：<me> <them> [grid|report]
-                    if (p.grid == null && p.report == null && !p.isRoger) return false
-                    theirCall = p.from
-                    if (p.grid != null) theirGrid = p.grid
-                    reportSent = reportFromSnr(m.snr)
-                    if (p.isRoger) {
-                        // 对方已 Roger 我的报告：直接收尾，不要再回一次报告
-                        reportReceived = p.report
-                        txText = "$them $myCall RR73"
-                        complete(m, utcMs)
-                        return true
-                    }
-                    txText = "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
-                    state = QsoState.WAIT_REPORT
-                    true
-                }
-                QsoRole.RESPONDER -> when {
-                    // 对方已 Roger：说明对方已确认收到我的报告（或双方同时进入「发报告」阶段）。
-                    // 我只需回 RR73 收尾；**不能**把它当成「对方给我的报告」再回一次 R 报告，
-                    // 否则两端互相重复信号报告、永不结束（真机 bug）。
-                    p.isRoger -> {
-                        reportReceived = p.report
-                        reportSent = reportSent ?: reportFromSnr(m.snr)
-                        txText = "$them $myCall RR73"
-                        complete(m, utcMs)
-                        true
-                    }
-                    // 双方同时在应答对方（对方发来我的呼号 + 他的网格）：按标准 FT8 阶梯转为主叫，
-                    // 直接发信号报告，把 QSO 推进到 R/RR73，而不是死等对方永远不会发的报告。
-                    p.grid != null && p.report == null -> {
-                        role = QsoRole.CALLER
-                        theirGrid = p.grid
-                        reportSent = reportFromSnr(m.snr)
-                        txText = "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
-                        state = QsoState.WAIT_REPORT
-                        true
-                    }
-                    // 等待对方给我的信号报告：<me> <them> <report>
-                    else -> {
-                        val rep = p.report ?: return false
-                        reportReceived = rep
-                        reportSent = reportFromSnr(m.snr)
-                        txText = "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
-                        state = QsoState.WAIT_RR73
-                        true
-                    }
-                }
-                else -> false
+        if (state == QsoState.DONE || state == QsoState.FAILED) return false
+
+        return when {
+            // 1) 对方收尾（73）：我无需再发，直接完成
+            p.is73 -> {
+                reportSent = reportSent ?: reportFromSnr(m.snr)
+                step = Step.SEVENTY3
+                txText = null
+                finish(utcMs, m.slotUtcMs)
+                true
             }
 
-            QsoState.WAIT_REPORT -> {
-                when {
-                    p.isRr73 || p.is73 -> {
-                        reportReceived = reportReceived ?: p.report
-                        // 对方直接跳到 RR73/73：回一条 73 收尾（不要重发上一条报告）
-                        txText = "$them $myCall 73"
-                        complete(m, utcMs)
-                        true
-                    }
-                    p.isRoger -> {
-                        reportReceived = p.report
-                        txText = "$them $myCall RR73"
-                        complete(m, utcMs)
-                        true
-                    }
-                    p.report != null -> {
-                        // 双方同时进入「发报告」阶段：对方发来报告（未加 R），我回**自己实测的**
-                        // `R<报告>`（不要回显对方的值，否则会把对方的测量值当成我的报告发出去），
-                        // 然后等对方 RR73。
-                        reportReceived = p.report
-                        reportSent = reportSent ?: reportFromSnr(m.snr)
-                        txText = "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
-                        state = QsoState.WAIT_RR73
-                        true
-                    }
-                    else -> false
-                }
+            // 2) 对方 RR73：回 73 并完成
+            p.isRr73 -> {
+                reportSent = reportSent ?: reportFromSnr(m.snr)
+                step = Step.SEVENTY3
+                render()
+                finish(utcMs, m.slotUtcMs)
+                true
             }
 
-            QsoState.WAIT_RR73 -> {
-                if (p.isRr73 || p.is73) {
+            // 3) 对方 R 报告：已确认收到我的报告 → 回 RR73 并完成
+            p.isRoger -> {
+                reportReceived = reportReceived ?: p.report
+                reportSent = reportSent ?: reportFromSnr(m.snr)
+                step = Step.RR73
+                render()
+                finish(utcMs, m.slotUtcMs)
+                true
+            }
+
+            // 4) 对方发来（纯）信号报告
+            p.report != null -> {
+                theirGrid = theirGrid ?: p.grid
+                if (step == Step.ROGER) {
+                    // 4a) 我已经回过 R（对方没收到）→ 直接 RR73 收尾，打破死循环
                     reportReceived = reportReceived ?: p.report
-                    txText = "$them $myCall 73"
-                    complete(m, utcMs)
-                    true
-                } else if (p.isRoger) {
-                    // 双方同时发了 R 报告（对撞）：对方这条 R 已确认收到我的报告 →
-                    // 我直接回 RR73 收尾并记日志。缺这一条会一直「互回 R 报告」直到重试耗尽
-                    // （真机 bug：两端 R-02 / R-10 每 30 s 交替重复）。
-                    reportReceived = reportReceived ?: p.report
-                    reportSent = reportSent ?: p.report
-                    txText = "$them $myCall RR73"
-                    complete(m, utcMs)
-                    true
-                } else if (p.report != null && reportReceived == null) {
-                    reportReceived = p.report
-                    false
+                    reportSent = reportSent ?: reportFromSnr(m.snr)
+                    step = Step.RR73
                 } else {
+                    // 4b) 对方是主叫（senior），我转为应答方 → 回我自己实测的 R 报告
+                    role = QsoRole.RESPONDER
+                    reportReceived = p.report
+                    reportSent = reportSent ?: reportFromSnr(m.snr)
+                    step = Step.ROGER
+                }
+                render()
+                if (step == Step.RR73) finish(utcMs, m.slotUtcMs)
+                true
+            }
+
+            // 5) 对方用网格应答（我为主叫 / 双方同时应答）
+            p.grid != null -> {
+                if (step == Step.NONE || step == Step.CQ || step == Step.GRID) {
+                    theirGrid = p.grid
+                    role = QsoRole.CALLER
+                    reportSent = reportFromSnr(m.snr)
+                    step = Step.REPORT
+                    render()
+                    true
+                } else {
+                    // 已发过报告及以后：重复/滞后的网格忽略（保持当前 txText）
                     false
                 }
             }
@@ -439,15 +415,67 @@ class QsoEngine(private var maxRetries: Int = 3) {
         }
     }
 
-    private fun complete(m: DecodeResult, utcMs: Long) {
-        state = QsoState.DONE
+    /** 依据 [step] 渲染当前应发报文到 [txText]。 */
+    private fun render() {
+        val them = theirCall
+        txText = when (step) {
+            Step.NONE -> null
+            Step.CQ -> listOf("CQ", myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            Step.GRID ->
+                if (them == null) null
+                else listOf(them, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            Step.REPORT ->
+                if (them == null || reportSent == null) null
+                else "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
+            Step.ROGER ->
+                if (them == null || reportSent == null) null
+                else "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
+            Step.RR73 -> if (them == null) null else "$them $myCall RR73"
+            Step.SEVENTY3 -> if (them == null) null else "$them $myCall 73"
+        }
+    }
+
+    /** 依 [step] / [failed] 同步对外状态。 */
+    private fun syncState() {
+        state = when {
+            failed -> QsoState.FAILED
+            step == Step.RR73 || step == Step.SEVENTY3 -> QsoState.DONE
+            step == Step.REPORT -> QsoState.WAIT_REPORT
+            step == Step.ROGER -> QsoState.WAIT_RR73
+            step == Step.CQ || step == Step.GRID -> QsoState.WAIT_REPLY
+            role != QsoRole.NONE -> QsoState.WAIT_REPLY
+            else -> QsoState.IDLE
+        }
+    }
+
+    /** 写入通联记录（幂等；同一段只记一条）。 */
+    private fun finish(utcMs: Long, slotUtcMs: Long) {
+        if (logEntry != null) return
+        val them = theirCall ?: return
         logEntry = QsoLogEntry(
-            theirCall = theirCall ?: return,
+            theirCall = them,
             theirGrid = theirGrid,
             reportSent = reportSent,
             reportReceived = reportReceived,
-            utcMs = if (utcMs > 0) utcMs else m.slotUtcMs,
+            utcMs = if (utcMs > 0) utcMs else slotUtcMs,
         )
+        syncState()
+    }
+
+    private fun reset() {
+        role = QsoRole.NONE
+        state = QsoState.IDLE
+        step = Step.NONE
+        theirCall = null
+        theirGrid = null
+        reportSent = null
+        reportReceived = null
+        txText = null
+        retries = 0
+        logEntry = null
+        failed = false
+        awaitingReplySinceTx = false
+        awaitingResponders = false
     }
 
     /** 用解码 SNR 作为要发送的信号报告（clamp 到 -24..+30 dB）。 */

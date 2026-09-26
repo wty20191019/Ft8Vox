@@ -272,6 +272,38 @@ class AutoProgramTest {
         assertEquals("JA1ABC", next.target.call)
     }
 
+    // ---- 完成后的冷却（防止第 2 层重新挑起同一段而跑死 / 重复记日志） ----
+
+    @Test
+    fun recentlyCompletedCallIsNotReengagedByDirectedMessages() {
+        val s = scheduler()
+        s.noteCompleted("JA1ABC", 10_000L)
+        // 冷却期内：对方的定向报文被过滤 → 回到发 CQ（不重新挑起同一段）
+        assertEquals(
+            AutoAction.SendCq,
+            s.onDecoded(listOf(decoded("F4FSY JA1ABC -12", snr = -5)), utcNowMs = 20_000L),
+        )
+        // 冷却期外：正常处理
+        val b = s.onDecoded(
+            listOf(decoded("F4FSY JA1ABC -12", snr = -5)),
+            utcNowMs = 200_000L,
+        ) as AutoAction.HandleDirected
+        assertEquals("JA1ABC", b.target.call)
+    }
+
+    @Test
+    fun cooldownDoesNotBlockCqFromRecentlyCompletedCall() {
+        val s = scheduler(program.copy(mode = AutoMode.MIXED))
+        repeat(4) { s.onDecoded(emptyList(), utcNowMs = 2_000L + it) } // 进入应答状态
+        assertEquals(AutoScheduler.Phase.ANSWERING, s.currentPhase())
+        s.noteCompleted("JA1ABC", 10_000L)
+        val a = s.onDecoded(
+            listOf(decoded("CQ JA1ABC PM95", snr = -9, slotUtcMs = 20_000L)),
+            utcNowMs = 20_000L,
+        )
+        assertTrue("对方的 CQ 不受冷却限制", a is AutoAction.AnswerCq)
+    }
+
     // ---- 保护限制 ----
 
     @Test

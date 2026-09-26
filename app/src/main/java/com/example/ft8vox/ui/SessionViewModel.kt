@@ -1221,22 +1221,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val batch = pendingDecodes.toList()
                 pendingDecodes = mutableListOf()
                 val slotMs = s.slotMs.toLong()
-                // 本批解码所属时隙：优先用解码自带的时隙起点（native 精确给出该时隙 UTC 起点）
-                val batchSlot = batch.maxOfOrNull { it.slotUtcMs } ?: 0L
-                val batchSlotIdx = if (slotMs > 0 && batchSlot > 0) batchSlot / slotMs else Long.MIN_VALUE
-                // 只丢弃「本批正好落在我方刚发射的那个时隙」的解码（自己发出的信号）。
-                // 不能用 txParity 推断：锁定周期可能恰好与对方相同，会把对方的报文整批丢掉。
-                val isOwnTxSlot = batchSlotIdx != Long.MIN_VALUE && batchSlotIdx == lastTxSlotIndex
-                if (!isOwnTxSlot) {
+                // 自己发出的信号：**逐条**过滤掉「落在我方刚发射那个时隙」的解码。
+                // 不能用本批时隙最大值整批丢弃 —— 本批若同时含自听信号与对方的回复，
+                // 会把对方的回复一起丢掉，导致状态机收不到回应而反复重发 / 两端跑死。
+                val txSlot = lastTxSlotIndex
+                val incoming = if (txSlot < 0 || slotMs <= 0) {
+                    batch
+                } else {
+                    batch.filter { m ->
+                        val idx = if (m.slotUtcMs > 0) m.slotUtcMs / slotMs else Long.MIN_VALUE
+                        idx != txSlot
+                    }
+                }
+                // 静默时隙（空批）仍要交给调度器推进「连续无回应」计数；
+                // 只有「本批解码全部属于我方发射时隙」才整体跳过。
+                val onlyOwnTx = batch.isNotEmpty() && incoming.isEmpty()
+                if (!onlyOwnTx) {
                     if (st.qso.active) {
                         if (st.qso.awaitingResponders) {
                             // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
-                            runAutoProgram(batch, s.utcNowMs)
+                            runAutoProgram(incoming, s.utcNowMs)
                         } else {
-                            applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs), s.utcNowMs)
+                            applyQsoProgress(qsoEngine.onDecoded(incoming, s.utcNowMs), s.utcNowMs)
                         }
                     } else if (st.autoProgram.mode.enabled) {
-                        runAutoProgram(batch, s.utcNowMs)
+                        runAutoProgram(incoming, s.utcNowMs)
                     }
                 }
             }
@@ -1268,6 +1277,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (p.state == QsoState.FAILED) pinnedTxParity = null
         _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
+            // 记入冷却：防止第 2 层（含手动 QSO 恢复后）立刻把对手残留报文当成新 QSO
+            scheduler.noteCompleted(entry.theirCall, utcNowMs)
             val st = _status.value
             val entity = QsoEntity(
                 theirCall = entry.theirCall,
@@ -1299,7 +1310,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (wasManual || !_status.value.autoProgram.mode.enabled) return
         if (p.txText == null) {
             // 没有收尾报文（例如重试超限失败）：立刻让第 2 层决定下一步
-            runAutoAction(scheduler.onQsoFinished(p.state == QsoState.DONE, utcNowMs))
+            runAutoAction(scheduler.onQsoFinished(p.state == QsoState.DONE, utcNowMs, p.theirCall))
         } else {
             // 还有 RR73/73 要发：发完再收口（见 txTick）
             pendingAutoFinish = true
@@ -1449,7 +1460,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (finished && pendingAutoFinish) {
                     pendingAutoFinish = false
                     runAutoAction(
-                        scheduler.onQsoFinished(p.state == QsoState.DONE, AudioEngine.utcNowMs()),
+                        scheduler.onQsoFinished(p.state == QsoState.DONE, AudioEngine.utcNowMs(), p.theirCall),
                     )
                 }
             }

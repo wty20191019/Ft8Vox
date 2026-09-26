@@ -7,6 +7,15 @@ import com.example.ft8vox.grid.Geo
 const val MIXED_CQ_NO_REPLY_LIMIT = 3
 
 /**
+ * 一段 QSO 结束后，对同一呼号的**定向报文**（CALL / REPORT / ROGER）在此冷却期内不再
+ * 作为新 QSO 的起点（CQ 不受限）。
+ *
+ * 用途：防止「对方还在发上一段的残留报文 → 第 2 层重新挑起同一段 → 状态机从错误阶段
+ * 重启 → 再次跑死 / 重复记日志」的抖动（真机 bug：`-08` / `R-10` 交替永不结束）。
+ */
+const val QSO_REENGAGE_COOLDOWN_MS = 120_000L
+
+/**
  * 自动程序工作模式（对应《QSO 自动系统设计文档》§五「工作模式」）。
  *
  * 取代旧的「等级 0/1/2/3/4+」：旧方案里等级 1/2/3（首先解码 / 解码窗口中 / 解码后）
@@ -271,6 +280,9 @@ class AutoScheduler {
     /** 保护限制已触发（停止后再不产出动作，直到 [enable] / [disable]）。 */
     private var protectedStop = false
 
+    /** 最近完成的呼号 → 完成时刻（ms），用于 [QSO_REENGAGE_COOLDOWN_MS] 冷却。 */
+    private val recentlyCompleted = HashMap<String, Long>()
+
     fun configure(s: AutoProgramSettings, myCall: String, myGrid: String) {
         settings = s
         this.myCall = myCall.trim().uppercase()
@@ -299,6 +311,24 @@ class AutoScheduler {
         lastValidQsoMs = 0L
         txAccumMs = 0L
         protectedStop = false
+        recentlyCompleted.clear()
+    }
+
+    /**
+     * 记录一段完成的 QSO（无论第 2 层是否在跑），用于之后的冷却过滤。
+     *
+     * 手动接管的 QSO 也走这里 —— 否则第 2 层恢复后会立刻把对手的残留报文当成新 QSO。
+     */
+    fun noteCompleted(call: String?, utcNowMs: Long) {
+        val c = call?.trim()?.uppercase().orEmpty()
+        if (c.isEmpty() || utcNowMs <= 0) return
+        recentlyCompleted[c] = utcNowMs
+    }
+
+    private fun isRecentlyCompleted(call: String, nowMs: Long): Boolean {
+        if (nowMs <= 0) return false
+        val t = recentlyCompleted[call.trim().uppercase()] ?: return false
+        return nowMs - t < QSO_REENGAGE_COOLDOWN_MS
     }
 
     /** 第 3 层接管（用户手动设目标）。 */
@@ -367,6 +397,7 @@ class AutoScheduler {
         if (paused || protectedStop) return AutoAction.None
 
         val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
+            .filter { it.kind == AutoTargetKind.CQ || !isRecentlyCompleted(it.call, utcNowMs) }
         val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
         val cqs = candidates.filter { it.kind == AutoTargetKind.CQ }
 
@@ -390,7 +421,8 @@ class AutoScheduler {
      *
      * 失败目标已从队列移除（开始时就出队），这里只决定「继续队列 / 回到 CQ / 切回主叫」。
      */
-    fun onQsoFinished(success: Boolean, utcNowMs: Long): AutoAction {
+    fun onQsoFinished(success: Boolean, utcNowMs: Long, theirCall: String? = null): AutoAction {
+        noteCompleted(theirCall, utcNowMs)
         if (!settings.mode.enabled || protectedStop) return AutoAction.None
         if (success) {
             lastValidQsoMs = utcNowMs
