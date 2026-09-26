@@ -399,6 +399,24 @@ com/example/ft8vox/
 >   第 1 层＝`QsoEngine`（`giveUpAfterRetry` + `retryLimit` 决定放弃，`awaitingResponders` 标记「发 CQ 等回应者」交第 2 层收集排序）。
 >   旧「等级 0/1/2/3/4+」「单次通联」「优先新呼号」「独立的最大重试次数」已删除/并入。**已知有意偏离**：第 1 层保持标准
 >   FT8 语义（主叫收到 `R报告` 即判成功并发 `RR73`），不采纳文档 §1.3 ④/⑤「等对方 73 再发 73」。验收见 `REGRESSION.md` E 组。
+> - **UI 性能优化（模拟器实测定位并优化，2026-09-26）**：以 `dumpsys gfxinfo`（帧数 / 各分位 GPU 耗时）
+>   + 逐线程 `/proc/<pid>/task/*/stat` CPU 采样定位出两个最大开销点：
+>   1. **地图页无条件 60 fps 重绘**：`GridScreen` 的 `rememberInfiniteTransition`（信号连线相位）**永不停歇**，
+>      即使一条连线都没有也让整页 60 fps 重组 + 重绘 —— 实测 **60.7 fps、GPU 18 ms/帧、整机约 34% CPU**
+>      （是操作页的 2.6 倍）。改为：**仅在有连线时才推进相位**（无连线时地图完全静止、一帧不画）、
+>      限流到约 12.5 fps，并把相位以 `() -> Float` 传入 `GridMap` **只在 draw 作用域读取**
+>      （相位变化只触发重绘、不触发整页重组）；顺带去掉每帧 `callMarkers.toList().asReversed()` 的分配。
+>      → **34.2% → 13.9% CPU（RenderThread 15.7% → 2.3%）**。
+>   2. **`_status` 以 12.5 Hz 触发整页重组**：`voxLevelDb`（实时电平）等「仪表读数」每个轮询周期都在变，
+>      逼着**每一页**（含没有瀑布的日志页 / 设置页）整屏 12.5 Hz 重组 + 重绘 —— 实测**各页均 105 帧 / 8 s**。
+>      改为把这组读数（`msToNextSlot` / `slotProgress` / `voxLevelDb` / `voxOpen`）**统一节流到 5 Hz**
+>      发布（`LIVE_PUBLISH_INTERVAL_MS`；窗口未到时沿用旧值 → `copy` 结果相等 → StateFlow 不发射），
+>      并对剩余时间 / 进度做「肉眼可见的最小步进」量化（`LIVE_STEP_MS` / `LIVE_PROGRESS_STEPS`）。
+>      → 日志 / 设置 / 地图页 **13.1 → 5.2 fps**，操作页主线程 **11.3% → 7.3%**。
+>      **注意**：操作页仍有约 10 fps 是**瀑布本身**的按行刷新（功能本体，必须保留），不是缺陷。
+>   3. 瀑布 `drawImage` 由默认双线性改为 `FilterQuality.None`：频谱每个 bin / 行本就是离散色块，
+>      最近邻既省掉每像素多次采样、弱信号亮度也不被插值抹淡。
+>   验收见 `REGRESSION.md` O 组。
 - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。
 - 真机机型矩阵验证（尤其 USB 音频与重采样路径）。

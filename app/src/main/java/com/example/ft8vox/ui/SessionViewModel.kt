@@ -172,6 +172,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var wfFloor = -1
 
     private var lastSlotsDecoded = 0L
+    /** 上次把「实时读数」写进 [ReceiverStatus] 的 UTC 毫秒数（见 [pollOnce] 的节流说明）。 */
+    private var lastLivePublishMs = 0L
     private var pendingDecodes = mutableListOf<DecodeResult>()
     private var lastTxSlotIndex = -1L
     private var txJustFinished = false
@@ -1154,20 +1156,33 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // 2) 状态
+        //
+        // 性能（2026-09-26）：`msToNextSlot` / `slotProgress` / `voxLevelDb` / `voxOpen` 这些「实时读数」
+        // native 每个轮询周期（80ms）都在变。若原样发布，`_status` 会以 12.5 Hz 发射，进而让
+        // MainShell / 顶栏 / 底栏 / 操作页 / 发射抽屉 —— 即**每一页**（含没有瀑布的日志页、设置页）
+        // 整屏 12.5 Hz 全量重组 + 重绘（模拟器实测各页均 105 帧 / 8 s，操作页主线程约 11% CPU，
+        // 是全机最大开销）。它们在 UI 上都只是粗略的「仪表读数」：时隙进度条只有 3dp 高、
+        // 电平只显示整数 dB、剩余时间只用于 2500ms 的「能否立即发送」阈值判断 —— 5 Hz 刷新足够。
+        // 因此统一节流 + 量化后再发布；窗口未到时沿用旧值，`copy` 结果相等 → StateFlow 不发射。
         val s = AudioEngine.state()
         if (s != null) {
+            val nowLiveMs = s.utcNowMs
+            val live = nowLiveMs - lastLivePublishMs >= LIVE_PUBLISH_INTERVAL_MS
+            if (live) lastLivePublishMs = nowLiveMs
             _status.update {
                 it.copy(
                     inSlot = s.inSlot,
                     inputRate = s.inputRate,
                     slotMs = s.slotMs.toInt(),
-                    msToNextSlot = s.msToNextSlot,
-                    slotProgress = s.slotProgress,
+                    msToNextSlot =
+                        if (live) s.msToNextSlot / LIVE_STEP_MS * LIVE_STEP_MS else it.msToNextSlot,
+                    slotProgress =
+                        if (live) (s.slotProgress * LIVE_PROGRESS_STEPS).toInt() / LIVE_PROGRESS_STEPS else it.slotProgress,
                     slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
                     droppedSamples = s.droppedSamples,
-                    voxOpen = s.voxOpen,
-                    voxLevelDb = s.voxLevelDb,
+                    voxOpen = if (live) s.voxOpen else it.voxOpen,
+                    voxLevelDb = if (live) s.voxLevelDb else it.voxLevelDb,
                 )
             }
 
@@ -1626,6 +1641,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
 /** 允许在时隙起点后多久内就地发射（含前导；超出则等下一个我方周期）。 */
 internal const val TX_START_WINDOW_MS = 1200L
+
+/**
+ * 「实时状态」量化步进（性能，见 [SessionViewModel] 的轮询）：`msToNextSlot` 量化到 500ms。
+ *
+ * 目的：让 [ReceiverStatus] 只在有肉眼可见变化时才发射，避免 12.5 Hz 整页重组。
+ */
+internal const val LIVE_STEP_MS = 500L
+
+/** 「实时状态」量化步进：`slotProgress` 量化到 1/50（时隙进度条只有 3dp 高，无需更细）。 */
+internal const val LIVE_PROGRESS_STEPS = 50f
+
+/**
+ * 「实时读数」统一节流窗口（ms）：见 [SessionViewModel] 的轮询。
+ *
+ * `msToNextSlot` / `slotProgress` / `voxLevelDb` / `voxOpen` 只在跨越本窗口边界时发布一次，
+ * 使 [ReceiverStatus] 的发射率从 12.5 Hz 降到 5 Hz —— 这几项在 UI 上都只是粗略的仪表读数。
+ */
+internal const val LIVE_PUBLISH_INTERVAL_MS = 200L
 
 /** 一次发射的调度结果：目标时隙、播放起点与数据起点。 */
 internal data class TxPlan(
