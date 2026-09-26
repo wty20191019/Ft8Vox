@@ -90,7 +90,7 @@ data class ReceiverStatus(
     val txEnabled: Boolean = false,
     /** 我方发射所在的周期：0=偶数，1=奇数（自动按手机 UTC 时间锁定）。 */
     val txParity: Int = 0,
-    /** 已确认发射（防误发闸门）。 */
+    /** 已武装本次发射（有待发报文，等时隙到点）。 */
     val txArmed: Boolean = false,
     /** 距离下一个我方发射时隙的毫秒数。 */
     val txCountdownMs: Long = 0,
@@ -843,9 +843,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val canOperate: Boolean get() = _status.value.myCall.isNotEmpty()
 
     /**
-     * 开始呼叫 CQ（调用前应由 UI 弹出防误发确认）。
-     * 若采集未启动会先自动启动。
+     * 开始呼叫 CQ。若采集未启动会先自动启动。
      *
+     * 唯一闸门是「发送总开关」（`txEnabled`）：打开即允许发射，UI 侧不再弹确认框。
      * 用户手动发起＝第 3 层：会暂停第 2 层调度（手动 QSO 结束后自动恢复）。
      */
     fun startCq() {
@@ -872,7 +872,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
-    /** 应答指定 CQ（调用前应由 UI 弹出防误发确认）。用户手动发起＝第 3 层。 */
+    /** 应答指定 CQ。用户手动发起＝第 3 层。 */
     fun answer(call: String, grid: String?, theirDf: Int? = null) {
         manualIntervention()
         answerInternal(call, grid, theirDf)

@@ -179,23 +179,21 @@ fun GridScreen(
                 PackageManager.PERMISSION_GRANTED,
         )
     }
-    var pendingReply by remember { mutableStateOf<PendingTx?>(null) }
-    var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
+    // 应答动作在等录音权限期间暂存（不再有「确认发射」弹窗：点了就直接发）
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
         val action = afterPermission
         afterPermission = null
-        if (granted && action is PendingTx.Reply) {
-            session.answer(action.call, action.grid, action.df)
-        }
+        if (granted) action?.invoke()
     }
 
-    fun confirmReply(action: PendingTx.Reply) {
-        if (permissionGranted) {
-            session.answer(action.call, action.grid, action.df)
-        } else {
+    /** 应答该台：已授权直接执行，否则先申请录音权限、授权后补执行。 */
+    fun replyTo(call: String, grid: String?, df: Int?) {
+        val action = { session.answer(call, grid, df) }
+        if (permissionGranted) action() else {
             afterPermission = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -315,9 +313,7 @@ fun GridScreen(
             selectedCall = selectedCall,
             settings = settings,
             onUpdateSettings = onUpdateSettings,
-            onReply = { call, grid, df ->
-                pendingReply = PendingTx.Reply(call, grid, df)
-            },
+            onReply = { call, grid, df -> replyTo(call, grid, df) },
             onOpenLog = { call ->
                 log.setFilter(LogFilter(query = call))
                 onOpenLog()
@@ -326,18 +322,6 @@ fun GridScreen(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .onGloballyPositioned { overlayHeightPx = it.size.height },
-        )
-    }
-
-    pendingReply?.let { action ->
-        TxConfirmDialog(
-            pending = action,
-            status = status,
-            onConfirm = {
-                pendingReply = null
-                if (action is PendingTx.Reply) confirmReply(action)
-            },
-            onDismiss = { pendingReply = null },
         )
     }
 }
