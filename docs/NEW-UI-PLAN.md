@@ -740,4 +740,29 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **已知取舍**：纵向循环越过 ±85.05° 会接另一侧极区（墨卡托极点发散，必有纬度跳变，已与用户确认）；
   最小缩放仍是「世界适应窗口」，不能缩到同时看到多份世界；地图底图版权仍为「仅测试自用」。
 
+### 补记：抽屉上滑展开 + 设置页自动程序去「二级滑动菜单」
+
+用户拿着操作页底部收起态横条的截图（`→ 无目标　空闲/只接收　[发送总开关]`）要求
+「**操作页改成上滑 [这条] 打开抽屉**」，并另提「**设置页自动程序不要有二级滑动菜单**」。
+动手前先问清了三点，用户选择：①**上滑 + 保留点击**；②**手势触发即可**（不做跟手拖动）；
+③「二级滑动菜单」确认是**面板自带的内层滚动**。
+
+- **抽屉展开方式（`ui/TxDrawer.kt`）**：收起条原为 `combinedClickable`（点击 / 长按展开），
+  在其上叠加 `Modifier.pointerInput { detectVerticalDragGestures(...) }`：拖动累计位移（普通局部
+  `var`，不建 State，避免每帧重组）在**松手**时若 ≤ −`DRAWER_SWIPE_DP`（40dp，`toPx()` 换算）即
+  `expanded = true`；`onDragCancel` 清零。手势只做触发，抽屉本体仍是 `ModalBottomSheet`（自带
+  下滑关闭 + 点遮罩关闭）。条右侧的「发送总开关」`Switch` 自己消费点击，**拨开关不会展开抽屉**；
+  点击 / 长按展开的旧路径保留（发现性）。新增 import：`detectVerticalDragGestures`、`pointerInput`。
+- **设置页自动程序面板（`ui/AutoProgramDialog.kt` + `ui/SettingsScreen.kt`）**：`AutoProgramPanel`
+  原为 `modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState())`，嵌进
+  设置页（页面本身 `verticalScroll`）就成了第二层滚动条。现新增参数
+  `nestedScroll: Boolean = true`：为 `true`（顶栏 `AutoProgramDialog` 那份）保持原样（弹窗高度有限，
+  必须有内层滚动）；为 `false`（设置页 6.3）只 `fillMaxWidth()`，面板**完全展开、跟随整页滚动**。
+  `rememberScrollState()` 提到条件之外无条件调用（条件式 `remember` 不必要）。
+- **验证**：`:app:assembleDebug :app:testDebugUnitTest` **BUILD SUCCESSFUL**；JVM **273 例 / 30 suite**
+  全过（本轮为纯 UI 改动，无新增/改动单测）。验收见 `REGRESSION.md` §4（抽屉三种展开方式、设置页
+  面板无内层滚动）与 E 组第 2 项。
+- **未做**：上滑的手势提示文案/箭头（用户未要求，且「点击也能开」保证了可发现性）；
+  跟手拖动（需弃用 `ModalBottomSheet`，改动过大，用户已明确选「手势触发即可」）。
+
 
