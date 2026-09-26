@@ -27,16 +27,12 @@ class QsoEngineTest {
     @Test
     fun callerCompletesFullQso() {
         val q = engine()
-        val cq = q.startCq()
-        assertEquals("CQ F4FSY JN25", cq.txText)
-        assertEquals(QsoState.WAIT_REPLY, cq.state)
+        // 主叫 QSO（对方是我方 CQ 的回应者）：我发信号报告
+        val cq = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertEquals(QsoState.WAIT_REPORT, cq.state)
         assertEquals(QsoRole.CALLER, cq.role)
-
-        // 对方应答（带网格）
-        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -11)))
-        assertEquals(QsoState.WAIT_REPORT, s1.state)
-        assertEquals("GJ0KYZ F4FSY -11", s1.txText)
-        assertEquals("GJ0KYZ", s1.theirCall)
+        assertEquals("GJ0KYZ F4FSY -11", cq.txText)
+        assertEquals("GJ0KYZ", cq.theirCall)
 
         // 对方发 R 报告
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
@@ -59,7 +55,7 @@ class QsoEngineTest {
     @Test
     fun responderCompletesFullQso() {
         val q = engine()
-        val start = q.answer("GJ0KYZ", "IO90")
+        val start = q.startResponderQso("GJ0KYZ", "IO90")
         assertEquals("GJ0KYZ F4FSY JN25", start.txText)
         assertEquals(QsoRole.RESPONDER, start.role)
 
@@ -80,9 +76,21 @@ class QsoEngineTest {
     }
 
     @Test
+    fun cqPhaseWaitsForSchedulerInsteadOfPickingFirst() {
+        val q = engine()
+        val cq = q.startCq()
+        assertTrue("发 CQ 后应处于等回应者阶段", cq.awaitingResponders)
+        // CQ 阶段由第 2 层收集/排序回应者：状态机不自行认人，也不计重试
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
+        assertEquals(QsoState.WAIT_REPLY, s.state)
+        assertEquals(0, s.retries)
+        assertEquals("CQ F4FSY JN25", s.txText)
+    }
+
+    @Test
     fun ignoresMessagesNotAddressedToMe() {
         val q = engine()
-        q.startCq()
+        q.startResponderQso("GJ0KYZ", "IO90")
         val s = q.onDecoded(listOf(decoded("K1ABC W9XYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
         assertEquals(1, s.retries)
@@ -91,7 +99,7 @@ class QsoEngineTest {
     @Test
     fun ignoresOwnTransmission() {
         val q = engine()
-        q.startCq()
+        q.startResponderQso("GJ0KYZ", "IO90")
         val s = q.onDecoded(listOf(decoded("K1ABC F4FSY JN25")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
         assertEquals(1, s.retries)
@@ -100,7 +108,7 @@ class QsoEngineTest {
     @Test
     fun givesUpAfterMaxRetries() {
         val q = engine()
-        q.startCq()
+        q.startResponderQso("GJ0KYZ", "IO90")
         var last = q.progress()
         repeat(7) { last = q.onDecoded(emptyList()) }
         assertEquals(QsoState.FAILED, last.state)
@@ -109,10 +117,22 @@ class QsoEngineTest {
     }
 
     @Test
+    fun neverGivesUpWhenRetryMechanismDisabled() {
+        val q = engine()
+        q.configure("F4FSY", "JN25", maxRetries = 3, giveUp = false)
+        q.startResponderQso("GJ0KYZ", "IO90")
+        var last = q.progress()
+        repeat(20) { last = q.onDecoded(emptyList()) }
+        assertEquals(QsoState.WAIT_REPLY, last.state)
+        assertTrue(last.active)
+    }
+
+    @Test
     fun handlesDirectReportInsteadOfRoger() {
         val q = engine()
-        q.startCq()
-        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
+        // 我方发过 CQ、对方用网格回应 → 已发出报告，等对方的 R 报告
+        val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertEquals(QsoState.WAIT_REPORT, s0.state)
         // 对方直接发报告（未加 R）
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -03")))
         assertEquals(QsoState.WAIT_RR73, s.state)
@@ -140,15 +160,15 @@ class QsoEngineTest {
     @Test
     fun answerRejectsOwnCall() {
         val q = engine()
-        val s = q.answer("F4FSY", "JN25")
+        val s = q.startResponderQso("F4FSY", "JN25")
         assertEquals(QsoState.IDLE, s.state)
     }
 
     @Test
-    fun callBackRespondsToDirectedCallAndCompletes() {
+    fun startCallerQsoRespondsToDirectedCallAndCompletes() {
         // 对方主动呼叫我方：<myCall> <theirCall> <grid> → 我直接发报告
         val q = engine()
-        val start = q.callBack("GJ0KYZ", "IO90", snr = -11)
+        val start = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertEquals(QsoRole.CALLER, start.role)
         assertEquals(QsoState.WAIT_REPORT, start.state)
         assertEquals("GJ0KYZ F4FSY -11", start.txText)

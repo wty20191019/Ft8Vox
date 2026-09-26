@@ -9,16 +9,25 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.ft8vox.grid.MapProjection
+import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** 底图分块标识：层级 + 块坐标（[WorldBaseMap.BLOCK] 网格）。 */
+/**
+ * 底图分块标识：层级 + 块坐标（[WorldBaseMap.BLOCK] 网格）。
+ *
+ * **不含世界副本号**：世界循环时同一块会以多份副本出现，但它们共用同一张解码图，
+ * 因此缓存/淘汰都以本标识为准（见 [MapBlockDraw]）。
+ */
 internal data class MapBlock(val level: Int, val bx: Int, val by: Int) {
     val key: Long get() = (level.toLong() shl 40) or (bx.toLong() shl 20) or by.toLong()
 }
+
+/** 一次底图绘制请求：块 + 该块所属的「世界副本」偏移（ku/kv，单位 = 世界宽/高）。 */
+internal data class MapBlockDraw(val block: MapBlock, val ku: Int, val kv: Int)
 
 private const val TAG = "WorldBaseMap"
 
@@ -69,26 +78,42 @@ internal object WorldBaseMap {
         return level.coerceIn(0, MAX_LEVEL)
     }
 
-    /** 当前视口需要解码/绘制的块。 */
-    fun visibleBlocks(p: MapProjection, viewW: Double, viewH: Double): List<MapBlock> {
+    /**
+     * 当前视口需要解码/绘制的块（**含世界副本**）。
+     *
+     * 世界横向/纵向都以 1 为周期循环，视口可能同时覆盖同一块的多份副本；返回项里的
+     * [MapBlockDraw.ku]/[MapBlockDraw.kv] 是这一份副本相对原点的整数偏移，
+     * 绘制方把世界坐标加上偏移即可（`u + ku`、`v + kv`）。同一块的多份副本共用缓存。
+     */
+    fun blockDraws(p: MapProjection): List<MapBlockDraw> {
         val level = levelFor(p.scale)
         val dim = SIZE shr level
         val perAxis = (dim + BLOCK - 1) / BLOCK
-        val u0 = (p.centerU - (viewW / 2.0) / p.scale).coerceIn(0.0, 1.0)
-        val u1 = (p.centerU + (viewW / 2.0) / p.scale).coerceIn(0.0, 1.0)
-        val v0 = (p.centerV - (viewH / 2.0) / p.scale).coerceIn(0.0, 1.0)
-        val v1 = (p.centerV + (viewH / 2.0) / p.scale).coerceIn(0.0, 1.0)
-        if (u1 <= u0 || v1 <= v0) return emptyList()
-        val bx0 = ((u0 * dim) / BLOCK).toInt().coerceIn(0, perAxis - 1)
-        val bx1 = (((u1 * dim) - 1.0).toInt() / BLOCK).coerceIn(0, perAxis - 1)
-        val by0 = ((v0 * dim) / BLOCK).toInt().coerceIn(0, perAxis - 1)
-        val by1 = (((v1 * dim) - 1.0).toInt() / BLOCK).coerceIn(0, perAxis - 1)
-        val out = ArrayList<MapBlock>((bx1 - bx0 + 1) * (by1 - by0 + 1))
-        for (by in by0..by1) {
-            for (bx in bx0..bx1) out += MapBlock(level, bx, by)
+        val r = p.visibleWorldRange()
+        if (r.maxU <= r.minU || r.maxV <= r.minV) return emptyList()
+        val out = ArrayList<MapBlockDraw>()
+        for (kv in floorToInt(r.minV)..floorToInt(r.maxV)) {
+            val v0 = maxOf(r.minV, kv.toDouble())
+            val v1 = minOf(r.maxV, (kv + 1).toDouble())
+            if (v1 <= v0) continue
+            val by0 = (((v0 - kv) * dim) / BLOCK).toInt().coerceIn(0, perAxis - 1)
+            val by1 = ((((v1 - kv) * dim) - 1.0).toInt() / BLOCK).coerceIn(0, perAxis - 1)
+            for (ku in floorToInt(r.minU)..floorToInt(r.maxU)) {
+                val u0 = maxOf(r.minU, ku.toDouble())
+                val u1 = minOf(r.maxU, (ku + 1).toDouble())
+                if (u1 <= u0) continue
+                val bx0 = (((u0 - ku) * dim) / BLOCK).toInt().coerceIn(0, perAxis - 1)
+                val bx1 = ((((u1 - ku) * dim) - 1.0).toInt() / BLOCK).coerceIn(0, perAxis - 1)
+                for (by in by0..by1) {
+                    for (bx in bx0..bx1) out += MapBlockDraw(MapBlock(level, bx, by), ku, kv)
+                }
+            }
         }
         return out
     }
+
+    /** `floor(x).toInt()`：视口范围可能为负，`toInt()` 是向零截断，不能直接用。 */
+    private fun floorToInt(x: Double): Int = floor(x).toInt()
 }
 
 /** 底图解码块的内存 LRU 缓存（仅在主线程增删，解码在 [Dispatchers.Default]）。 */
@@ -99,11 +124,12 @@ internal class WorldBaseMapState(private val decoder: BitmapRegionDecoder) {
     /** 已解码好的块（未就绪返回 null）。读取该 State 会随解码完成自动触发重绘。 */
     fun bitmap(block: MapBlock): ImageBitmap? = bitmaps[block.key]
 
-    /** 确保 [blocks] 都已解码（缺的按序解码；淘汰时**不淘汰** [blocks] 内的块）。 */
-    suspend fun ensure(blocks: List<MapBlock>) {
-        val pinned = HashSet<Long>(blocks.size * 2)
-        for (b in blocks) pinned += b.key
-        for (b in blocks) {
+    /** 确保 [draws] 涉及的所有块都已解码（缺的按序解码；淘汰时**不淘汰** [draws] 内的块）。 */
+    suspend fun ensure(draws: List<MapBlockDraw>) {
+        val pinned = HashSet<Long>(draws.size * 2)
+        for (d in draws) pinned += d.block.key
+        for (d in draws) {
+            val b = d.block
             if (bitmaps.containsKey(b.key)) {
                 touch(b.key)
                 continue

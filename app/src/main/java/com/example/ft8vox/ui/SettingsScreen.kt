@@ -57,13 +57,12 @@ import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
-import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.AutoLevel
+import com.example.ft8vox.qso.AutoMode
 import com.example.ft8vox.ui.theme.BarCq
 import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
@@ -100,8 +99,8 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
-    // 待确认的「启用自动程序」等级（「0 手动选择」→ 1+ 时的防误发确认）
-    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
+    // 待确认的「启用自动程序」模式（「0 手动模式」→ 1/2 时的防误发确认）
+    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -177,35 +176,8 @@ fun SettingsScreen(
         SettingsGroup("电台（仅 VOX）") {
             PrefNote(
                 "无 CAT：App 无法直接控制 PTT，只能靠「前导静音 + 前导音」让电台 VOX 抢先键控，" +
-                    "再把 FT8 数据对准时隙起点。VOX 电平与触发状态由 native 依据输入音频估算，仅作提示。"
+                    "再把 FT8 数据对准时隙起点。"
             )
-            PrefChoice(
-                title = "VOX 触发",
-                subtitle = "音频检测：有声视为触发；静音检测：无声视为空闲",
-                options = VoxTrigger.entries,
-                selected = app.voxTrigger,
-                onSelect = { v -> settings.update { it.copy(voxTrigger = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "VOX 延迟",
-                subtitle = "状态翻转去抖时长",
-                value = app.voxDelayMs,
-                range = 50..1000,
-                step = 50,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(voxDelayMs = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "VOX 阈值",
-                value = app.voxThresholdDb,
-                range = -60..-20,
-                unit = " dB",
-                onChange = { v -> settings.update { it.copy(voxThresholdDb = v) } },
-            )
-            PrefDivider()
             PrefSwitch(
                 title = "发射前导音",
                 subtitle = "发射前先放一段单音，让 VOX 抢先触发",
@@ -294,7 +266,7 @@ fun SettingsScreen(
             PrefDivider()
             PrefStepper(
                 title = "输入增益",
-                subtitle = "对采集样本生效（含 VOX 电平读数），热生效",
+                subtitle = "对采集样本生效（含输入电平读数），热生效",
                 value = app.inputGainDb,
                 range = -12..30,
                 unit = " dB",
@@ -428,10 +400,11 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefSwitch(
-                title = "Hold Tx Freq",
-                subtitle = "开启后点解码行只改 RX、不跟随对方频率（split 场景）；关闭则「点谁打谁」。",
-                checked = app.holdTxFreq,
-                onCheckedChange = { v -> settings.update { s -> s.copy(holdTxFreq = v) } },
+                title = "同频发射",
+                subtitle = "开：选台时发射频率（瀑布红线）跟到对方频率（「点谁打谁」）。" +
+                    "关：异频发射（split），发射固定在红线位置，选台不改红线。",
+                checked = app.sameFreqTx,
+                onCheckedChange = { v -> settings.update { s -> s.copy(sameFreqTx = v) } },
             )
             PrefDivider()
             Text(
@@ -441,16 +414,12 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                onSetLevel = { lv -> requestAutoLevel(lv, sessionStatus, session) { confirmAutoLevel = it } },
+                onSetMode = { m -> requestAutoMode(m, sessionStatus, session) { confirmAutoMode = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
             )
-            PrefDivider()
-            PrefStepper(
-                title = "最大重试次数",
-                value = app.maxRetries,
-                range = 1..20,
-                unit = " 次",
-                onChange = { v -> settings.update { s -> s.copy(maxRetries = v) } },
+            PrefNote(
+                "第 1 层（QSO 引擎）按「重发机制」对同一目标重发；" +
+                    "第 2 层（自动程序）负责选台、排队、主叫/混合模式切换与保护限制。",
             )
             PrefDivider()
             PrefAction(
@@ -670,15 +639,15 @@ fun SettingsScreen(
         )
     }
 
-    confirmAutoLevel?.let { lv ->
+    confirmAutoMode?.let { m ->
         AutoEnableConfirmDialog(
-            level = lv,
+            mode = m,
             status = sessionStatus,
             onConfirm = {
-                confirmAutoLevel = null
-                session.setAutoLevel(lv)
+                confirmAutoMode = null
+                session.setAutoMode(m)
             },
-            onDismiss = { confirmAutoLevel = null },
+            onDismiss = { confirmAutoMode = null },
         )
     }
 }
@@ -1030,9 +999,10 @@ private fun PrefAction(
 }
 
 /**
- * VOX 输入电平条（6.1「测试音」下方）。
+ * 输入电平条（6.1「测试音」下方）。
  *
- * 电平来自 native 对输入音频的估算，-60 dB 为满格基准；触发时条色用强调色。
+ * 电平来自 native 对输入音频的估算，-60 dB 为满格基准，**纯显示用**
+ * （观察输入、校准 6.2 的「输入增益」）；不做任何触发判定。
  */
 @Composable
 private fun VoxLevelRow(status: ReceiverStatus) {
@@ -1045,10 +1015,9 @@ private fun VoxLevelRow(status: ReceiverStatus) {
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 6.dp)) {
         Text(
-            "VOX 电平  $label${if (run && status.voxOpen) "  （触发）" else ""}",
+            "输入电平  $label",
             style = MaterialTheme.typography.labelSmall,
-            color = if (run && status.voxOpen) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         val frac = if (run) ((db + 60f) / 60f).coerceIn(0f, 1f) else 0f
         Box(
@@ -1064,7 +1033,7 @@ private fun VoxLevelRow(status: ReceiverStatus) {
                         .fillMaxWidth(frac)
                         .height(8.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (status.voxOpen) MaterialTheme.colorScheme.primary else VoxRxGreen),
+                        .background(VoxRxGreen),
                 )
             }
         }

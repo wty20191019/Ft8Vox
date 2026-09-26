@@ -3,7 +3,6 @@ package com.example.ft8vox
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.VoxConfig
-import com.example.ft8vox.engine.VoxMode
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,9 +33,6 @@ class VoxTxNativeTest {
 
             AudioEngine.setVox(
                 VoxConfig(
-                    mode = VoxMode.AUDIO,
-                    thresholdDb = -40,
-                    delayMs = 300,
                     pttDelayMs = 50,
                     leadToneMs = 100,
                     watchdogMs = 10_000,

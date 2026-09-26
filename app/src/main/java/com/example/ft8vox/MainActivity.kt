@@ -33,10 +33,4 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    override fun onStop() {
-        // 后台不留驻采音（Android 14 起后台麦克风需前台服务，阶段 9 再上前台服务）
-        session.stop()
-        super.onStop()
-    }
 }

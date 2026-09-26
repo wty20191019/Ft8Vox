@@ -145,12 +145,25 @@ object TxQueue {
 
 /**
  * 发射调度（new_ui.md §3.4 第 6 条）：
- * 「本周期剩 > 2.5 s 立即发，否则排下一周期」。
+ * 「本周期剩余时间够播完这一条报文就立即发，否则排下一周期」。
+ *
+ * 判据是**报文波形 + 前导必须能在本时隙内播完**：FT8 报文 12.64 s / 时隙 15 s、
+ * FT4 报文 4.48 s / 时隙 7.5 s，因此本时隙开头约 2 s 都还来得及就地发射 ——
+ * 不必白等一个周期（解码结果本来就是在时隙结束后几百毫秒才到手）。
  */
 object TxScheduler {
 
-    /** 「立即发」所需的最小剩余时间（ms）。 */
+    /** 报文时长未知时的兜底最小剩余时间（ms）。 */
     const val MIN_SEND_NOW_MS = 2500L
+
+    /**
+     * 「立即发」所需的最小剩余时间（ms）＝ 报文时长 + 前导，且不小于 [MIN_SEND_NOW_MS]。
+     *
+     * @param messageMs 报文波形时长（ms，见 `Protocol.messageMs`）
+     * @param preambleMs 发射前导总时长（ms，见 `AppSettings.txPreambleMs`）
+     */
+    fun minSendNowMs(messageMs: Int, preambleMs: Int = 0): Long =
+        maxOf(MIN_SEND_NOW_MS, messageMs.toLong() + preambleMs.coerceAtLeast(0).toLong())
 
     /**
      * 当前是否可立即发射。
@@ -158,7 +171,13 @@ object TxScheduler {
      * @param currentParity 当前时隙奇偶（0=偶，1=奇）
      * @param txParity 我方发射周期
      * @param msToNextSlot 距离下一个时隙起点的毫秒数（≈本周期剩余时间）
+     * @param minNeededMs 所需最小剩余时间；正常调用应传 [minSendNowMs]（报文时长 + 前导），
+     *   默认值 [MIN_SEND_NOW_MS] 仅作报文时长未知时的兜底
      */
-    fun canSendNow(currentParity: Int, txParity: Int, msToNextSlot: Long): Boolean =
-        currentParity == txParity && msToNextSlot >= MIN_SEND_NOW_MS
+    fun canSendNow(
+        currentParity: Int,
+        txParity: Int,
+        msToNextSlot: Long,
+        minNeededMs: Long = MIN_SEND_NOW_MS,
+    ): Boolean = currentParity == txParity && msToNextSlot >= minNeededMs
 }

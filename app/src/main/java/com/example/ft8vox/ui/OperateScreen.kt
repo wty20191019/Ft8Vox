@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.example.ft8vox.SessionService
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
@@ -96,19 +98,12 @@ fun OperateScreen(
                 PackageManager.PERMISSION_GRANTED,
         )
     }
-    var pendingTx by remember { mutableStateOf<PendingTx?>(null) }
-    var afterPermission by remember { mutableStateOf<PendingTx?>(null) }
+    // 录音权限申请期间暂存的待执行动作（不再有「确认发射」弹窗：点了就直接发）
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
     var queryOpen by rememberSaveable { mutableStateOf(false) }
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 发射抽屉当前目标（点选解码行 / 滑呼 / 详情「呼叫」设置）
     var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
-
-    fun execute(action: PendingTx) {
-        when (action) {
-            PendingTx.Cq -> viewModel.startCq()
-            is PendingTx.Reply -> viewModel.answer(action.call, action.grid, action.df)
-        }
-    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -116,23 +111,41 @@ fun OperateScreen(
         permissionGranted = granted
         val action = afterPermission
         afterPermission = null
-        if (granted) {
-            if (action == null) viewModel.start() else execute(action)
-        }
+        if (granted) action?.invoke()
     }
 
-    fun request(action: PendingTx?) {
+    /** 执行一个需要录音权限的动作：已授权直接执行，否则先申请、授权后补执行。 */
+    fun request(action: () -> Unit) {
         if (permissionGranted) {
-            if (action == null) viewModel.start() else execute(action)
+            action()
         } else {
             afterPermission = action
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
+    /** 开始接收（水位图不提供 ▶ 按钮，空态点按与首次进入都走这里）。 */
+    fun requestStart() = request { viewModel.start() }
+
     // 进入操作页且已授权时自动开始接收（水位图不再提供 ▶ 按钮）
     LaunchedEffect(permissionGranted) {
         if (permissionGranted && !status.running) viewModel.start()
+    }
+
+    // 通知权限（Android 13+）：前台服务通知需要它才可见；拒绝时服务照常运行，只是不显示通知
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        // 首次运行时服务可能已先启动（通知被系统拦下），授权后补贴一次
+        if (granted) SessionService.refresh(context)
+    }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     fun copyToClipboard(text: String) {
@@ -221,9 +234,8 @@ fun OperateScreen(
             waterfall = waterfall,
             status = status,
             settings = settings,
-            onSelectFrequency = { viewModel.selectFrequency(it) },
+            onMoveTxFreq = { viewModel.setTxFreq(it) },
             onLongPress = { hz ->
-                viewModel.selectFrequency(hz)
                 val near = rows.minByOrNull { kotlin.math.abs(it.msg.df - hz) }
                 if (near != null && (near.parsed.from != null || near.parsed.isCq)) detailFor = near
             },
@@ -271,7 +283,7 @@ fun OperateScreen(
                     modifier = Modifier
                         .padding(horizontal = 24.dp)
                         .then(
-                            if (!status.running) Modifier.clickable { request(null) } else Modifier,
+                            if (!status.running) Modifier.clickable { requestStart() } else Modifier,
                         ),
                 )
             } else {
@@ -286,7 +298,7 @@ fun OperateScreen(
                             row = row,
                             myCall = status.myCall,
                             onClick = {
-                                viewModel.selectFrequency(row.msg.df)
+                                viewModel.selectTargetFreq(row.msg.df)
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
@@ -297,8 +309,11 @@ fun OperateScreen(
                             onSwipeTarget = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
-                                    viewModel.selectFrequency(row.msg.df)
+                                    viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
+                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
+                                    // 直接开始（闸门只有「发送总开关」），本时隙来得及就本时隙发
+                                    request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                                 }
                             },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },
@@ -325,31 +340,19 @@ fun OperateScreen(
                 targetCall = null
                 viewModel.clearTargetSlot()
             },
-            onStartCq = { pendingTx = PendingTx.Cq },
-            onAnswer = { call, grid, df -> pendingTx = PendingTx.Reply(call, grid, df) },
+            onStartCq = { request { viewModel.startCq() } },
+            onAnswer = { call, grid, df -> request { viewModel.answer(call, grid, df) } },
             onSendNow = { viewModel.sendNow(it) },
             onSendOnce = { viewModel.sendOnce(it) },
             onStopTx = { viewModel.stopTransmit() },
             onTxEnabledChange = { viewModel.setTxEnabled(it) },
-            onHoldTxChange = { viewModel.setHoldTxFreq(it) },
+            onSameFreqChange = { viewModel.setSameFreqTx(it) },
             onOpenAutoProgram = onOpenAutoProgram,
             onMacrosChange = { viewModel.setMacros(it) },
             onEnqueue = { viewModel.enqueueTx(it) },
             onRemoveQueued = { viewModel.removeQueuedTx(it) },
             onMoveQueued = { from, to -> viewModel.moveQueuedTx(from, to) },
             onClearQueue = { viewModel.clearTxQueue() },
-        )
-    }
-
-    pendingTx?.let { pending ->
-        TxConfirmDialog(
-            pending = pending,
-            status = status,
-            onConfirm = {
-                pendingTx = null
-                request(pending)
-            },
-            onDismiss = { pendingTx = null },
         )
     }
 
@@ -364,7 +367,7 @@ fun OperateScreen(
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                     targetCall = from
                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                    pendingTx = PendingTx.Reply(from, row.parsed.grid, row.msg.df)
+                    request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                 }
             },
             onOpenLog = {
@@ -384,14 +387,14 @@ fun WaterfallHeight.screenFraction(): Float = when (this) {
 }
 
 /**
- * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + RX/TX 读数。
+ * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + TX 读数。
  */
 @Composable
 private fun WaterfallBox(
     waterfall: WaterfallFrame?,
     status: ReceiverStatus,
     settings: AppSettings,
-    onSelectFrequency: (Int) -> Unit,
+    onMoveTxFreq: (Int) -> Unit,
     onLongPress: (Int) -> Unit,
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -407,9 +410,8 @@ private fun WaterfallBox(
             frame = waterfall,
             selectedFreqHz = status.selectedFreqHz,
             slotParity = status.slotParity,
-            onSelectFrequency = onSelectFrequency,
+            onMoveTxFreq = onMoveTxFreq,
             modifier = Modifier.fillMaxSize(),
-            rxFreqHz = status.rxFreqHz,
             txing = status.txing,
             onLongPress = onLongPress,
         )
@@ -423,14 +425,9 @@ private fun WaterfallBox(
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
         )
 
-        // RX / TX 读数（右下）
+        // 发射频率读数（右下；红线＝发射频率，拖动红线即可调整）
         Text(
-            String.format(
-                Locale.US,
-                "RX %s   TX %d Hz",
-                status.rxFreqHz?.toString() ?: "--",
-                status.selectedFreqHz,
-            ),
+            String.format(Locale.US, "TX %d Hz", status.selectedFreqHz),
             style = MaterialTheme.typography.labelSmall,
             fontFamily = FontFamily.Monospace,
             color = Color(0xCCFFFFFF),

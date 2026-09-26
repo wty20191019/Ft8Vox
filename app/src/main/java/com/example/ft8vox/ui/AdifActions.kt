@@ -33,7 +33,7 @@ class AdifActions(
  * 创建 ADIF 导入 / 导出动作（日志页与设置页共用）。
  *
  * 通过系统文件选择器（SAF）读写，不需要存储权限。
- * 注意：打开选择器会让 Activity 进入后台，[com.example.ft8vox.MainActivity.onStop] 会停止接收。
+ * 打开选择器会让 Activity 进入后台，但接收由前台服务保活（阶段 9），不再中断。
  */
 @Composable
 fun rememberAdifActions(

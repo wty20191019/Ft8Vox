@@ -616,4 +616,128 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   进包的是重编码后的 `app/src/main/assets/map/world_z5.jpg`。公开版应替换为公有领域影像（如 NASA
   Blue Marble / 夜间灯光，天然深色更配主题）。
 
+### 补记：顶栏只显示 TX 时隙号 + 左滑呼叫 + 「报文塞得下就本时隙发」
+
+用户三条要求：①顶栏只显示 `TX 0/1`，不要 `RX`；②上一个时隙解出的消息在本时隙内显示，**左滑该条即
+设为目标并呼叫**；③「完成 QSO 有个前提：剩余发射时隙的时间够播完这条报文 —— 一个周期 15 s，发一条
+报文约 12 s，所以不用再等一个时隙」。
+
+- **顶栏**（`AppChrome.kt`）：第 2 行由「接收时隙 `RX：n` / 我方时隙 `TX：n`」互切改为**恒显示 `TX：n`**
+  （`txParity`，0/1）。仍保留原有高亮语义：处在发射时隙且允许发射时该段高亮（待发蓝 / 发射中红）；
+  关闭发送总开关只是不高亮（不再隐藏该段），**未开始接收**才整段消失。第 3 行（待发/发射中报文）逻辑未动。
+- **左滑＝呼叫**（`OperateScreen.kt` / `DecodeList.kt`）：左滑露出的背景条文案 `设为目标` → **`呼叫`**；
+  动作由「只设目标」补齐为设目标 + 选发射频率（红线）+ 对齐对方时隙的相反周期 + 直接 `answer()`
+  （与详情面板「呼叫」完全同一条路径，由第 3 层接管）。**确认框随后按要求整体删除**，见下一条补记。
+- **报文时长窗口**（`engine/Ft8Engine.kt` / `ui/SessionViewModel.kt` / `qso/TxCompose.kt`）：新增
+  `Protocol.messageMs`（FT8 = 79 符号 × 160 ms = **12 640 ms**；FT4 = 105 符号 × 42.67 ms ≈ **4 480 ms**）。
+  - `planTx` 就地发射判据由「已过时间 + 前导 ≤ `TX_START_WINDOW_MS`(1200 ms)」**增加**一条
+    「已过时间 + 前导 + 报文时长 ≤ 时隙长」（两条取或，旧窗口作兜底）。
+  - 抽屉「立即发」阈值由固定 `MIN_SEND_NOW_MS`(2.5 s) 改为 `TxScheduler.minSendNowMs(报文时长, 前导)`；
+    前导总时长抽到 `AppSettings.txPreambleMs`（PTT 延迟 + 前导音），`SessionViewModel.txPreambleMs()` 委托它，
+    两处不再各算一遍。
+  - **效果**：FT8 时隙开头 ≈2.3 s（FT4 ≈3 s）内确认呼叫都会落在**紧邻的时隙**（解码结果本来是时隙结束
+    后几百毫秒才到手，原先常被 1200 ms 窗口挡掉 → 白等 30 s）；超出则照旧排下一个我方周期，
+    **报文不会被播进下一个时隙**。`messageMs = 0`（未知）时退回旧行为，因此既有单测无需改动。
+- **测试**：`:app:assembleDebug` + `:app:testDebugUnitTest` BUILD SUCCESSFUL；JVM **266 例 / 30 suite**
+  全过（`VoxPlanTest` 8→13：报文塞得下/塞不下/未提供时长/时隙偏移/FT4 更宽；`TxComposeTest` 14→15：
+  `minSendNowMs`；`TxParityAutoTest` 20→21：整条报文落在同一时隙）。
+- **验收**：`docs/REGRESSION.md` **P 组（新增）** + M 组顶栏项；模拟器可预演项已补记（顶栏指示 +
+  抽屉提示文案；左滑呼叫需解码输入，模拟器不可验证）。
+
+### 补记：删除所有「确认发射」弹窗（发射闸门只留「发送总开关」）
+
+用户要求「**删除所有的确认发射**」。落地：
+
+- **删除 `ui/QsoPanel.kt`**（`sealed interface PendingTx` + `TxConfirmDialog`，「确认发射」标题、
+  「开始呼叫 CQ / 应答 `<呼号>`」、呼号 / 频率 / 时隙 / 协议一览 + 「确认发射」按钮）——文件整体移除。
+- **触发点改为点下即执行**：
+  - `OperateScreen.kt`：`pendingTx` 状态与 `execute(action)` 分支删除，改为按「录音权限」处理的
+    `request(action: () -> Unit)`（未授权则暂存到 `afterPermission` 并在授权回调里补执行，语义与原来
+    一致，只是不再区分动作类型）。CQ / 应答 / 左滑 / 详情「呼叫」四处都改为 `request { … }`。
+  - `GridScreen.kt`：地图页呼号标记的「应答」原先弹确认框，改为 `replyTo(call, grid, df)`（同样只做权限处理）。
+- **为什么安全**：发射的唯一闸门始终是**「发送总开关」**（`txEnabled`，默认关、不持久化）；总开关为关时
+  `startCq()` / `answer()` 内部直接返回并提示「请先打开「发射」开关」，所以删掉二次确认不会造成误发。
+  「停止发射」/ 紧急中止不变。
+- **保留**「启用自动程序」确认（`AutoEnableConfirmDialog`，模式 0 → 1/2）：它不是逐条发射确认，且确认后
+  会**自动打开总开关**并开始无人值守发射，是唯一保留的确认框（`new_ui.md` §3.4 已写明）。
+- **文档**：`new_ui.md` §3.3 左滑项 + §3.4 新增「发射闸门（定稿）」段落；`REGRESSION.md` M 组两处改写 +
+  新增「手动发射没有任何确认框」验收项、P 组按新行为改写、§4 模拟器可预演项；`ROADMAP.md` 阶段 9 进度。
+- **测试**：`SessionViewModel` 侧无逻辑改动（只改了注释），`assembleDebug` + `testDebugUnitTest`
+  **BUILD SUCCESSFUL**、JVM **266 例 / 30 suite** 全过（无单测覆盖 UI 确认框，故数量不变）。
+
+### 补记：VOX 指示文案随触发方式翻译（修「静音检测也显示触发」）
+
+用户问「VOX 触发（音频检测 / 静音检测）是干什么用的，FT8CN 都没有，要不要删」。结论：**保留功能、只修文案**
+（用户拍板）。
+
+- **它是什么**：`voxOpen` 来自 native 对**输入音频**的 RMS 平滑电平按 `mode`/`thresholdDb`/`delayMs`
+  判出的布尔量，**只用于状态指示，不参与发射门控**（发射时序由 `pttDelayMs` / `leadToneMs` / `watchdogMs`
+  决定）。显示在底栏 `VOX -xx dB`、顶栏「音频」速览、设置页 6.1 电平条三处。FT8CN 没有这个「无 CAT 时的
+  信道活动近似指示」，属本项目自造；用户选择不删（电平条还是校「输入增益」的唯一参考）。
+- **修的 bug**：原实现三处一律把 `voxOpen=true` 显示成「触发 / `●` / （触发）」。但 `voxOpen` 的含义随方式反转
+  （静音检测下 `true` 表示**安静**），于是「静音检测」在安静信道反而亮起「触发」，语义相反。
+- **改法**（`ui/AppChrome.kt` 新增两个纯函数，UI 三处统一走它们）：
+  - `voxHasSignal(trigger, open)`：`SILENCE` 取反、`AUDIO` 直通 → 归一成「有信号」；
+  - `voxStateLabel(trigger, open, running)` → 「未运行 / 有信号 / 空闲（音频检测）/ 静音（静音检测）」；
+  - 高亮与底栏 `●` 一律以「有信号」为准；`voxLabel(levelDb, signal, running)` 参数由 `open` 改名 `signal`，
+    `BottomStatusBar` 的同名参数改为 `voxSignal`（`MainShell` 传入翻译后的值）；
+  - 设置页 `VoxLevelRow(status, trigger)` 用同一套文案；「VOX 触发」副标题与「VOX 阈值」副标题补上
+    「仅作状态指示，不影响发射」；顶栏速览里 `触发  …` 一行改为 `判定  …`。
+- **文档**：`new_ui.md` §6.1、`REGRESSION.md` K 组（VOX 指示项按新语义改写 + 组首说明）、`JNI-CONTRACT.md`
+  （`mode`/`thresholdDb` 说明 + 「Kotlin 侧必须按 mode 翻译」）。native 只改注释，无行为改动。
+- **测试**：`VoxPlanTest` 13→14（新增 `VOX 指示随触发方式翻译…`：四种组合的有信号判定 + 状态词 + 未运行），
+  JVM **267 例 / 30 suite** 全过，`assembleDebug` **BUILD SUCCESSFUL**。
+  —— **本条随后被下一条补记推翻**（用户改主意：整套删掉）。
+
+### 补记：整体删除「VOX 触发」状态指示与三项相关设置
+
+用户随后改主意：「**不要这个状态指示和相关设置了**」。于是把上一条补记修的整套东西删掉，
+只保留**输入电平读数**（校「输入增益」时仍需要）。
+
+- **设置页 6.1**：删掉 `VOX 触发`（`PrefChoice`）、`VOX 延迟`、`VOX 阈值` 三项；`app.voxTrigger/voxDelayMs/voxThresholdDb`
+  与 `VoxTrigger` 枚举、`SettingsRepository` 的三个键与读写全部移除（DataStore 里的旧键留存不影响）。
+  「INPUT 电平条」由 `VoxLevelRow(status, trigger)` 回到 `VoxLevelRow(status)`：**只显示 dB 与进度条**，
+  标题 `VOX 电平 → 输入电平`，去掉「（触发）」与强调色高亮。6.2「输入增益」副标题同步改口径。
+- **UI 指示**：`AppChrome.kt` 删除 `voxHasSignal` / `voxStateLabel`，`voxLabel(levelDb, running)` 只输出
+  `电平 -42 dB` / `电平 --`（底栏不再有 `●`，也不再高亮）；顶栏「音频」速览删掉「状态」与「判定」两行，
+  「电平」改为「输入电平」；`BottomStatusBar` 去掉 `voxSignal` 参数（`MainShell` 同步）。
+- **native**：`audio_engine_t` 删掉 `vox_trigger` / `vox_threshold_db` / `vox_delay_ms` / `vox_open` /
+  `vox_candidate` / `vox_change_ms`；`update_vox()` 收缩为 `update_level()`（只做快攻击/慢释放平滑后落
+  `vox_level_db_x10`）；`nativeSetVox` 只收 `pttDelayMs/leadToneMs/watchdogMs` 三个参数；
+  `nativeGetState` 由 **12 → 11** 项，`[10] = vox_level_db×10`（`AudioState` 同步删 `voxOpen`）。
+- **保留**：`VoxConfig` / `nativeSetVox` / 6.1 分组名「电台（仅 VOX）」—— 前导静音 + 前导音仍是
+  「让电台 VOX 抢先键控」的手段，与显示无关。
+- **文档**：`new_ui.md` §1/§6.1/§6.2/§7、`REGRESSION.md` §2 A 组与 K 组、§4 与 §5、
+  `JNI-CONTRACT.md`（6.1 表 + `nativeGetState` 索引 + `state()` 行 + 增益说明）、`ROADMAP.md` 阶段 9。
+- **测试**：`VoxPlanTest` 回到 13 例（删掉上一条补记新增的用例，只留 `电平文案区分未运行与读数`），
+  JVM **266 例 / 30 suite** 全过；`assembleDebug` + `testDebugUnitTest` **BUILD SUCCESSFUL**。
+
+### 补记：地图页世界无缝循环（横向 + 纵向）
+
+用户要求「改地图无缝循环连接 / 连线文字取短的方向画 / 图上的网格标注只在最近当前可见部分绘制一次」，
+并先确认了细节：**横向与纵向都循环**、「网格标注」= Maidenhead 方格色块、唯一性以**离视口中心最近**为基准、
+**呼号点 / CQ 红旗 / 连线也统一只画最近一份且连线走短弧**。
+
+- **投影层（`grid/MapProjection.kt` 重写）**：视口状态由 `centerLon/centerLat`（带 `clamped()` 边界钳制）
+  改为 **`centerU/centerV`（世界坐标，mod 1）**，`clamped()` 删除，新增工厂 `at(vw, vh, scale, lat, lon)`、
+  `wrap01()`、`visibleWorldRange()`、`nearestCopy()` / `copyNearestTo()`（整数副本号选择）、
+  `linkEnds()`（一条连线的两个端点，终点相对起点取最近副本 → 短弧）、
+  `cellRect()`（方格中心 + 像素尺寸，按中心所在副本一次性折算）、新的 `PlotRect` / `WorldRange` 类型；
+  `toScreen()` 内置 `nearestCopy()`，`panBy`/`zoomBy` 归一化 `mod 1`，`toGeo` 折回取值范围。
+  `centerLon`/`centerLat` 变成派生属性（调用方无感）。
+- **底图（`ui/WorldBaseMap.kt`）**：`visibleBlocks()` → `blockDraws()`，返回 `MapBlockDraw(block, ku, kv)`
+  （块 + 世界副本偏移）；`MapBlock` 仍是缓存标识（**不含副本号**）→ 同一块的多份副本共用解码图，
+  跨缝平移不会重复解码；`ensure()` 接收绘制列表并按 `block.key` 钉住。
+- **绘制（`ui/GridMap.kt`）**：底图按副本绘制（`uv + ku/kv`）；无底图时的纯色矩形也按副本铺满；
+  网格方块改用 `cellRect()`（跨缝不撕裂、只画一份）；连线改用 `linkEnds()`（短弧，文字/方块沿线走）。
+  呼号点 / CQ 旗 / 我方台站无需改动 —— `toScreen()` 已内置最近副本。
+- **视口（`ui/GridScreen.kt`）**：初始化 `fill()` 不变；重建视口时直接 `copy(viewWidth, viewHeight)`
+  （不再经经纬度往返）；`centeredOn()` 改走 `MapProjection.at()`。
+- **测试**：`MapProjectionTest` 12 → 19 例（钳制类用例改写为循环类：整世界平移回原处、跨缝不被钳回、
+  `fill` 尊重给定中心；新增横/纵向跨缝目标落在视口内、最近副本唯一、短弧连线、跨缝方格完整、`toGeo` 折回）；
+  JVM **273 例 / 30 suite** 全过，`assembleDebug` + `testDebugUnitTest` **BUILD SUCCESSFUL**。
+  验收见 `REGRESSION.md` F 组（新增 4 项，含真机/模拟器预演项）。
+- **已知取舍**：纵向循环越过 ±85.05° 会接另一侧极区（墨卡托极点发散，必有纬度跳变，已与用户确认）；
+  最小缩放仍是「世界适应窗口」，不能缩到同时看到多份世界；地图底图版权仍为「仅测试自用」。
+
 

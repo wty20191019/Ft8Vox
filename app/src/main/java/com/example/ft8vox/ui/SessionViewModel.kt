@@ -3,6 +3,8 @@ package com.example.ft8vox.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ft8vox.SessionService
+import com.example.ft8vox.SessionServiceBridge
 import com.example.ft8vox.container
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.log.QsoComment
@@ -21,12 +23,11 @@ import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.VoxConfig
-import com.example.ft8vox.engine.VoxMode
 import com.example.ft8vox.engine.WaterfallInfo
-import com.example.ft8vox.qso.AutoDecision
-import com.example.ft8vox.qso.AutoLevel
-import com.example.ft8vox.qso.AutoProgramSelector
+import com.example.ft8vox.qso.AutoAction
+import com.example.ft8vox.qso.AutoMode
 import com.example.ft8vox.qso.AutoProgramSettings
+import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.DEFAULT_MACROS
@@ -39,7 +40,6 @@ import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
 import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
-import com.example.ft8vox.data.settings.VoxTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -88,7 +88,7 @@ data class ReceiverStatus(
     val txEnabled: Boolean = false,
     /** 我方发射所在的周期：0=偶数，1=奇数（自动按手机 UTC 时间锁定）。 */
     val txParity: Int = 0,
-    /** 已确认发射（防误发闸门）。 */
+    /** 已武装本次发射（有待发报文，等时隙到点）。 */
     val txArmed: Boolean = false,
     /** 距离下一个我方发射时隙的毫秒数。 */
     val txCountdownMs: Long = 0,
@@ -98,24 +98,26 @@ data class ReceiverStatus(
     /** 最近一次发射的报文与所属时隙起点。 */
     val lastTxText: String? = null,
     val lastTxSlotMs: Long = 0,
-    /** 选中的收听/应答频率（对应瀑布绿线）；未选时为 null。 */
-    val rxFreqHz: Int? = null,
     // ---- JTDX 风格操作（阶段 7c） ----
-    /** 锁定发射频率（应答时 TX 不跟随 RX）。 */
-    val holdTxFreq: Boolean = false,
     /**
-     * 自动程序策略（来自设置；对应 FT8CN「自动程序」菜单）。
+     * 同频发射：true＝选台时发射频率（红线）跟到目标频率；false＝异频发射（发射固定在设定频率）。
+     */
+    val sameFreqTx: Boolean = true,
+    /**
+     * 自动程序策略（来自设置；对应《QSO 自动系统设计文档》§五菜单）。
      *
-     * **等级即开关**：`level == MANUAL`（「0 手动选择」）＝自动程序关闭，1+ ＝开启；
-     * 不存在独立的「启用/关闭」状态（见 [SessionViewModel.setAutoLevel]）。
+     * **模式即开关**：`mode == MANUAL`（「0 手动模式」）＝自动程序关闭，1/2 ＝开启；
+     * 不存在独立的「启用/关闭」状态（见 [SessionViewModel.setAutoMode]）。
      */
     val autoProgram: AutoProgramSettings = AutoProgramSettings(),
+    /** 第 2 层当前阶段文案（主叫／应答／监听），关闭自动程序时为 null。 */
+    val autoPhaseLabel: String? = null,
+    /** 第 2 层目标队列长度（等待逐个完成的回应者）。 */
+    val autoQueueSize: Int = 0,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
-    // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
-    /** VOX 判定为已触发。 */
-    val voxOpen: Boolean = false,
-    /** 平滑后的输入电平（dBFS，下限约 -100）。 */
+    // ---- PTT / 输入电平（U7b） ----
+    /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用。 */
     val voxLevelDb: Float = -100f,
 )
 
@@ -150,7 +152,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近 3 条通联（操作页展示）。 */
     val recentQso: Flow<List<QsoEntity>> = qsoRepo.observeRecent(3)
 
-    /** 已通联索引（呼号/网格/前缀），供操作页过滤与高亮、Call 1st 共用。 */
+    /** 已通联索引（呼号/网格/前缀），供操作页过滤与高亮、自动程序共用。 */
     private val _worked = MutableStateFlow(WorkedIndex.EMPTY)
     val workedIndex: StateFlow<WorkedIndex> = _worked.asStateFlow()
 
@@ -166,11 +168,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var wfFloor = -1
 
     private var lastSlotsDecoded = 0L
+    /** 上次把「实时读数」写进 [ReceiverStatus] 的 UTC 毫秒数（见 [pollOnce] 的节流说明）。 */
+    private var lastLivePublishMs = 0L
     private var pendingDecodes = mutableListOf<DecodeResult>()
     private var lastTxSlotIndex = -1L
     private var txJustFinished = false
     /** 当前正在播放的报文是否为「一次性发射」（发完不再推进 QSO 状态机）。 */
     private var manualInFlight = false
+
+    /**
+     * 发射「作废代次」：每次中止发射（[stopTransmit]）时 +1。
+     *
+     * 用于丢弃**已排程但还没开始写声卡**的那次发射：`txJob.cancel()` 打断不了 native
+     * 阻塞写入，若某个协程已经跑过检查、正要做 `playTx`，中止后它不能再出声。
+     * 由 UI 线程写、IO 线程读，因此标 `@Volatile`。
+     */
+    @Volatile
+    private var txAbortGen = 0
 
     /**
      * 自动周期模式下锁定的发射周期（0/1）；未锁定为 null。
@@ -188,16 +202,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pinnedTxParity: Int? = null
 
-    /**
-     * 上一次失败的 QSO 对手呼号：若它仍在本批解码中出现，自动程序优先重试它。
-     *
-     * 由 [applyQsoProgress] 在 QSO 失败时记下；重试次数超过 [AUTO_FAIL_RETRY_MAX] 或
-     * 通联完成/关闭自动程序时清空。
-     */
-    private var retryCall: String? = null
+    /** 第 2 层自动程序调度器（目标队列 / 主叫 / 混合 / 保护限制）。 */
+    private val scheduler = AutoScheduler()
 
-    /** 同一对手连续失败的重试上限（超过则换台，避免无限重试）。 */
-    private var retryLeft = 0
+    /**
+     * 第 3 层：用户是否正在手动接管（设了目标 / 手动发了 CQ），此时第 2 层保持暂停。
+     *
+     * 手动 QSO 结束或被「停止发射」取消后置回 false 并 `scheduler.resume()`。
+     */
+    private var manualQso = false
+
+    /**
+     * QSO 已完成、但最后一条（RR73/73）还没发出去。
+     *
+     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失。
+     */
+    private var pendingAutoFinish = false
 
     /** 最近一次读到的设置（供 start() 组装 native 配置）。 */
     private var latestSettings = AppSettings()
@@ -223,6 +243,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
     private var lastSlotOffsetMs: Int? = null
 
+    /** 发射频率（红线）拖动期间的落盘防抖任务（见 [setTxFreq]）。 */
+    private var txFreqPersistJob: Job? = null
+
     /**
      * 引擎代次：每次重建 native 引擎（[start]）都 +1。
      *
@@ -231,6 +254,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 迟到发射」直接丢弃，避免把旧协议的波形发到新引擎上。
      */
     private var engineGen = 0
+
+    /** 前台服务是否已启动（阶段 9：后台保活）。 */
+    private var serviceOn = false
+
+    /**
+     * 临时抑制前台服务的启停。
+     *
+     * [restartForProtocol] 内部会成对调用 `stop()` + `start()`，若照常同步服务会「停服务→
+     * 起服务」造成通知闪烁，故这一小段窗口内跳过服务同步，结束后统一收口一次。
+     */
+    private var serviceSuppressed = false
 
     /** 「含我呼号哔声」提示音（U7d）。 */
     private val alertTone = AlertTone()
@@ -250,6 +284,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+        // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
+        viewModelScope.launch {
+            SessionServiceBridge.stopRequests.collect { stop() }
+        }
     }
 
     // ---- 设置 → 运行状态 ----
@@ -268,7 +306,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
                     txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
                 ),
-                holdTxFreq = s.holdTxFreq,
+                sameFreqTx = s.sameFreqTx,
                 autoProgram = s.auto,
                 // 协议绑定在 native 引擎上（时隙长度 15s/7.5s 与调制方式），运行中不能直接改：
                 // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
@@ -280,7 +318,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (_status.value.running && s.protocol != _status.value.protocol) {
             restartForProtocol(s.protocol)
         }
-        qsoEngine.configure(s.myCall, s.myGrid, s.maxRetries)
+        qsoEngine.configure(
+            s.myCall,
+            s.myGrid,
+            maxRetries = s.auto.retryLimit,
+            giveUp = s.auto.giveUpAfterRetry,
+        )
+        scheduler.configure(s.auto, s.myCall, s.myGrid)
         applyDecodeParams(s)
         applyVox(s)
         applyAudio(s)
@@ -296,7 +340,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 把 VOX/PTT 配置下发给 native（热生效）。
+     * 把 PTT 配置下发给 native（热生效）。
      * 引擎未初始化时 [AudioEngine.setVox] 为无操作；[start] 会用 force 重下发一次。
      */
     private fun applyVox(s: AppSettings, force: Boolean = false) {
@@ -306,11 +350,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AudioEngine.setVox(cfg)
     }
 
-    /** 由设置组装 native 的 VOX/PTT 配置。 */
+    /** 由设置组装 native 的 PTT 配置。 */
     private fun voxConfigOf(s: AppSettings): VoxConfig = VoxConfig(
-        mode = if (s.voxTrigger == VoxTrigger.SILENCE) VoxMode.SILENCE else VoxMode.AUDIO,
-        thresholdDb = s.voxThresholdDb,
-        delayMs = s.voxDelayMs,
         pttDelayMs = s.pttDelayMs,
         leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
         watchdogMs = s.watchdogMs,
@@ -382,48 +423,61 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(protocolName = protocol.name) }
     }
 
-    fun selectFrequency(hz: Int) {
+    /**
+     * 「移动红线」：把发射频率直接设到 [hz]（瀑布单击 / 拖动，以及任何显式设定）。
+     *
+     * 拖动会高频调用本方法，落盘做了 250 ms 防抖（[txFreqPersistJob]），UI 状态仍逐帧更新。
+     */
+    fun setTxFreq(hz: Int) {
         val v = clampFreq(hz)
-        val hold = _status.value.holdTxFreq
-        _status.update {
-            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-        }
-        if (!hold) persist { it.copy(selectedFreqHz = v) }
-    }
-
-    /** 直接微调我方发射频率（TX）。 */
-    fun nudgeTxFreq(delta: Int) {
-        val v = clampFreq(_status.value.selectedFreqHz + delta)
+        if (_status.value.selectedFreqHz == v) return
         _status.update { it.copy(selectedFreqHz = v) }
-        persist { it.copy(selectedFreqHz = v) }
-    }
-
-    fun setHoldTxFreq(value: Boolean) {
-        _status.update { it.copy(holdTxFreq = value) }
-        persist { it.copy(holdTxFreq = value) }
+        txFreqPersistJob?.cancel()
+        txFreqPersistJob = viewModelScope.launch {
+            delay(250)
+            settingsRepo.update { it.copy(selectedFreqHz = v) }
+        }
     }
 
     /**
-     * 设置自动程序等级 —— **等级即开关**：`0 手动选择`＝关闭，1+ ＝开启。
+     * 选台：**同频发射**时把红线移到目标频率 [hz]；**异频发射**时保持设定频率不动。
      *
-     * 由「0 手动选择」切到 1+ 时，UI 需先弹防误发确认（`AutoEnableConfirmDialog`）再调本方法；
+     * 用于点解码行 / 应答 CQ / 自动程序选到目标（实际发射频率一律取红线位置 [ReceiverStatus.selectedFreqHz]）。
+     */
+    fun selectTargetFreq(hz: Int) {
+        if (!_status.value.sameFreqTx) return
+        setTxFreq(hz)
+    }
+
+    /** 同频发射（true，选台时红线跟随目标）/ 异频发射（false，红线固定在设定频率）。 */
+    fun setSameFreqTx(value: Boolean) {
+        _status.update { it.copy(sameFreqTx = value) }
+        persist { it.copy(sameFreqTx = value) }
+    }
+
+    /**
+     * 设置自动程序工作模式 —— **模式即开关**：`0 手动模式`＝关闭，1 主叫 / 2 混合＝开启。
+     *
+     * 由「0 手动模式」切到 1/2 时，UI 需先弹防误发确认（`AutoEnableConfirmDialog`）再调本方法；
      * 确认后若「发送总开关」为关，先 [setTxEnabled] 打开（总开关此前未锁定时顺带按手机 UTC
      * 时间锁定发射时隙）—— 总开关仍是「能不能发」的唯一权限。
      *
-     * 切回「0 手动选择」只停止自动化，**不动「发送总开关」**（手动发送仍需要这个权限）。
+     * 切回「0 手动模式」只停止自动化，**不动「发送总开关」**（手动发送仍需要这个权限）。
      */
-    fun setAutoLevel(level: AutoLevel) {
-        if (level == _status.value.autoProgram.level) return
-        if (level == AutoLevel.MANUAL) {
-            retryCall = null
-            retryLeft = 0
+    fun setAutoMode(mode: AutoMode) {
+        if (mode == _status.value.autoProgram.mode) return
+        if (mode == AutoMode.MANUAL) {
+            manualQso = false
+            scheduler.disable()
             _status.update {
                 it.copy(
-                    autoProgram = it.autoProgram.copy(level = level),
-                    status = "自动程序已关闭（等级：0 手动选择，发送总开关不变）",
+                    autoProgram = it.autoProgram.copy(mode = mode),
+                    autoPhaseLabel = null,
+                    autoQueueSize = 0,
+                    status = "自动程序已关闭（0 手动模式，发送总开关不变）",
                 )
             }
-            persist { it.copy(auto = it.auto.copy(level = level)) }
+            persist { it.copy(auto = it.auto.copy(mode = mode)) }
             return
         }
         if (!canOperate) {
@@ -432,13 +486,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!_status.value.txEnabled) setTxEnabled(true)
         val parity = parityLabel(_status.value.txParity)
+        manualQso = false
+        scheduler.enable(AudioEngine.utcNowMs())
         _status.update {
             it.copy(
-                autoProgram = it.autoProgram.copy(level = level),
-                status = "自动程序已启用（${level.label}，$parity）",
+                autoProgram = it.autoProgram.copy(mode = mode),
+                autoPhaseLabel = phaseLabel(scheduler.currentPhase()),
+                autoQueueSize = 0,
+                status = "自动程序已启用（${mode.label}，$parity）",
             )
         }
-        persist { it.copy(auto = it.auto.copy(level = level)) }
+        persist { it.copy(auto = it.auto.copy(mode = mode)) }
+    }
+
+    /** 第 2 层阶段的显示文案。 */
+    private fun phaseLabel(phase: AutoScheduler.Phase): String = when (phase) {
+        AutoScheduler.Phase.CALLING -> "主叫（发 CQ / 排队回应者）"
+        AutoScheduler.Phase.ANSWERING -> "应答（监听并应答别人的 CQ）"
     }
 
     /** 改一项自动程序策略开关。 */
@@ -451,7 +515,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(filterTags = tags) }
     }
 
-    /** 忽略一个呼号（不再显示其解码，也不参与 Call 1st）。 */
+    /** 忽略一个呼号（不再显示其解码，也不参与自动程序选台）。 */
     fun ignoreCall(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
         persist { it.copy(ignoredCalls = it.ignoredCalls + c) }
@@ -513,11 +577,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 发送总开关（默认关 = 只接收）：唯一回答「**能不能发**」。
      *
      * 它自己**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定，
-     * 见 `TxDrawer` 收起态条与 [setAutoLevel]。
+     * 见 `TxDrawer` 收起态条与 [setAutoMode]。
      *
      * - 开启：允许发射；总开关此前未锁定时按手机 UTC 时间锁定「下一个来得及准备的时隙」。
-     * - 关闭：立即停发、解除时隙锁定与目标固定；**不动自动程序等级** —— 开回总开关即按原等级继续
-     *   （不能发射时自动程序只是待命，没必要把等级清掉）。
+     * - 关闭：立即停发、解除时隙锁定与目标固定；**不动自动程序模式** —— 开回总开关即按原模式继续
+     *   （不能发射时自动程序只是待命，没必要把模式清掉）。
      *
      * 因不再提供周期设置，用户通过在不同时机重开总开关来换发射时隙。
      */
@@ -525,13 +589,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!enabled) {
             autoParity = null
             pinnedTxParity = null
-            retryCall = null
-            retryLeft = 0
-            stopTransmit()
+            scheduler.pause()
+            stopTransmit(resumeAuto = false)
             _status.update {
                 it.copy(
                     txEnabled = false,
-                    status = if (it.autoProgram.level.enabled) {
+                    status = if (it.autoProgram.mode.enabled) {
                         "发送已关闭（只接收）｜自动程序待命（开总开关即继续）"
                     } else {
                         "发送已关闭（只接收）"
@@ -540,9 +603,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
+        scheduler.resume()
         relockAutoParityIfNeeded()
         val p = _status.value.txParity
-        _status.update { it.copy(txEnabled = true, txParity = p, status = "发送已开启（允许发射，${parityLabel(p)}）") }
+        _status.update {
+            it.copy(
+                txEnabled = true,
+                txParity = p,
+                autoPhaseLabel = if (it.autoProgram.mode.enabled) phaseLabel(scheduler.currentPhase()) else null,
+                autoQueueSize = if (it.autoProgram.mode.enabled) scheduler.queuedCount() else 0,
+                status = "发送已开启（允许发射，${parityLabel(p)}）",
+            )
+        }
     }
 
     /**
@@ -612,6 +684,37 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _messages.value = emptyList()
     }
 
+    // ---- 前台服务（阶段 9：后台保活） ----
+
+    /**
+     * 让前台服务的启停与会话运行状态保持一致。
+     *
+     * 服务负责两件事：以 `microphone` 类型进入前台（Android 14+ 后台访问麦克风的前提），
+     * 以及在通知栏常驻会话状态。会话开始/停止时调用；[serviceSuppressed] 期间跳过。
+     */
+    private fun syncService() {
+        if (serviceSuppressed) return
+        if (_status.value.running) {
+            if (!serviceOn) {
+                try {
+                    SessionService.start(getApplication<Application>())
+                    serviceOn = true
+                } catch (e: Exception) {
+                    // Android 12+ 从后台启动前台服务会被系统拒绝；此时保持应用内接收，不让异常上抛
+                    _status.update { it.copy(status = "前台服务启动失败：${e.message}") }
+                }
+            }
+        } else if (serviceOn) {
+            SessionService.stop(getApplication<Application>())
+            serviceOn = false
+        }
+    }
+
+    /** 把当前会话状态推给前台服务通知（`StateFlow` 只在文案变化时才真正刷新通知）。 */
+    private fun publishServiceStatus() {
+        SessionServiceBridge.statusText.value = serviceStatusText(_status.value)
+    }
+
     // ---- 采集 ----
 
     fun start() {
@@ -664,14 +767,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         startPolling()
+        syncService()
+        publishServiceStatus()
     }
 
     fun stop() {
-        stopTransmit()
+        stopTransmit(resumeAuto = false)
+        scheduler.disable()
+        manualQso = false
         stopPollingAndJoin()
         pinnedTxParity = null
-        retryCall = null
-        retryLeft = 0
         AudioEngine.stopCapture()
         AudioEngine.release()
         wfInfo = null
@@ -689,6 +794,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 qso = qsoEngine.stop(),
             )
         }
+        // 只用停服务收口：不要在这里推送「已停止」文案，否则通知会在服务销毁前被重贴成僵尸通知
+        syncService()
     }
 
     /**
@@ -702,9 +809,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val cur = _status.value
         val txWasOn = cur.txEnabled
         val wasTxing = cur.txing
-        stop()
-        _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
-        start()
+        // 抑制服务启停：这段 stop()/start() 是原子的，服务无需跟着停一下
+        serviceSuppressed = true
+        try {
+            stop()
+            _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+            start()
+        } finally {
+            serviceSuppressed = false
+        }
+        syncService()
+        publishServiceStatus()
         if (!_status.value.running) return
         if (txWasOn) setTxEnabled(true)
         _status.update {
@@ -721,10 +836,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val canOperate: Boolean get() = _status.value.myCall.isNotEmpty()
 
     /**
-     * 开始呼叫 CQ（调用前应由 UI 弹出防误发确认）。
-     * 若采集未启动会先自动启动。
+     * 开始呼叫 CQ。若采集未启动会先自动启动。
+     *
+     * 唯一闸门是「发送总开关」（`txEnabled`）：打开即允许发射，UI 侧不再弹确认框。
+     * 用户手动发起＝第 3 层：会暂停第 2 层调度（手动 QSO 结束后自动恢复）。
      */
     fun startCq() {
+        manualIntervention()
+        startCqInternal()
+    }
+
+    private fun startCqInternal() {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
@@ -743,8 +865,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
-    /** 应答指定 CQ（调用前应由 UI 弹出防误发确认）。 */
+    /** 应答指定 CQ。用户手动发起＝第 3 层。 */
     fun answer(call: String, grid: String?, theirDf: Int? = null) {
+        manualIntervention()
+        answerInternal(call, grid, theirDf)
+    }
+
+    private fun answerInternal(call: String, grid: String?, theirDf: Int? = null) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
@@ -753,15 +880,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "请先打开「发射」开关") }
             return
         }
-        // 未锁定时把 TX 跟到对方的 DF（点谁打谁）
-        if (theirDf != null && theirDf > 0) {
-            val hold = _status.value.holdTxFreq
-            val v = clampFreq(theirDf)
-            _status.update {
-                it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-            }
-            if (!hold) persist { it.copy(selectedFreqHz = v) }
-        }
+        // 同频发射：把红线跟到对方频率（异频发射则保持设定频率）
+        if (theirDf != null && theirDf > 0) selectTargetFreq(theirDf)
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
@@ -770,7 +890,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
-        val p = qsoEngine.answer(call, grid)
+        val p = qsoEngine.startResponderQso(call, grid)
         if (!p.active) {
             _status.update { it.copy(status = "无法应答（呼号无效或与自身相同）") }
             return
@@ -782,8 +902,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 一次性发射一条报文（长按解码行的「逐条发送」）。
      *
      * 不进入 QSO 自动序列，发完即解除武装；QSO 进行中不允许（避免打断自动序列）。
+     * 用户手动发起＝第 3 层：会暂停第 2 层调度。
      */
     fun sendOnce(text: String) {
+        manualIntervention()
+        sendOnceInternal(text)
+    }
+
+    private fun sendOnceInternal(text: String) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
@@ -829,12 +955,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) return
         if (!armPlayback()) return
 
-        txJob?.cancel()
+        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
         val (pttMs, leadMs) = txPreambleParts()
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val st = _status.value
                 val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射「$trimmed」（$written 帧）") }
@@ -849,14 +977,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 紧急停止发射：解除武装并中止可能正在进行的播放。
      *
-     * **只停本次发射，不动自动程序等级**：等级 ≥1 时自动程序下一时隙会继续（要全停请关
-     * 「发送总开关」，或把等级切回「0 手动选择」）。
+     * **只停本次发射，不动自动程序模式**：模式 ≥1 时自动程序下一时隙会继续（要全停请关
+     * 「发送总开关」，或把模式切回「0 手动模式」）。
+     *
+     * 第 3 层语义（文档 §3.3）：若这是用户手动接管的 QSO，取消后立即把控制权交还第 2 层
+     * （[resumeAuto]，队列与阶段原样保留）。[resumeAuto]=false 用于「关总开关」等场景：
+     * 此时自动程序应当待命而不是马上接续。
+     *
+     * 中止走 [AudioEngine.abortTx]（非阻塞、不加锁）：**不要**在这里调
+     * `AudioEngine.stopPlayback()` —— 关流要等 `tx_mutex`，而阻塞式 `AAudioStream_write`
+     * 会整段独占它（FT8 约 16 s），UI 线程一调用就卡死（ANR）。
      */
-    fun stopTransmit() {
-        txJob?.cancel()
-        txJob = null
-        AudioEngine.stopPlayback()
+    fun stopTransmit(resumeAuto: Boolean = true) {
+        abortTransmit()
+        pendingAutoFinish = false
         autoParity = null
+        if (resumeAuto) resumeAutoAfterManual()
         val p = qsoEngine.stop()
         _status.update {
             it.copy(
@@ -865,13 +1001,53 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 manualTxText = null,
                 qso = p,
                 txCountdownMs = 0,
-                status = if (it.autoProgram.level.enabled) {
+                autoPhaseLabel = if (it.autoProgram.mode.enabled) phaseLabel(scheduler.currentPhase()) else null,
+                autoQueueSize = if (it.autoProgram.mode.enabled) scheduler.queuedCount() else 0,
+                status = if (it.autoProgram.mode.enabled) {
                     "已停止发射｜自动程序仍开启（要全停请关「发送总开关」）"
                 } else {
                     "已停止发射"
                 },
             )
         }
+    }
+
+    /**
+     * 第 3 层：用户手动接管（设目标 / 手动发 CQ / 逐条发送）时暂停第 2 层调度。
+     *
+     * 第 2 层的队列与阶段状态**原样保留**（文档 §3.3「不修改第 2 层的调度状态」），
+     * 手动 QSO 结束或被取消后再恢复。
+     */
+    private fun manualIntervention() {
+        if (!_status.value.autoProgram.mode.enabled) return
+        manualQso = true
+        scheduler.pause()
+        _status.update { it.copy(autoPhaseLabel = "已暂停（手动接管）") }
+    }
+
+    /** 第 3 层交还控制权：手动 QSO 结束后恢复第 2 层调度（状态保留）。 */
+    private fun resumeAutoAfterManual() {
+        if (!manualQso) return
+        manualQso = false
+        scheduler.resume()
+        _status.update {
+            it.copy(
+                autoPhaseLabel = if (it.autoProgram.mode.enabled) phaseLabel(scheduler.currentPhase()) else null,
+                autoQueueSize = if (it.autoProgram.mode.enabled) scheduler.queuedCount() else 0,
+            )
+        }
+    }
+
+    /**
+     * 作废当前发射（取消协程 + 非阻塞中止 native 写入 + 记一次作废代次）。
+     *
+     * 可在主线程调用；返回后当前报文最多再响一块（约 85 ms）就会停。
+     */
+    private fun abortTransmit() {
+        txJob?.cancel()
+        txJob = null
+        txAbortGen++
+        AudioEngine.abortTx()
     }
 
     /**
@@ -885,13 +1061,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             ?: if (canOperate) listOf("CQ", st.myCall, st.myGrid).filter { it.isNotEmpty() }.joinToString(" ")
             else "CQ TEST"
         if (!armPlayback()) return
-        txJob?.cancel()
+        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
         val (pttMs, leadMs) = txPreambleParts()
         val genAtPlan = engineGen
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (genAtPlan != engineGen) return@launch   // 期间重建过引擎：丢弃
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
+                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
                 _status.update { it.copy(status = "已发射测试「$text」（$written 帧）") }
@@ -963,34 +1141,40 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _messages.update { current -> (decoded + current).take(200) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
-            // 发给我的报文自动把 RX 跟过去（便于瀑布绿线指示当前对手）
-            val my = _status.value.myCall
-            decoded.forEach { m ->
-                if (m.df > 0 && MessageParser.parse(m.text).addressedTo(my)) {
-                    _status.update { s -> s.copy(rxFreqHz = m.df) }
-                }
-            }
             // U7d：有报文叫我呼号时短促提示
+            val my = _status.value.myCall
             if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {
                 alertTone.beep()
             }
         }
 
         // 2) 状态
+        //
+        // 性能（2026-09-26）：`msToNextSlot` / `slotProgress` / `voxLevelDb` 这些「实时读数」
+        // native 每个轮询周期（80ms）都在变。若原样发布，`_status` 会以 12.5 Hz 发射，进而让
+        // MainShell / 顶栏 / 底栏 / 操作页 / 发射抽屉 —— 即**每一页**（含没有瀑布的日志页、设置页）
+        // 整屏 12.5 Hz 全量重组 + 重绘（模拟器实测各页均 105 帧 / 8 s，操作页主线程约 11% CPU，
+        // 是全机最大开销）。它们在 UI 上都只是粗略的「仪表读数」：时隙进度条只有 3dp 高、
+        // 电平只显示整数 dB、剩余时间只用于 2500ms 的「能否立即发送」阈值判断 —— 5 Hz 刷新足够。
+        // 因此统一节流 + 量化后再发布；窗口未到时沿用旧值，`copy` 结果相等 → StateFlow 不发射。
         val s = AudioEngine.state()
         if (s != null) {
+            val nowLiveMs = s.utcNowMs
+            val live = nowLiveMs - lastLivePublishMs >= LIVE_PUBLISH_INTERVAL_MS
+            if (live) lastLivePublishMs = nowLiveMs
             _status.update {
                 it.copy(
                     inSlot = s.inSlot,
                     inputRate = s.inputRate,
                     slotMs = s.slotMs.toInt(),
-                    msToNextSlot = s.msToNextSlot,
-                    slotProgress = s.slotProgress,
+                    msToNextSlot =
+                        if (live) s.msToNextSlot / LIVE_STEP_MS * LIVE_STEP_MS else it.msToNextSlot,
+                    slotProgress =
+                        if (live) (s.slotProgress * LIVE_PROGRESS_STEPS).toInt() / LIVE_PROGRESS_STEPS else it.slotProgress,
                     slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
                     droppedSamples = s.droppedSamples,
-                    voxOpen = s.voxOpen,
-                    voxLevelDb = s.voxLevelDb,
+                    voxLevelDb = if (live) s.voxLevelDb else it.voxLevelDb,
                 )
             }
 
@@ -1009,9 +1193,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val isOwnTxSlot = batchSlotIdx != Long.MIN_VALUE && batchSlotIdx == lastTxSlotIndex
                 if (!isOwnTxSlot) {
                     if (st.qso.active) {
-                        applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs))
-                    } else if (st.autoProgram.level.enabled) {
-                        runAutoProgram(batch)
+                        if (st.qso.awaitingResponders) {
+                            // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
+                            runAutoProgram(batch, s.utcNowMs)
+                        } else {
+                            applyQsoProgress(qsoEngine.onDecoded(batch, s.utcNowMs), s.utcNowMs)
+                        }
+                    } else if (st.autoProgram.mode.enabled) {
+                        runAutoProgram(batch, s.utcNowMs)
                     }
                 }
             }
@@ -1022,56 +1211,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 5) 发射调度
         txTick()
+
+        // 6) 前台服务通知（文案不变时 StateFlow 不会重复刷新）
+        publishServiceStatus()
     }
 
-    /** 把状态机进度同步到 UI 状态，并把完成的通联写入日志库。 */
-    private fun applyQsoProgress(p: QsoProgress) {
+    /**
+     * 把状态机进度同步到 UI 状态、写入日志，并收口第 2 层调度。
+     *
+     * QSO 结束时（成功/失败）：
+     * - 失败且已无待发报文 → 立刻通知第 2 层（[AutoScheduler.onQsoFinished]）；
+     * - 成功时还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它发完在 [txTick] 里收口；
+     *   否则第 2 层下一个动作（如 `startCq`）会覆盖状态机，最后一条就丢了。
+     * - 若这是第 3 层的手动接管（[manualQso]），不通知第 2 层，只交还控制权。
+     */
+    private fun applyQsoProgress(p: QsoProgress, utcNowMs: Long = AudioEngine.utcNowMs()) {
         val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
-        if (finished) {
-            when (p.state) {
-                QsoState.DONE -> {
-                    // 通联完成：清空失败重试记忆。
-                    // **但保留发射周期**：还要用同一周期把最后一条 RR73/73 发出去，
-                    // 若在此重锁会落到错误周期，对方收不到而误判失败（最终消息发完才释放）。
-                    retryCall = null
-                    retryLeft = 0
-                }
-                QsoState.FAILED -> {
-                    // 通联失败：只解除「目标时隙固定」（保留当前发射周期，避免下一段跳时隙），
-                    // 并记住对手供自动程序优先重试（有次数上限）
-                    pinnedTxParity = null
-                    val c = p.theirCall
-                    if (c != null && c.equals(retryCall, ignoreCase = true)) {
-                        if (retryLeft > 0) retryLeft--
-                    } else {
-                        retryCall = c
-                        retryLeft = AUTO_FAIL_RETRY_MAX
-                    }
-                    if (retryLeft <= 0) retryCall = null
-                }
-                else -> Unit
-            }
-        }
-        // 「单次通联」：一次 QSO 结束即把等级切回「0 手动选择」（＝关闭自动程序），避免无限自动呼叫。
-        // 因为「等级即开关」，这里必须改持久化的等级本身。
-        val stopAuto = finished && _status.value.autoProgram.singleQso &&
-            _status.value.autoProgram.level.enabled
-        if (stopAuto) {
-            retryCall = null
-            retryLeft = 0
-            persist { it.copy(auto = it.auto.copy(level = AutoLevel.MANUAL)) }
-        }
-        _status.update {
-            it.copy(
-                qso = p,
-                status = if (stopAuto) {
-                    "QSO：${p.description}｜单次通联完成，自动程序已关闭（等级切回「0 手动选择」）"
-                } else {
-                    "QSO：${p.description}"
-                },
-                autoProgram = if (stopAuto) it.autoProgram.copy(level = AutoLevel.MANUAL) else it.autoProgram,
-            )
-        }
+        // 完成时**保留发射周期**：还要用同一周期把最后一条 RR73/73 发出去；
+        // 失败时只解除「目标时隙固定」（保留当前周期，避免下一段跳时隙）。
+        if (p.state == QsoState.FAILED) pinnedTxParity = null
+        _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
             val st = _status.value
             val entity = QsoEntity(
@@ -1098,30 +1257,81 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             }
             _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
         }
+        if (!finished) return
+        val wasManual = manualQso
+        resumeAutoAfterManual()
+        if (wasManual || !_status.value.autoProgram.mode.enabled) return
+        if (p.txText == null) {
+            // 没有收尾报文（例如重试超限失败）：立刻让第 2 层决定下一步
+            runAutoAction(scheduler.onQsoFinished(p.state == QsoState.DONE, utcNowMs))
+        } else {
+            // 还有 RR73/73 要发：发完再收口（见 txTick）
+            pendingAutoFinish = true
+        }
     }
 
     /**
-     * 自动程序：在「无进行中 QSO」时，按策略选台并自动应答 / 自动发 CQ。
-     *
-     * 等级 4+ 在无可答目标时自动发 CQ（自动搜索）；其余等级保持待命。
+     * 第 2 层：在「无进行中 QSO」或「已发 CQ 等回应者」时，把本时隙解码交给调度器，
+     * 并按返回的动作执行（发 CQ / 排队主叫 / 应答 CQ / 处理定向报文 / 保持监听）。
      */
-    private fun runAutoProgram(batch: List<DecodeResult>) {
+    private fun runAutoProgram(batch: List<DecodeResult>, utcNowMs: Long) {
         val st = _status.value
         if (!st.txEnabled) return
-        val decision = AutoProgramSelector.decide(
+        if (!st.autoProgram.mode.enabled) return
+        val action = scheduler.onDecoded(
             messages = batch,
-            program = st.autoProgram,
             filter = currentFilter(),
             worked = _worked.value,
-            myCall = st.myCall,
-            myGrid = st.myGrid,
-            retryCall = retryCall,
+            utcNowMs = utcNowMs,
         )
-        when (decision) {
-            is AutoDecision.AnswerCq -> startAutoTarget(decision.target)
-            is AutoDecision.AnswerDirected -> startAutoTarget(decision.target)
-            AutoDecision.CallCq -> startAutoSearch()
-            AutoDecision.None -> Unit
+        publishAutoState()
+        runAutoAction(action)
+    }
+
+    /** 执行第 2 层给出的动作。 */
+    private fun runAutoAction(action: AutoAction) {
+        when (action) {
+            AutoAction.SendCq -> startCqInternal()
+            is AutoAction.AnswerCq -> startAutoTarget(action.target)
+            is AutoAction.HandleDirected -> startAutoTarget(action.target)
+            AutoAction.Listen -> {
+                // 混合模式应答状态且暂无 CQ 台：保持接收、不发
+                if (_status.value.txArmed || _status.value.qso.active) {
+                    val p = qsoEngine.stop()
+                    _status.update {
+                        it.copy(qso = p, txArmed = false, status = "自动程序：监听中（等待其他人的 CQ）")
+                    }
+                }
+            }
+            is AutoAction.Stop -> stopAutoByProtection(action.reason)
+            AutoAction.None -> Unit
+        }
+    }
+
+    /** 保护限制触发：停止第 2 层调度并切回「0 手动模式」（文档 §2.5）。 */
+    private fun stopAutoByProtection(reason: String) {
+        scheduler.markProtectedStop()
+        manualQso = false
+        stopTransmit(resumeAuto = false)
+        _status.update {
+            it.copy(
+                autoProgram = it.autoProgram.copy(mode = AutoMode.MANUAL),
+                autoPhaseLabel = null,
+                autoQueueSize = 0,
+                status = "自动程序已停止并切回「0 手动模式」：$reason（发送总开关不变）",
+            )
+        }
+        persist { it.copy(auto = it.auto.copy(mode = AutoMode.MANUAL)) }
+    }
+
+    /** 把第 2 层阶段/队列同步到 UI 状态。 */
+    private fun publishAutoState() {
+        val st = _status.value
+        if (!st.autoProgram.mode.enabled) return
+        val label = if (manualQso) "已暂停（手动接管）" else phaseLabel(scheduler.currentPhase())
+        val q = scheduler.queuedCount()
+        if (st.autoPhaseLabel != label || st.autoQueueSize != q) {
+            _status.update { it.copy(autoPhaseLabel = label, autoQueueSize = q) }
         }
     }
 
@@ -1139,36 +1349,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
 
         lastTxSlotIndex = -1L
-        val hold = st.holdTxFreq
-        val v = clampFreq(t.df)
-        _status.update {
-            it.copy(rxFreqHz = v, selectedFreqHz = if (hold) it.selectedFreqHz else v)
-        }
-        if (!hold) persist { it.copy(selectedFreqHz = v) }
+        // 同频发射：把红线跟到目标频率（异频发射则保持设定频率）
+        if (st.sameFreqTx) setTxFreq(t.df)
 
         val p = when (t.kind) {
-            AutoTargetKind.CQ -> qsoEngine.answer(t.call, t.grid)
-            AutoTargetKind.CALL -> qsoEngine.callBack(t.call, t.grid, t.snr)
+            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid)
+            AutoTargetKind.CALL -> qsoEngine.startCallerQso(t.call, t.grid, t.snr)
             AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr)
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
         }
         if (!p.active && p.state != QsoState.DONE) return
         _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}") }
-        // ROGER 场景一上来即完成：走统一收尾（写日志、按「单次通联」决定是否继续）
+        // ROGER 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
     }
 
-    /** 自动搜索：无可答目标时自动发 CQ（等级 4+）。 */
-    private fun startAutoSearch() {
-        if (!canOperate) return
-        relockAutoParityIfNeeded()
-        if (!armPlayback()) return
-        lastTxSlotIndex = -1L
-        val p = qsoEngine.startCq()
-        _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：搜索中（CQ）") }
-    }
-
-    /** 由设置构造显示过滤条件（操作页与 Call 1st 共用）。 */
+    /** 由设置构造显示过滤条件（操作页与自动程序共用）。 */
     private fun currentFilter(): DecodeFilterState {
         val s = latestSettings
         return DecodeFilterState(
@@ -1194,6 +1390,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             if (manualInFlight) {
                 // 一次性发射：不推进 QSO 状态机，发完即解除武装
                 manualInFlight = false
+                resumeAutoAfterManual()
                 _status.update {
                     it.copy(
                         manualTxText = null,
@@ -1212,6 +1409,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     pinnedTxParity = null
                 }
                 _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
+                // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
+                if (finished && pendingAutoFinish) {
+                    pendingAutoFinish = false
+                    runAutoAction(
+                        scheduler.onQsoFinished(p.state == QsoState.DONE, AudioEngine.utcNowMs()),
+                    )
+                }
             }
         }
 
@@ -1233,6 +1437,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val plan = planTx(
             now, slotMs, st.txParity, preambleMs,
             slotOffsetMs = latestSettings.slotOffsetMs.toLong(),
+            messageMs = st.protocol.messageMs.toLong(),
         )
 
         // 距数据起点的倒计时（用于 UI）
@@ -1249,8 +1454,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         lastTxSlotIndex = plan.targetSlotIndex
         manualInFlight = st.manualTxText != null
         val genAtPlan = engineGen
+        val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
-            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan)
+            transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan, abortAtPlan)
         }
     }
 
@@ -1263,7 +1469,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 本次发射的完整前导时长（ms）。 */
-    private fun txPreambleMs(): Int = txPreambleParts().let { it.first + it.second }
+    private fun txPreambleMs(): Int = latestSettings.txPreambleMs
 
     /**
      * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
@@ -1271,8 +1477,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * [genAtPlan] 是排程时的引擎代次：若期间引擎被重建（例如切了协议），**直接丢弃**本次
      * 发射 —— `txJob.cancel()` 打断不了已经开始的 JNI 阻塞写入，只能用代次判断，否则会
      * 把上一个协议的波形写到新引擎上。
+     *
+     * [abortAtPlan] 是排程时的「发射作废代次」（见 [txAbortGen]）：期间用户按了「停止发射」
+     * 就丢弃 —— 否则已排程的这次仍会响一整段。
      */
-    private fun transmit(text: String, slotStartMs: Long, preambleMs: Long, genAtPlan: Int) {
+    private fun transmit(
+        text: String,
+        slotStartMs: Long,
+        preambleMs: Long,
+        genAtPlan: Int,
+        abortAtPlan: Int,
+    ) {
         val st = _status.value
         val (pttMs, leadMs) = txPreambleParts()
         // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
@@ -1280,18 +1495,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val effLead = minOf(leadMs.toLong(), eff).toInt()
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
 
-        if (genAtPlan != engineGen) return
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
         } catch (e: Exception) {
             _status.update { it.copy(status = "发射异常: ${e.message}") }
             return
         }
-        if (genAtPlan != engineGen) return
+        // 解码/编码期间可能被「停止发射」或换了引擎：丢弃
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
 
         try {
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
+            val t0 = AudioEngine.utcNowMs()
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
+            // 保护限制「单次发射总时长」（文档 §2.5）：自动程序开启时累计实际发射时长
+            if (_status.value.autoProgram.mode.enabled) {
+                scheduler.addTxMs(AudioEngine.utcNowMs() - t0)
+            }
             if (written <= 0) {
                 _status.update { it.copy(status = "发射失败（写入 $written 帧）") }
             }
@@ -1401,6 +1622,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AudioEngine.stopCapture()
         AudioEngine.release()
         alertTone.release()
+        SessionService.stop(getApplication<Application>())
+        serviceOn = false
         super.onCleared()
     }
 
@@ -1411,6 +1634,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
 /** 允许在时隙起点后多久内就地发射（含前导；超出则等下一个我方周期）。 */
 internal const val TX_START_WINDOW_MS = 1200L
+
+/**
+ * 「实时状态」量化步进（性能，见 [SessionViewModel] 的轮询）：`msToNextSlot` 量化到 500ms。
+ *
+ * 目的：让 [ReceiverStatus] 只在有肉眼可见变化时才发射，避免 12.5 Hz 整页重组。
+ */
+internal const val LIVE_STEP_MS = 500L
+
+/** 「实时状态」量化步进：`slotProgress` 量化到 1/50（时隙进度条只有 3dp 高，无需更细）。 */
+internal const val LIVE_PROGRESS_STEPS = 50f
+
+/**
+ * 「实时读数」统一节流窗口（ms）：见 [SessionViewModel] 的轮询。
+ *
+ * `msToNextSlot` / `slotProgress` / `voxLevelDb` 只在跨越本窗口边界时发布一次，
+ * 使 [ReceiverStatus] 的发射率从 12.5 Hz 降到 5 Hz —— 这几项在 UI 上都只是粗略的仪表读数。
+ */
+internal const val LIVE_PUBLISH_INTERVAL_MS = 200L
 
 /** 一次发射的调度结果：目标时隙、播放起点与数据起点。 */
 internal data class TxPlan(
@@ -1426,9 +1667,10 @@ internal data class TxPlan(
  * 计算本次发射的目标时隙与播放起点（纯函数，便于单测）。
  *
  * - 当前处于**对方周期**：瞄准下一个我方周期（必到），用完整前导提前启动。
- * - 当前处于**我方周期**且「时隙内已过时间 + 前导」仍在 [startWindowMs] 内：**就地发射**，
- *   立刻开始写播放、前导完整保留（数据起点相应后移几百毫秒）。解码结果正好在我方时隙
- *   开头几百毫秒到达，这条路径让应答落在**紧邻的时隙**，而不是白等一个完整周期。
+ * - 当前处于**我方周期**且「时隙内已过时间 + 前导」仍在 [startWindowMs] 内，**或**整条报文仍能
+ *   在本时隙内播完（[messageMs] 非 0 时，报文时长 + 前导 + 已过时间 ≤ 时隙长）：**就地发射**，
+ *   立刻开始写播放、前导完整保留（数据起点相应后移几百毫秒）。解码结果在时隙结束后几百毫秒
+ *   才到手，这条路径让应答落在**紧邻的时隙**，而不是白等一个完整周期。
  * - 否则（我方周期但已等太久）：瞄准下一个我方周期（+2）。
  *
  * 真正决定数据起点的是「播放起点 + 前导」；[TxPlan.targetStartMs] 即该值。
@@ -1447,6 +1689,14 @@ internal fun planTx(
      * 「发射起点」同步平移：把解码卡片显示的「时间差」原样填进来即可同时校准两端。
      */
     slotOffsetMs: Long = 0L,
+    /**
+     * 单条报文的波形时长（ms，0=未知）：非 0 时放宽「就地发射」窗口 —— 只要**整条报文能在
+     * 本时隙内播完**（已过时间 + 前导 + 报文 ≤ 时隙长）就直接本时隙发射，不必白等一个周期。
+     *
+     * FT8 报文 12.64 s 远短于时隙 15 s（FT4 4.48 s / 7.5 s），而解码结果在时隙结束后几百
+     * 毫秒才到手，所以应答通常正好落在紧邻的时隙。传 0 时退回只按 [startWindowMs] 判定。
+     */
+    messageMs: Long = 0L,
 ): TxPlan {
     require(slotMs > 0) { "slotMs must be positive" }
     val pre = preambleMs.coerceAtLeast(0L)
@@ -1462,8 +1712,12 @@ internal fun planTx(
         return TxPlan(targetIdx, targetStart, targetStart - pre)
     }
     val posInSlot = shiftedNow - slotIdx * slotMs
-    if (posInSlot + pre <= startWindowMs) {
-        // 我方周期且刚过（偏移后的）起点：就地发射（前导照旧，数据起点 = 现在 + 前导）
+    val msg = messageMs.coerceAtLeast(0L)
+    // 就地发射：① 刚过（偏移后的）起点（旧窗口）；② 整条报文能在本时隙内播完
+    val inPlace = posInSlot + pre <= startWindowMs ||
+        (msg > 0L && posInSlot + pre + msg <= slotMs)
+    if (inPlace) {
+        // 前导照旧，数据起点 = 现在 + 前导（数据尾仍落在本时隙内）
         return TxPlan(slotIdx, nowMs + pre, nowMs)
     }
     // 已过太久：下一个我方周期
@@ -1478,9 +1732,6 @@ internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
-
-/** 自动程序：同一对手 QSO 失败后最多再重试的次数（之后换台）。 */
-internal const val AUTO_FAIL_RETRY_MAX = 1
 
 /**
  * 时隙奇偶标记（0/1）：按 UTC 时隙起点取整后的槽位序号取奇偶。
@@ -1538,6 +1789,28 @@ internal fun effectiveTxParity(
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =
     if (parity == TX_PARITY_ODD) "奇数周期" else "偶数周期"
+
+/**
+ * 前台服务通知的副标题（纯函数，便于单测，阶段 9）。
+ *
+ * 形如 `接收中 · FT8 · 20m · 解码 12`；发射中时以「发射中」开头并附当前对手呼号。
+ * 未运行（服务本应已停止，仅作兜底）时只返回「已停止」。
+ */
+internal fun serviceStatusText(st: ReceiverStatus): String {
+    val head = when {
+        st.txing -> "发射中"
+        st.running -> "接收中"
+        else -> "已停止"
+    }
+    if (!st.running) return head
+    return buildString {
+        append(head)
+        append(" · ").append(st.protocol.name)
+        if (st.band.isNotEmpty()) append(" · ").append(st.band)
+        append(" · 解码 ").append(st.decodedTotal)
+        if (st.qso.active) st.qso.theirCall?.let { append(" · ").append(it) }
+    }
+}
 
 /**
  * 「含我呼号哔声」判定（纯函数，便于单测，U7d）。

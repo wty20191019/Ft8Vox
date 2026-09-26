@@ -2,18 +2,22 @@ package com.example.ft8vox.ui
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 瀑布可见行数（约 300 * 0.08 s ≈ 24 s 的滚动窗口）。 */
 const val WF_ROWS = 300
@@ -81,23 +85,22 @@ object WaterfallColors {
 }
 
 /**
- * 瀑布视图：把 [frame] 画到 Canvas 上，点击可按 X 轴选频，并叠加 QSO 标记。
+ * 瀑布视图：把 [frame] 画到 Canvas 上，并叠加发射频率红线与 QSO 标记。
  *
- * - 单击：按当前可视频率窗口选频（`onSelectFrequency`）；
- * - 长按：回调 `onLongPress(freqHz)`（呼叫 / 看详情 / 忽略菜单）；
- * - 频率轴固定铺满 `fMin–fMax`，**不做缩放与平移**（避免误触捏合改变频率刻度）。
+ * **发射频率（红线）就是唯一可调频率**：在瀑布上**单击或水平拖动**即把红线移到该处
+ * （回调 [onMoveTxFreq]），**长按**回调 `onLongPress(freqHz)` 打开最近一条解码的详情。
+ * 不再画「接收频率」绿线。频率轴固定铺满 `fMin–fMax`，**不做缩放与平移**（避免误触捏合改变频率刻度）。
  *
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
- * [rxFreqHz] 为选中的收听/应答频率（绿色竖线）；[txing] 为真时画红色边框表示正在发射。
+ * [txing] 为真时画红色边框表示正在发射。
  */
 @Composable
 fun WaterfallView(
     frame: WaterfallFrame?,
     selectedFreqHz: Int,
     slotParity: Int,
-    onSelectFrequency: (Int) -> Unit,
+    onMoveTxFreq: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    rxFreqHz: Int? = null,
     txing: Boolean = false,
     onLongPress: ((Int) -> Unit)? = null,
 ) {
@@ -119,16 +122,44 @@ fun WaterfallView(
     Canvas(
         modifier = modifier
             .pointerInput(frame?.bins, frame?.rows) {
-                detectTapGestures(
-                    onTap = { offset ->
-                        if (size.width <= 0f) return@detectTapGestures
-                        onSelectFrequency(fracToHz(offset.x / size.width))
-                    },
-                    onLongPress = { offset ->
-                        if (size.width <= 0f) return@detectTapGestures
-                        onLongPress?.invoke(fracToHz(offset.x / size.width))
-                    },
-                )
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (size.width <= 0f) return@awaitEachGesture
+                    // 按下即把红线移到这里；随后水平拖动持续跟随（单击与拖动是同一套手势）
+                    onMoveTxFreq(fracToHz(down.position.x / size.width))
+                    down.consume()
+                    var longFired = false
+                    var moved = false
+                    while (true) {
+                        // 静置达到长按时限 → 打开详情（红线已在按下时移好）
+                        val event = if (longFired) {
+                            awaitPointerEvent()
+                        } else {
+                            withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                                awaitPointerEvent()
+                            }
+                        }
+                        if (event == null) {
+                            if (!moved) {
+                                longFired = true
+                                onLongPress?.invoke(fracToHz(down.position.x / size.width))
+                            }
+                            continue
+                        }
+                        val ch = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if ((ch.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                            moved = true
+                        }
+                        if (ch.positionChanged()) {
+                            onMoveTxFreq(fracToHz(ch.position.x / size.width))
+                            ch.consume()
+                        }
+                        if (!ch.pressed) {
+                            ch.consume()
+                            break
+                        }
+                    }
+                }
             },
     ) {
         val f = frame
@@ -140,6 +171,9 @@ fun WaterfallView(
                 srcSize = IntSize(f.bins, f.rows),
                 dstOffset = IntOffset.Zero,
                 dstSize = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1)),
+                // 最近邻：每个 FFT bin / 行本来就是离散色块，放大后不用双线性（省掉每像素 4 次采样，
+                // 在软件 / 翻译层 GL 上尤其明显），视觉上反而更锐利。
+                filterQuality = FilterQuality.None,
             )
         }
 
@@ -156,23 +190,14 @@ fun WaterfallView(
                 return frac.coerceIn(0f, 1f) * size.width
             }
 
-            // 选中频率竖线（我方发射频率，红）
+            // 发射频率红线（可拖动调整）
+            val x = hzToX(selectedFreqHz)
             drawLine(
                 color = Color(0xFFFF5252),
-                start = Offset(hzToX(selectedFreqHz), 0f),
-                end = Offset(hzToX(selectedFreqHz), size.height),
+                start = Offset(x, 0f),
+                end = Offset(x, size.height),
                 strokeWidth = 2f,
             )
-
-            // 对手频率竖线（绿）
-            if (rxFreqHz != null) {
-                drawLine(
-                    color = Color(0xFF4CAF50),
-                    start = Offset(hzToX(rxFreqHz), 0f),
-                    end = Offset(hzToX(rxFreqHz), size.height),
-                    strokeWidth = 2f,
-                )
-            }
         }
 
         // 发射中：整圈红框提示

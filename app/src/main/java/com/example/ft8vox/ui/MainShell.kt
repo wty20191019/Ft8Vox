@@ -1,5 +1,10 @@
 package com.example.ft8vox.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,7 +28,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.example.ft8vox.qso.AutoLevel
+import androidx.compose.ui.platform.LocalContext
+import com.example.ft8vox.qso.AutoMode
 
 /**
  * 底部导航的四个页面（new_ui.md §2：操作 / 地图 / 日志 / 设置）。
@@ -59,13 +65,22 @@ fun MainShell(
     var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
-    // 待确认的「启用自动程序」等级（从「0 手动选择」切到 1+ 时的防误发确认）
-    var confirmAutoLevel by remember { mutableStateOf<AutoLevel?>(null) }
+    // 待确认的「启用自动程序」模式（从「0 手动模式」切到 1/2 时的防误发确认）
+    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
     val stats by log.stats.collectAsState()
     val nowMs = rememberUtcNowMs()
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+
+    // 返回键：接收中「退到后台继续接收」（由前台服务保活），未接收时保持默认行为（退出）。
+    // Compose 的 BackHandler 只在没有弹窗 / 底部抽屉（各自独立窗口）消费返回键时才会触发。
+    BackHandler(enabled = status.running) {
+        activity?.moveTaskToBack(true)
+        Toast.makeText(context, "已退到后台继续接收，可在通知栏「停止接收」", Toast.LENGTH_SHORT).show()
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -91,7 +106,6 @@ fun MainShell(
                     queueCount = if (status.manualTxText != null) 1 else 0,
                     timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
                     voxLevelDb = status.voxLevelDb,
-                    voxOpen = status.voxOpen,
                 )
                 NavigationBar {
                     for (t in MainTab.entries) {
@@ -143,35 +157,45 @@ fun MainShell(
     if (autoDialogOpen) {
         AutoProgramDialog(
             program = status.autoProgram,
-            onSetLevel = { lv -> requestAutoLevel(lv, status, session) { confirmAutoLevel = it } },
+            onSetMode = { m -> requestAutoMode(m, status, session) { confirmAutoMode = it } },
             onOption = session::setAutoOption,
             onDismiss = { autoDialogOpen = false },
         )
     }
 
-    confirmAutoLevel?.let { lv ->
+    confirmAutoMode?.let { m ->
         AutoEnableConfirmDialog(
-            level = lv,
+            mode = m,
             status = status,
             onConfirm = {
-                confirmAutoLevel = null
-                session.setAutoLevel(lv)
+                confirmAutoMode = null
+                session.setAutoMode(m)
             },
-            onDismiss = { confirmAutoLevel = null },
+            onDismiss = { confirmAutoMode = null },
         )
     }
 }
 
 /**
- * 点击自动程序等级：从「0 手动选择」切到 1+ 时先记下待确认等级（由调用方渲染
+ * 点击自动程序工作模式：从「0 手动模式」切到 1/2 时先记下待确认模式（由调用方渲染
  * [AutoEnableConfirmDialog]），其余情况直接生效。
  */
-internal fun requestAutoLevel(
-    level: AutoLevel,
+internal fun requestAutoMode(
+    mode: AutoMode,
     status: ReceiverStatus,
     session: SessionViewModel,
-    onNeedConfirm: (AutoLevel) -> Unit,
+    onNeedConfirm: (AutoMode) -> Unit,
 ) {
-    if (level.enabled && !status.autoProgram.level.enabled) onNeedConfirm(level)
-    else session.setAutoLevel(level)
+    if (mode.enabled && !status.autoProgram.mode.enabled) onNeedConfirm(mode)
+    else session.setAutoMode(mode)
+}
+
+/** 取宿主 Activity（Compose 的 `LocalContext` 可能是被包装过的 Context）。 */
+private fun Context.findActivity(): Activity? {
+    var ctx: Context? = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }

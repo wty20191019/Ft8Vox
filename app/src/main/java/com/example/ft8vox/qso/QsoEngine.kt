@@ -38,7 +38,14 @@ data class QsoProgress(
     /** 下一个发射时隙要发送的报文；null 表示不发。 */
     val txText: String? = null,
     val retries: Int = 0,
-    val maxRetries: Int = 6,
+    val maxRetries: Int = 3,
+    /**
+     * 是否处于「已发 CQ、等回应者」阶段（只由 [QsoEngine.startCq] 置位）。
+     *
+     * 该阶段的解码由第 2 层自动程序调度（收集、排序回应者）处理，而不是由状态机
+     * 直接认第一个回应者；`SessionViewModel` 据此分流。
+     */
+    val awaitingResponders: Boolean = false,
 ) {
     /** 是否处于进行中的 QSO。 */
     val active: Boolean
@@ -50,7 +57,8 @@ data class QsoProgress(
             QsoState.DONE -> "已完成"
             QsoState.FAILED -> "已放弃（对方无响应）"
             QsoState.WAIT_REPLY ->
-                if (role == QsoRole.CALLER) "呼叫 CQ（第 ${retries + 1} 次）"
+                if (awaitingResponders) "CQ 已发出，等待回应"
+                else if (role == QsoRole.CALLER) "呼叫 CQ（第 ${retries + 1} 次）"
                 else "等待 $theirCall 回复"
             QsoState.WAIT_REPORT -> "已发报告 ${reportSent?.let { MessageParser.formatReport(it) } ?: ""}，等待 $theirCall 的 R 报告"
             QsoState.WAIT_RR73 -> "等待 $theirCall 的 RR73"
@@ -60,14 +68,16 @@ data class QsoProgress(
 /**
  * FT8/FT4 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
  *
- * 支持两种角色：
- * - **CALLER**：`CQ <me> <grid>` → 收到应答后发信号报告 → 收到 `R<报告>` 后发 `RR73` → 完成。
- * - **RESPONDER**：应答他人 CQ → 收到报告后发 `R<报告>` → 收到 `RR73`/`73` 后发 `73` → 完成。
+ * 支持两种角色（对应《QSO 自动系统设计文档》§1.3 / §1.4）：
+ * - **CALLER**（主叫 QSO，[startCallerQso]）：发 `<对方> <我> <报告>` → 收到 `R<报告>` 后发 `RR73` → 完成。
+ * - **RESPONDER**（应答 QSO，[startResponderQso]）：发 `<对方> <我> <网格>` → 收到报告后发 `R<报告>` → 收到 `RR73`/`73` 后发 `73` → 完成。
+ * - **CQ**（[startCq]）：发 `CQ <我> <网格>`，之后由第 2 层自动程序收集回应者（见 [QsoProgress.awaitingResponders]）。
  *
  * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]；
- * 若该时隙没有带来状态推进，会自动累计重试次数，超过 [maxRetries] 则放弃。
+ * 若该时隙没有带来状态推进，会自动累计重试次数，超过 [maxRetries] 则放弃
+ * （[giveUp] 为 false 时永不放弃，用于「已选台回应无反应 N 次后放弃」关闭的情形）。
  */
-class QsoEngine(private var maxRetries: Int = 6) {
+class QsoEngine(private var maxRetries: Int = 3) {
 
     private var myCall: String = ""
     private var myGrid: String = ""
@@ -82,14 +92,26 @@ class QsoEngine(private var maxRetries: Int = 6) {
     private var retries = 0
     private var logEntry: QsoLogEntry? = null
 
+    /** 超过 [maxRetries] 是否放弃（false＝一直重发，仅用于关闭「重发机制」时）。 */
+    private var giveUp = true
+
+    /** 是否处于「已发 CQ、等回应者」阶段（见 [QsoProgress.awaitingResponders]）。 */
+    private var awaitingResponders = false
+
     /** 是否已配置好呼号，可以开始 QSO。 */
     val canOperate: Boolean get() = myCall.isNotEmpty()
 
-    /** 更新台站信息与最大重试次数（来自设置）。 */
-    fun configure(myCall: String, myGrid: String, maxRetries: Int = this.maxRetries) {
+    /** 更新台站信息与重发机制（来自设置）。 */
+    fun configure(
+        myCall: String,
+        myGrid: String,
+        maxRetries: Int = this.maxRetries,
+        giveUp: Boolean = this.giveUp,
+    ) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
         this.maxRetries = maxRetries.coerceIn(1, 50)
+        this.giveUp = giveUp
     }
 
     fun progress(): QsoProgress = QsoProgress(
@@ -102,6 +124,7 @@ class QsoEngine(private var maxRetries: Int = 6) {
         txText = txText,
         retries = retries,
         maxRetries = maxRetries,
+        awaitingResponders = awaitingResponders,
     )
 
     /** 取走刚完成的通联记录（一次性，取走后清空）。 */
@@ -132,12 +155,18 @@ class QsoEngine(private var maxRetries: Int = 6) {
         reportReceived = null
         retries = 0
         logEntry = null
+        awaitingResponders = true
         txText = listOf("CQ", myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
         return progress()
     }
 
-    /** 应答指定 CQ。 */
-    fun answer(call: String, grid: String?): QsoProgress {
+    /**
+     * 第 1 层「应答 QSO」（文档 §1.4）：我应答对方的 CQ。
+     *
+     * 先发 `<对方> <我> <网格>`（让 CQ 台拿到我的网格），随后等报告 → 发 `R<报告>` →
+     * 等 RR73 → 发 73 收尾。
+     */
+    fun startResponderQso(call: String, grid: String?): QsoProgress {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
@@ -149,20 +178,23 @@ class QsoEngine(private var maxRetries: Int = 6) {
         reportReceived = null
         retries = 0
         logEntry = null
+        awaitingResponders = false
         txText = listOf(their, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
         return progress()
     }
 
     /**
-     * 对方主动呼叫我方（`<myCall> <theirCall> <grid>`）：以呼叫方身份直接补发信号报告，
-     * 进入「等待对方 R 报告」阶段。
+     * 第 1 层「主叫 QSO」（文档 §1.3）：我方发过 CQ，[call] 是回应者。
      *
-     * 用于自动程序：即使我方当前空闲（没有进行中的 QSO），收到定向呼叫也直接应答，
-     * 把这段 QSO 跑完。
+     * 直接从「发信号报告」开始（对方已经用网格/报告回应了我方的 CQ）：
+     * 发 `<对方> <我> <报告>` → 等 `R<报告>` → 发 RR73 → 完成。
+     *
+     * 也用于「对方主动呼叫我方（`<我> <对方> <网格>`）」：即使我方没有进行中的 QSO，
+     * 也直接补发报告把这段 QSO 跑完。
      *
      * @param snr 本次解码的信噪比（作为我发给对方的报告）
      */
-    fun callBack(call: String, grid: String?, snr: Int): QsoProgress {
+    fun startCallerQso(call: String, grid: String?, snr: Int): QsoProgress {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
@@ -174,6 +206,7 @@ class QsoEngine(private var maxRetries: Int = 6) {
         reportReceived = null
         retries = 0
         logEntry = null
+        awaitingResponders = false
         txText = "$their $myCall ${MessageParser.formatReport(reportSent!!)}"
         return progress()
     }
@@ -199,6 +232,7 @@ class QsoEngine(private var maxRetries: Int = 6) {
         reportSent = reportFromSnr(snr)
         retries = 0
         logEntry = null
+        awaitingResponders = false
         txText = "$their $myCall R${MessageParser.formatReport(reportSent!!)}"
         return progress()
     }
@@ -222,6 +256,7 @@ class QsoEngine(private var maxRetries: Int = 6) {
         reportReceived = theirReport
         reportSent = reportFromSnr(snr)
         retries = 0
+        awaitingResponders = false
         txText = "$their $myCall RR73"
         logEntry = QsoLogEntry(
             theirCall = their,
@@ -234,7 +269,8 @@ class QsoEngine(private var maxRetries: Int = 6) {
     }
 
     /** 中止当前 QSO。 */
-    fun stop(): QsoProgress {        role = QsoRole.NONE
+    fun stop(): QsoProgress {
+        role = QsoRole.NONE
         state = QsoState.IDLE
         theirCall = null
         theirGrid = null
@@ -243,6 +279,7 @@ class QsoEngine(private var maxRetries: Int = 6) {
         txText = null
         retries = 0
         logEntry = null
+        awaitingResponders = false
         return progress()
     }
 
@@ -254,6 +291,8 @@ class QsoEngine(private var maxRetries: Int = 6) {
     fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
         if (!canOperate) return progress()
         if (!progress().active) return progress()
+        // 「已发 CQ、等回应者」阶段由第 2 层自动程序收集/排序回应者，状态机不自行认人
+        if (awaitingResponders) return progress()
 
         var advanced = false
         for (m in messages) {
@@ -272,7 +311,8 @@ class QsoEngine(private var maxRetries: Int = 6) {
             retries = 0
         } else {
             retries++
-            if (retries > maxRetries) {
+            // giveUp=false（关闭「重发机制」）时一直重发，不主动放弃
+            if (giveUp && retries > maxRetries) {
                 state = QsoState.FAILED
                 txText = null
             }
@@ -311,6 +351,8 @@ class QsoEngine(private var maxRetries: Int = 6) {
                 when {
                     p.isRr73 || p.is73 -> {
                         reportReceived = reportReceived ?: p.report
+                        // 对方直接跳到 RR73/73：回一条 73 收尾（不要重发上一条报告）
+                        txText = "$them $myCall 73"
                         complete(m, utcMs)
                         true
                     }
