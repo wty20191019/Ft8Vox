@@ -129,9 +129,9 @@ fun GridMap(
         val wPx = with(density) { maxWidth.toPx() }.toDouble()
         val hPx = with(density) { maxHeight.toPx() }.toDouble()
 
-        // 预取当前视口需要的底图块（缺失的异步解码，画布只画已就绪的）
+        // 预取当前视口需要的底图块（含跨界线的世界副本；缺失的异步解码，画布只画已就绪的）
         val needed = remember(projection, wPx, hPx, baseMap) {
-            baseMap?.let { WorldBaseMap.visibleBlocks(projection, wPx, hPx) } ?: emptyList()
+            baseMap?.let { WorldBaseMap.blockDraws(projection) } ?: emptyList()
         }
         LaunchedEffect(needed, baseMap) { baseMap?.ensure(needed) }
 
@@ -141,27 +141,33 @@ fun GridMap(
 
             val bm = baseMap
             if (bm == null) {
-                // 无底图：退回纯色世界矩形（仅作空间参照）
-                val wtl = p.toScreen(MapProjection.MAX_LAT, -180.0)
-                val wbr = p.toScreen(-MapProjection.MAX_LAT, 180.0)
-                drawRect(
-                    color = World,
-                    topLeft = Offset(wtl.x.toFloat(), wtl.y.toFloat()),
-                    size = Size(
-                        (wbr.x - wtl.x).toFloat().coerceAtLeast(0f),
-                        (wbr.y - wtl.y).toFloat().coerceAtLeast(0f),
-                    ),
-                )
+                // 无底图：退回纯色世界矩形（按副本铺满视口，仍保持「无缝循环」）
+                val r = p.visibleWorldRange()
+                for (kv in floor(r.minV).toInt()..floor(r.maxV).toInt()) {
+                    for (ku in floor(r.minU).toInt()..floor(r.maxU).toInt()) {
+                        val tl = p.toScreenUV(ku.toDouble(), kv.toDouble())
+                        val br = p.toScreenUV(ku + 1.0, kv + 1.0)
+                        drawRect(
+                            color = World,
+                            topLeft = Offset(tl.x.toFloat(), tl.y.toFloat()),
+                            size = Size(
+                                (br.x - tl.x).toFloat().coerceAtLeast(0f),
+                                (br.y - tl.y).toFloat().coerceAtLeast(0f),
+                            ),
+                        )
+                    }
+                }
             } else {
-                for (block in WorldBaseMap.visibleBlocks(p, size.width.toDouble(), size.height.toDouble())) {
-                    val img = bm.bitmap(block) ?: continue
-                    val dim = WorldBaseMap.SIZE shr block.level
-                    val x0 = block.bx * WorldBaseMap.BLOCK
-                    val y0 = block.by * WorldBaseMap.BLOCK
+                // 复用上面 remember 出来的绘制清单，避免每帧重复枚举副本
+                for (d in needed) {
+                    val img = bm.bitmap(d.block) ?: continue
+                    val dim = WorldBaseMap.SIZE shr d.block.level
+                    val x0 = d.block.bx * WorldBaseMap.BLOCK
+                    val y0 = d.block.by * WorldBaseMap.BLOCK
                     val bw = minOf(WorldBaseMap.BLOCK, dim - x0)
                     val bh = minOf(WorldBaseMap.BLOCK, dim - y0)
-                    val tl = p.toScreenUV(x0.toDouble() / dim, y0.toDouble() / dim)
-                    val br = p.toScreenUV((x0 + bw).toDouble() / dim, (y0 + bh).toDouble() / dim)
+                    val tl = p.toScreenUV(x0.toDouble() / dim + d.ku, y0.toDouble() / dim + d.kv)
+                    val br = p.toScreenUV((x0 + bw).toDouble() / dim + d.ku, (y0 + bh).toDouble() / dim + d.kv)
                     // 向外取整，让相邻块轻微重叠，避免缩放时出现 1px 缝
                     val dx = floor(tl.x).toInt()
                     val dy = floor(tl.y).toInt()
@@ -180,19 +186,19 @@ fun GridMap(
                 }
             }
 
-            // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸） ----
+            // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸；只画离视口中心最近的一份） ----
             val minCell = 2.4.dp.toPx()
             for (m in gridMarkers) {
-                val a = p.toScreen(m.bounds.maxLat, m.bounds.minLon)
-                val b = p.toScreen(m.bounds.minLat, m.bounds.maxLon)
-                val w = (b.x - a.x).toFloat()
-                val h = (b.y - a.y).toFloat()
+                val rect = p.cellRect(m.bounds.minLat, m.bounds.maxLat, m.bounds.minLon, m.bounds.maxLon)
+                val w = rect.w.toFloat()
+                val h = rect.h.toFloat()
                 if (w <= 0f || h <= 0f) continue
-                if (a.x > size.width || b.x < 0f || a.y > size.height || b.y < 0f) continue
-                val cx = (a.x + b.x).toFloat() / 2f
-                val cy = (a.y + b.y).toFloat() / 2f
+                val cx = rect.cx.toFloat()
+                val cy = rect.cy.toFloat()
                 val dw = w.coerceAtLeast(minCell)
                 val dh = h.coerceAtLeast(minCell)
+                if (cx - dw / 2f > size.width || cx + dw / 2f < 0f) continue
+                if (cy - dh / 2f > size.height || cy + dh / 2f < 0f) continue
                 val color = tierColor(m.tier)
                 drawRect(
                     color = color.copy(alpha = 0.30f),
@@ -207,11 +213,10 @@ fun GridMap(
                 )
             }
 
-            // ---- 信号连线（只画最近一个时隙） ----
+            // ---- 信号连线（只画最近一个时隙；跨 180° 走短弧） ----
             val phase = linkPhase().coerceIn(0f, 1f)
             for (l in links) {
-                val fa = p.toScreen(l.fromLat, l.fromLon)
-                val tb = p.toScreen(l.toLat, l.toLon)
+                val (fa, tb) = p.linkEnds(l.fromLat, l.fromLon, l.toLat, l.toLon)
                 val fx = fa.x.toFloat()
                 val fy = fa.y.toFloat()
                 val tx = tb.x.toFloat()
