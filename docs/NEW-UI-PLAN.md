@@ -744,25 +744,55 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 
 用户拿着操作页底部收起态横条的截图（`→ 无目标　空闲/只接收　[发送总开关]`）要求
 「**操作页改成上滑 [这条] 打开抽屉**」，并另提「**设置页自动程序不要有二级滑动菜单**」。
-动手前先问清了三点，用户选择：①**上滑 + 保留点击**；②**手势触发即可**（不做跟手拖动）；
-③「二级滑动菜单」确认是**面板自带的内层滚动**。
+动手前先问清了三点，用户当时选择：①**上滑 + 保留点击**；②**手势触发即可**；③「二级滑动菜单」
+确认是**面板自带的内层滚动**。
 
-- **抽屉展开方式（`ui/TxDrawer.kt`）**：收起条原为 `combinedClickable`（点击 / 长按展开），
-  在其上叠加 `Modifier.pointerInput { detectVerticalDragGestures(...) }`：拖动累计位移（普通局部
-  `var`，不建 State，避免每帧重组）在**松手**时若 ≤ −`DRAWER_SWIPE_DP`（40dp，`toPx()` 换算）即
-  `expanded = true`；`onDragCancel` 清零。手势只做触发，抽屉本体仍是 `ModalBottomSheet`（自带
-  下滑关闭 + 点遮罩关闭）。条右侧的「发送总开关」`Switch` 自己消费点击，**拨开关不会展开抽屉**；
-  点击 / 长按展开的旧路径保留（发现性）。新增 import：`detectVerticalDragGestures`、`pointerInput`。
+- **第一版（已被下一段取代）**：收起条上叠加 `detectVerticalDragGestures`，松手时累计位移
+  ≤ −40dp 即 `expanded = true`，抽屉本体仍是 `ModalBottomSheet`。
+- **用户试用后要求改成跟手**：原话「改抽屉改成上滑打开 跟随移动 现在手感怪怪的」——
+  说明「甩一下才弹」的手感不对，于是**弃用 `ModalBottomSheet`，改成页内覆盖层抽屉**（见下）。
 - **设置页自动程序面板（`ui/AutoProgramDialog.kt` + `ui/SettingsScreen.kt`）**：`AutoProgramPanel`
   原为 `modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState())`，嵌进
   设置页（页面本身 `verticalScroll`）就成了第二层滚动条。现新增参数
   `nestedScroll: Boolean = true`：为 `true`（顶栏 `AutoProgramDialog` 那份）保持原样（弹窗高度有限，
   必须有内层滚动）；为 `false`（设置页 6.3）只 `fillMaxWidth()`，面板**完全展开、跟随整页滚动**。
   `rememberScrollState()` 提到条件之外无条件调用（条件式 `remember` 不必要）。
-- **验证**：`:app:assembleDebug :app:testDebugUnitTest` **BUILD SUCCESSFUL**；JVM **273 例 / 30 suite**
-  全过（本轮为纯 UI 改动，无新增/改动单测）。验收见 `REGRESSION.md` §4（抽屉三种展开方式、设置页
-  面板无内层滚动）与 E 组第 2 项。
-- **未做**：上滑的手势提示文案/箭头（用户未要求，且「点击也能开」保证了可发现性）；
-  跟手拖动（需弃用 `ModalBottomSheet`，改动过大，用户已明确选「手势触发即可」）。
+
+#### 跟手抽屉（取代第一版的手势触发）
+
+- **布局（`ui/OperateScreen.kt`）**：操作页根改成 `Box`，里面是原来的 `Column`（末尾加
+  `.padding(bottom = 56.dp)` 给条身让位）＋ `TxDrawer(Modifier.align(Alignment.BottomCenter))`
+  覆盖层。抽屉是页内覆盖层（**不再是独立窗口**），因此 `MainShell` 那句「BackHandler 只在没有
+  弹窗 / 抽屉消费返回键时才触发」的注释已更新，`TxDrawer` 内部自注册 `BackHandler` 先收抽屉。
+- **跟手（`ui/TxDrawer.kt`）**：抽屉 = `BoxWithConstraints`（`fillMaxSize + clipToBounds`）＋
+  「条身在上、面板在下」的一个 `Column`，用 `Modifier.offset { IntOffset(0, offsetPx) }` 整体下移。
+  `0` = 展开（面板贴底、条身升到面板上方），`travelPx = panelDp.toPx()` = 收起（只剩 56dp 条身贴底）。
+  条身挂 `Modifier.draggable(state = DraggableState { delta -> offsetPx = (offsetPx + delta).coerceIn(0f, travelPx) }, Orientation.Vertical, onDragStopped = ...)`
+  ——**逐帧直接改值**（不用 `Animatable.snapTo`，因为 `DraggableState.onDelta` 不是挂起函数；本版
+  `DraggableState` 接口签名是 `drag(MutatePriority, block)` + `dispatchRawDelta`，无法直接实现
+  `suspend drag(delta)`），只有松手吸附那一段用 `animate(offsetPx, target, initialVelocity = …, spring(StiffnessMediumLow)) { v, _ -> offsetPx = v }`。
+- **吸附规则**：甩动 ≥ `DRAWER_FLING_VELOCITY`（800 px/s）按甩的方向；否则按「拉过一半」。
+  初速只在与目标同向时带入，避免「明明要收起却先往上飘一下」。
+- **性能**：`offsetPx` 只在 `Modifier.offset{}` / `drawBehind{}` 这类 layout、draw 阶段读取，
+  拖动时不触发重组；对外的「面板是否露出」用 `derivedStateOf` 压成**一个布尔量**（只在收起 ↔ 露出
+  翻转时重组一次），遮罩随之出现/消失（透明度仍由 `drawBehind` 逐帧算）。
+- **交互**：点击 / 长按条身仍展开；展开后条身就是顶部手柄（向下拖 / 点遮罩 / 返回键收起）；
+  遮罩只盖条身以上，展开时操作页其它卡片点不动；条身右侧「发送总开关」自己消费点击，**不**展开抽屉。
+- **验证（模拟器 `emulator-5554` 实测，2026-09-26）**：
+  1. 收起态：56dp 条身贴底、圆角正常；条身内容 `→ 无目标　空闲/只接收　[开关]` 未变。
+  2. 点击条身 → 展开，面板内容从「目标」开始（**滚动位置在顶部**）。
+  3. **慢速上滑 3 s 途中截图** → 条身已随手指上移、面板从条身下方部分露出（证明是**跟手**而不是
+     「甩一下才弹」）；松手后吸附为完全展开。
+  4. 展开后按返回键 → 抽屉收起、`mCurrentFocus` 仍是 `MainActivity`（**不退后台**）。
+  5. 拨条身右侧「发送总开关」→ 只切开关（「只接收」↔「允许发射」）、**不**展开抽屉。
+  6. 点遮罩 → 收起。全程 `logcat` 无 `FATAL` / `AndroidRuntime`。
+  - 首启曾发现「面板内部滚动位置停在底部」（冷启动后首次展开时看到的是面板尾部），已加
+    「收起后把面板内容 `scrollTo(0)`」的保险（收起动画结束 400 ms 后执行，屏外不可见；
+    与旧 `ModalBottomSheet` 每次重建内容的表现一致）。冷启动复测（`force-stop` → 启动 → 慢速上滑）
+    首次展开即从「目标」开始 ✓。
+  - `:app:assembleDebug :app:testDebugUnitTest` **BUILD SUCCESSFUL**；JVM **273 例 / 30 suite** 全过
+    （纯 UI 改动，无单测增减）。验收清单见 `REGRESSION.md` §4 与 E 组第 2 项。
+- **未做**：面板内容区「下拉到底部再下拉就收抽屉」的 `nestedScroll` 联动（现在只有条身/遮罩/返回键
+  能收），需要时再加。
 
 
