@@ -79,7 +79,7 @@ fun TxDrawer(
     onSendOnce: (String) -> Unit,
     onStopTx: () -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
-    onHoldTxChange: (Boolean) -> Unit,
+    onSameFreqChange: (Boolean) -> Unit,
     onOpenAutoProgram: () -> Unit,
     onMacrosChange: (List<String>) -> Unit,
     onEnqueue: (String) -> Unit,
@@ -94,7 +94,13 @@ fun TxDrawer(
     val target = status.qso.theirCall ?: targetCall
     val kind = TxCompose.kindOf(composeText.ifBlank { status.qso.txText }, status.myCall)
     val report = TxCompose.reportFor(messages, target)
-    val canSendNow = TxScheduler.canSendNow(status.slotParity, status.txParity, status.msToNextSlot)
+    // 立即发判据：报文波形 + 前导必须能在本时隙剩余时间内播完（否则排下一个我方周期）
+    val canSendNow = TxScheduler.canSendNow(
+        status.slotParity,
+        status.txParity,
+        status.msToNextSlot,
+        TxScheduler.minSendNowMs(status.protocol.messageMs, settings.txPreambleMs),
+    )
 
     fun targetInfo(): Pair<String?, Int?> {
         val t = target ?: return null to null
@@ -387,11 +393,11 @@ fun TxDrawer(
                     when {
                         !status.txEnabled ->
                             "发送总开关已关：只接收，不发射任何报文。打开后由「发送」按钮 / 解码卡片手势或自动程序决定发什么。"
-                        status.autoProgram.level.enabled ->
-                            "发送总开关已开，自动程序已启用（等级 ${status.autoProgram.level.shortLabel}）：" +
+                        status.autoProgram.mode.enabled ->
+                            "发送总开关已开，自动程序已启用（${status.autoProgram.mode.shortLabel}）：" +
                                 "选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
-                        canSendNow -> "发送总开关已开；当前为我方周期且剩余 >2.5s：点「发送」将立即发射"
-                        else -> "发送总开关已开；非我方周期或剩余不足：点「发送」将排到下一个我方发射周期"
+                        canSendNow -> "发送总开关已开；当前为我方周期且剩余时间够播完本条报文：点「发送」将立即发射"
+                        else -> "发送总开关已开；非我方周期或剩余时间不足以播完本条报文：点「发送」将排到下一个我方发射周期"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -399,15 +405,29 @@ fun TxDrawer(
 
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-                // 7) 自动序列（Hold Tx / 自动程序）；发射周期固定为「自动」
+                // 7) 自动序列（同频/异频发射 / 自动程序）；发射周期固定为「自动」
                 Text("自动序列", style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(
-                        selected = status.holdTxFreq,
-                        onClick = { onHoldTxChange(!status.holdTxFreq) },
-                        label = { Text("Hold Tx") },
+                        selected = status.sameFreqTx,
+                        onClick = { onSameFreqChange(true) },
+                        label = { Text("同频发射") },
+                    )
+                    FilterChip(
+                        selected = !status.sameFreqTx,
+                        onClick = { onSameFreqChange(false) },
+                        label = { Text("异频发射") },
                     )
                 }
+                Text(
+                    if (status.sameFreqTx) {
+                        "同频发射：「点谁打谁」——选台时红线（发射频率）跟到对方的频率。"
+                    } else {
+                        "异频发射：发射固定在红线位置，选台不改红线（拖动瀑布上的红线设定频率）。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     "发射时隙：自动按手机 UTC 时间取下一个来得及的时隙，" +
                         "当前锁定${if (status.txParity == 0) "偶" else "奇"}周期；" +
@@ -421,17 +441,25 @@ fun TxDrawer(
                 ) {
                     Text("自动程序", style = MaterialTheme.typography.labelMedium)
                     Text(
-                        status.autoProgram.level.shortLabel,
+                        status.autoProgram.mode.shortLabel,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (status.autoProgram.level.enabled) MaterialTheme.colorScheme.primary
+                        color = if (status.autoProgram.mode.enabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = onOpenAutoProgram) { Text("设置…") }
                 }
+                if (status.autoProgram.mode.enabled) {
+                    Text(
+                        "第 2 层：${status.autoPhaseLabel ?: "—"}" +
+                            if (status.autoQueueSize > 0) "｜队列 ${status.autoQueueSize} 台" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
-                    "没有独立的启用开关：等级「0 手动选择」＝关闭，1+ ＝开启。" +
-                        "切换等级会弹防误发确认；确认启用时若「发送总开关」为关会自动打开，" +
-                        "随后选台与整段 QSO 的报文流程都交给自动程序。",
+                    "没有独立的启用开关：模式「0 手动模式」＝关闭，1 主叫 / 2 混合 ＝开启。" +
+                        "切换模式会弹防误发确认；确认启用时若「发送总开关」为关会自动打开，" +
+                        "随后选台、排队与整段 QSO 的报文流程都交给自动程序。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

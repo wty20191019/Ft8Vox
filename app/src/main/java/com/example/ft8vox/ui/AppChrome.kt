@@ -114,15 +114,11 @@ fun Ft8VoxTopBar(
         "--.------"
     }
 
-    // 时隙指示（顶栏第二行）：用 0/1 时隙号，不再用「奇/偶」——
-    //   接收时隙 → `· RX：1`；我方发射时隙 → `· TX：0`。
+    // 时隙指示（顶栏第二行）：只显示**我方发射时隙号**（0/1），不再显示接收时隙号。
+    // 处于我方发射时隙时整段高亮（发射中红 / 待发蓝），接收时隙保持弱化色。
     // 待发/发射中的报文单独放**第三行**（只有我方发射时隙且有报文/正在发射时才出现）。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
-    val slotTag: String? = when {
-        !status.running -> null
-        inTxSlot -> "TX：${status.txParity}"
-        else -> "RX：${status.slotParity}"
-    }
+    val slotTag: String? = if (status.running) "TX：${status.txParity}" else null
     val pendingTxText = status.manualTxText?.takeIf { it.isNotBlank() }
         ?: status.qso.txText?.takeIf { it.isNotBlank() }
     val txText = if (status.txing) {
@@ -177,7 +173,7 @@ fun Ft8VoxTopBar(
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("自动程序　${status.autoProgram.level.shortLabel}") },
+                        text = { Text("自动程序　${status.autoProgram.mode.shortLabel}") },
                         onClick = {
                             menuOpen = false
                             onAutoProgram()
@@ -369,7 +365,7 @@ fun BandFreqDialog(
     )
 }
 
-/** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与触发配置）。 */
+/** 音频 / VOX 速览（U7b：显示采样率、VOX 电平与判定配置）。 */
 @Composable
 private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
     val context = LocalContext.current
@@ -389,17 +385,7 @@ private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
         Text("输出音量  ${appSettings.outputGainDb} dB", style = MaterialTheme.typography.labelSmall)
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         Text("VOX", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}",
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Text(
-            "状态  ${if (!status.running) "未运行" else if (status.voxOpen) "触发" else "空闲"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (status.voxOpen) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text("触发  ${appSettings.voxTrigger.label} / ${appSettings.voxThresholdDb} dB", style = MaterialTheme.typography.labelSmall)
+        Text("输入电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}", style = MaterialTheme.typography.labelSmall)
         Text(
             "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
             style = MaterialTheme.typography.labelSmall,
@@ -446,7 +432,6 @@ fun BottomStatusBar(
     queueCount: Int,
     timeWarning: String?,
     voxLevelDb: Float = -100f,
-    voxOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -469,10 +454,9 @@ fun BottomStatusBar(
                 color = if (txing) VoxTxRed else VoxRxGreen,
             )
             Text(
-                voxLabel(voxLevelDb, voxOpen, running),
+                voxLabel(voxLevelDb, running),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (voxOpen) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text("解码 $decodePerMin/min", style = MaterialTheme.typography.labelSmall)
             Text("总数 $decodedTotal", style = MaterialTheme.typography.labelSmall)
@@ -487,9 +471,9 @@ fun BottomStatusBar(
     }
 }
 
-/** 底部状态条「VOX」文案：电平（dBFS）+ 触发点。 */
-internal fun voxLabel(levelDb: Float, open: Boolean, running: Boolean): String {
-    if (!running) return "VOX --"
+/** 底部状态条「电平」文案：输入电平（dBFS）。 */
+internal fun voxLabel(levelDb: Float, running: Boolean): String {
+    if (!running) return "电平 --"
     val lv = if (levelDb <= -99.5f) "--" else "${levelDb.toInt()} dB"
-    return if (open) "VOX $lv ●" else "VOX $lv"
+    return "电平 $lv"
 }

@@ -19,12 +19,6 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** VOX 触发方式（new_ui §6.1；生效依赖 U7 native 能力）。 */
-enum class VoxTrigger(val label: String) {
-    AUDIO("音频检测"),
-    SILENCE("静音检测"),
-}
-
 /** 已通联呼号的呈现方式（new_ui §6.4）。 */
 enum class WorkedStyle(val label: String) {
     STRIKE("删除线"),
@@ -161,14 +155,17 @@ data class AppSettings(
     // ---- 操作 ----
     /** 协议名（存名字而非 ordinal，避免枚举顺序变化导致旧数据错位）。 */
     val protocolName: String = Protocol.FT8.name,
-    /** 音频发射频率（Hz）。 */
+    /** 音频发射频率（Hz）＝瀑布上的红线位置（「异频发射」时的设定频率）。 */
     val selectedFreqHz: Int = 1500,
-    /** 锁定发射频率（应答时不跟随对方频率）。 */
-    val holdTxFreq: Boolean = false,
-    /** 自动程序（等级 + 策略；对应 FT8CN「自动程序」菜单）。 */
+    /**
+     * 同频发射：选台时把发射频率（红线）跟到目标频率。
+     *
+     * - `true`（默认）＝**同频发射**：「点谁打谁」，应答/呼叫我方时红线移到对方频率。
+     * - `false`＝**异频发射**（split）：发射固定在 [selectedFreqHz]，选台不改红线（只由用户拖动红线设置）。
+     */
+    val sameFreqTx: Boolean = true,
+    /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
-    /** 自动序列最大重试次数。 */
-    val maxRetries: Int = 6,
 
     // ---- 解码列表过滤（显示层，new_ui §3.2） ----
     /** 已选中的筛选项；空集表示「一个都没开」。 */
@@ -192,13 +189,7 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / VOX（new_ui §6.1；生效依赖 U7） ----
-    /** VOX 触发方式。 */
-    val voxTrigger: VoxTrigger = VoxTrigger.AUDIO,
-    /** VOX 延迟（ms，50–1000）。 */
-    val voxDelayMs: Int = 300,
-    /** VOX 阈值（dB，−60…−20）。 */
-    val voxThresholdDb: Int = -40,
+    // ---- 电台 / PTT（new_ui §6.1） ----
     /** 发射前导音开关。 */
     val txLeadTone: Boolean = false,
     /** 前导音时长（ms，0–2000）。 */
@@ -267,6 +258,14 @@ data class AppSettings(
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
+
+    /**
+     * 发射前导总时长（ms）＝ PTT 前导静音 [pttDelayMs] + 发射前导音 [txLeadToneMs]。
+     *
+     * 供「立即发」判定使用：报文波形 + 前导都能在本时隙剩余时间内播完才允许立即发射。
+     */
+    val txPreambleMs: Int
+        get() = pttDelayMs.coerceAtLeast(0) + if (txLeadTone) txLeadToneMs.coerceAtLeast(0) else 0
 
     /** 当前实际使用的刻度频率（Hz）：自定义波段或波段内频率优先，否则取波段默认。 */
     val resolvedDialHz: Long

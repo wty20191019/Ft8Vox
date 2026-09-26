@@ -69,6 +69,59 @@ class VoxPlanTest {
     }
 
     @Test
+    fun `报文能在本时隙播完时就地发射`() {
+        // 起点后 2000ms + 前导 50ms + FT8 报文 12640ms = 14690 ≤ 15000：本时隙就能播完
+        val now = 100 * ft8 + 2_000
+        val p = planTx(now, ft8, txParity = 0, preambleMs = 50, messageMs = 12_640)
+
+        assertEquals(100L, p.targetSlotIndex)
+        assertEquals(now, p.startAtMs)
+        assertEquals(now + 50L, p.targetStartMs)
+    }
+
+    @Test
+    fun `报文播不完时等下一个我方时隙`() {
+        // 起点后 2500ms：2500 + 50 + 12640 = 15190 > 15000 → 排下一个我方周期
+        val now = 100 * ft8 + 2_500
+        val p = planTx(now, ft8, txParity = 0, preambleMs = 50, messageMs = 12_640)
+
+        assertEquals(102L, p.targetSlotIndex)
+        assertEquals(1_530_000L, p.targetStartMs)
+    }
+
+    @Test
+    fun `未提供报文时长时仍按旧的起始窗口判定`() {
+        // 同为起点后 2000ms，但报文时长未知（0）→ 超出 1200ms 起始窗口，等下一个我方周期
+        val now = 100 * ft8 + 2_000
+        val p = planTx(now, ft8, txParity = 0, preambleMs = 50)
+
+        assertEquals(102L, p.targetSlotIndex)
+    }
+
+    @Test
+    fun `时隙偏移不影响报文塞得下的判断`() {
+        // 偏移 +1500ms：名义起点后 3000ms 其实刚过偏移后的起点 1500ms，报文仍塞得下
+        val now = 100 * ft8 + 3_000
+        val p = planTx(
+            now, ft8, txParity = 0, preambleMs = 50,
+            messageMs = 12_640, slotOffsetMs = 1_500,
+        )
+
+        assertEquals(100L, p.targetSlotIndex)
+        assertEquals(now, p.startAtMs)
+    }
+
+    @Test
+    fun `FT4 报文更短就地窗口更宽`() {
+        // FT4 时隙 7500ms：起点后 2500ms + 50 + 4480 = 7030 ≤ 7500 → 就地发射
+        val now = 10 * ft4 + 2_500
+        val p = planTx(now, ft4, txParity = 0, preambleMs = 50, messageMs = 4_480)
+
+        assertEquals(10L, p.targetSlotIndex)
+        assertEquals(now, p.startAtMs)
+    }
+
+    @Test
     fun `FT4 时隙同样成立`() {
         val now = 10 * ft4 + 50
         val p = planTx(now, ft4, txParity = 0, preambleMs = 0)
@@ -84,10 +137,9 @@ class VoxPlanTest {
     }
 
     @Test
-    fun `电平文案区分未运行_静音与触发`() {
-        assertEquals("VOX --", voxLabel(-100f, open = false, running = false))
-        assertEquals("VOX --", voxLabel(-100f, open = false, running = true))
-        assertEquals("VOX -42 dB", voxLabel(-42.3f, open = false, running = true))
-        assertEquals("VOX -42 dB ●", voxLabel(-42.3f, open = true, running = true))
+    fun `电平文案区分未运行与读数`() {
+        assertEquals("电平 --", voxLabel(-100f, running = false))
+        assertEquals("电平 --", voxLabel(-100f, running = true))
+        assertEquals("电平 -42 dB", voxLabel(-42.3f, running = true))
     }
 }

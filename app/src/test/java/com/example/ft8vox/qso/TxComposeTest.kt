@@ -168,4 +168,20 @@ class TxComposeTest {
         // 非我方周期 → 排下一周期
         assertFalse(TxScheduler.canSendNow(1, 0, 10_000))
     }
+
+    @Test
+    fun minSendNowNeedsWholeMessagePlusPreamble() {
+        // FT8：12.64 s 报文 + 50 ms 前导
+        assertEquals(12_690L, TxScheduler.minSendNowMs(12_640, 50))
+        // FT4：4.48 s 报文 + 200 ms 前导
+        assertEquals(4_680L, TxScheduler.minSendNowMs(4_480, 200))
+        // 报文时长未知 → 兜底 2.5 s；前导为负按 0 处理
+        assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0))
+        assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0, -100))
+
+        // FT8 本时隙开头约 1 s（剩 14 s）→ 立即发；剩 10 s 已放不下整条报文 → 排下一周期
+        val ft8 = TxScheduler.minSendNowMs(12_640, 50)
+        assertTrue(TxScheduler.canSendNow(0, 0, 14_000, ft8))
+        assertFalse(TxScheduler.canSendNow(0, 0, 10_000, ft8))
+    }
 }
