@@ -1,17 +1,27 @@
 package com.example.ft8vox.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.DraggableState
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -31,14 +41,16 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,9 +58,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.engine.DecodeResult
@@ -60,15 +77,28 @@ import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.TxScheduler
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
-/** 收起条上滑多少 dp 就展开抽屉（new_ui.md §3.4）。 */
-private const val DRAWER_SWIPE_DP = 40
+/** 收起条高度（抽屉的「手柄」，也是 OperateScreen 给覆盖层让出的底部内边距）。 */
+internal const val TX_DRAWER_STRIP_DP = 56
+
+/** 展开后抽屉内容区的高度上限（跟手行程 = 这个高度）。 */
+private const val DRAWER_PANEL_MAX_DP = 460
+
+/** 松手时的甩动速度阈值（px/s）：上滑超过它就展开，下滑超过它就收起。 */
+private const val DRAWER_FLING_VELOCITY = 800f
+
+/** 收起动画大约多久结束（毫秒）；结束后再把面板内容滚回顶部。 */
+private const val DRAWER_SETTLE_MS = 400L
 
 /**
  * 发射控制抽屉（new_ui.md §3.4）。
  *
- * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；点击条身、长按或**向上滑动约 40dp**
- * 都展开 Bottom Sheet，内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
+ * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；**按住条身向上拖动即跟手展开**
+ * （条身上移、面板从条身下方露出来），松手后按位置 / 甩动速度自动吸附到展开或收起；
+ * 点击条身、长按条身同样展开。展开后条身就是「手柄」，把它向下拖 / 点遮罩 / 按返回键都能收起。
+ * 面板内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +121,7 @@ fun TxDrawer(
     onRemoveQueued: (Int) -> Unit,
     onMoveQueued: (Int, Int) -> Unit,
     onClearQueue: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var composeText by rememberSaveable { mutableStateOf("") }
@@ -159,72 +190,150 @@ fun TxDrawer(
         if (fromQueue && direct) onRemoveQueued(0)
     }
 
-    // ---- 收起态 56dp 条（点击 / 长按 / 上滑都能展开） ----
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .pointerInput(Unit) {
-                // 上滑超过约 40dp 即打开抽屉（抽屉本体仍用自己的弹出动画）
-                val threshold = DRAWER_SWIPE_DP.dp.toPx()
-                var dragged = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { dragged = 0f },
-                    onDragEnd = { if (dragged <= -threshold) expanded = true },
-                    onDragCancel = { dragged = 0f },
-                ) { _, dy -> dragged += dy }
-            }
-            .combinedClickable(
-                onClick = { expanded = true },
-                onLongClick = { expanded = true },
-            )
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            "→ ${target ?: "无目标"}",
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = FontFamily.Monospace,
-            color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.weight(1f),
-        )
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                kind?.label ?: "空闲",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (status.txEnabled) "允许发射" else "只接收",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (status.txEnabled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (status.txArmed) {
-                Text(
-                    if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    BoxWithConstraints(modifier.fillMaxSize().clipToBounds()) {
+        val density = LocalDensity.current
+        // 面板内容区高度＝跟手行程：屏幕装得下就 460dp，装不下就压到「可用高 − 条高 − 余量」
+        val panelDp = (maxHeight - TX_DRAWER_STRIP_DP.dp - 24.dp)
+            .coerceAtMost(DRAWER_PANEL_MAX_DP.dp)
+            .coerceAtLeast(160.dp)
+        val travelPx = with(density) { panelDp.toPx() }
+        // 0 = 完全展开（面板贴底、条身升到面板上方）；travelPx = 完全收起（只剩 56dp 条身贴底）
+        // 用普通状态而不是 Animatable：拖动要逐帧直接改值（DraggableState 的 onDelta 不是挂起函数），
+        // 只有松手吸附那一段才用 animate() 插值。
+        var offsetPx by remember(travelPx) { mutableFloatStateOf(if (expanded) 0f else travelPx) }
+        val panelScroll = rememberScrollState()
+        val dragState = remember(travelPx) {
+            DraggableState { delta -> offsetPx = (offsetPx + delta).coerceIn(0f, travelPx) }
+        }
+        // 只暴露一个布尔量：拖动每帧都变的是 offsetPx，而它只在「收起 ↔ 露出」这一次翻转时触发重组
+        val panelShown by remember(travelPx) {
+            derivedStateOf { offsetPx < travelPx - 0.5f }
+        }
+
+        // 外部改动（点击 / 长按 / 返回键 / 旋转恢复）也走同一段弹性动画
+        LaunchedEffect(expanded, travelPx) {
+            val target = if (expanded) 0f else travelPx
+            if (offsetPx != target) {
+                animate(offsetPx, target, animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) { v, _ ->
+                    offsetPx = v
+                }
             }
         }
-        // 唯一的发射控制：「发送总开关」——只回答「能不能发」（关 = 只接收，开 = 允许发射），
-        // 自己**不发任何报文**。发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定。
-        Switch(
-            checked = status.txEnabled,
-            onCheckedChange = onTxEnabledChange,
-        )
-    }
+        // 面板露出时返回键先收起抽屉（本组件在 MainShell 的 BackHandler 之后注册，优先级更高）
+        BackHandler(enabled = panelShown) { expanded = false }
 
-    if (expanded) {
-        ModalBottomSheet(onDismissRequest = { expanded = false }) {
+        // 收起后把面板内容滚回顶部（此时面板在屏外，重置不可见）：下次展开总是从「目标」开始，
+        // 与旧 ModalBottomSheet「每次重建内容」的表现一致；也顺带修掉首帧可能出现的滚动位置残留。
+        // 延后到收起动画结束再重置，避免收起途中内容跳一下；期间若重新展开，本协程会被取消。
+        LaunchedEffect(panelShown, travelPx) {
+            if (!panelShown) {
+                delay(DRAWER_SETTLE_MS)
+                panelScroll.scrollTo(0)
+            }
+        }
+
+        // 遮罩：随跟手进度渐显，点它收起（offsetPx 只在 draw 阶段读，不触发重组）
+        if (panelShown) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawBehind {
+                        drawRect(Color.Black.copy(alpha = 0.45f * (1f - offsetPx / travelPx)))
+                    }
+                    .pointerInput(Unit) { detectTapGestures { expanded = false } },
+            )
+        }
+
+        // 抽屉本体：条身在上（＝手柄）、面板在下；整体下移 travelPx 后只剩条身露在屏幕底部
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .offset { IntOffset(0, offsetPx.roundToInt()) }
+                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                .background(MaterialTheme.colorScheme.surface),
+        ) {
+            // ---- 收起态 56dp 条：跟手拖动的手柄（点击 / 长按仍可展开） ----
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TX_DRAWER_STRIP_DP.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .draggable(
+                        state = dragState,
+                        orientation = Orientation.Vertical,
+                        onDragStopped = { velocity ->
+                            // 甩得够快就顺着甩的方向；否则看「有没有拉过一半」。初速只取与目标同向的那部分。
+                            val fling = when {
+                                velocity <= -DRAWER_FLING_VELOCITY -> 0f
+                                velocity >= DRAWER_FLING_VELOCITY -> travelPx
+                                else -> null
+                            }
+                            val target = fling ?: if (offsetPx < travelPx * 0.5f) 0f else travelPx
+                            val initial = if ((target == 0f && velocity < 0f) || (target == travelPx && velocity > 0f)) {
+                                velocity
+                            } else {
+                                0f
+                            }
+                            expanded = target == 0f
+                            animate(
+                                offsetPx,
+                                target,
+                                initialVelocity = initial,
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            ) { v, _ -> offsetPx = v }
+                        },
+                    )
+                    .combinedClickable(
+                        onClick = { expanded = true },
+                        onLongClick = { expanded = true },
+                    )
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "→ ${target ?: "无目标"}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (target != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        kind?.label ?: "空闲",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        if (status.txEnabled) "允许发射" else "只接收",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (status.txEnabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (status.txArmed) {
+                        Text(
+                            if (status.txing) "发射中" else "%.1fs".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                // 唯一的发射控制：「发送总开关」——只回答「能不能发」（关 = 只接收，开 = 允许发射），
+                // 自己**不发任何报文**。发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定。
+                Switch(
+                    checked = status.txEnabled,
+                    onCheckedChange = onTxEnabledChange,
+                )
+            }
+
+            // ---- 面板内容：固定高度 + 内部滚动（跟手行程就是 panelDp） ----
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .height(panelDp)
+                    .verticalScroll(panelScroll)
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

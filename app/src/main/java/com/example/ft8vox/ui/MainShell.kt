@@ -76,7 +76,8 @@ fun MainShell(
     val activity = remember(context) { context.findActivity() }
 
     // 返回键：接收中「退到后台继续接收」（由前台服务保活），未接收时保持默认行为（退出）。
-    // Compose 的 BackHandler 只在没有弹窗 / 底部抽屉（各自独立窗口）消费返回键时才会触发。
+    // Compose 的 BackHandler 按「后注册者优先」生效：操作页的发射抽屉（页内覆盖层，非独立窗口）
+    // 与解码详情弹窗（ModalBottomSheet）都在本组件之后注册，所以它们露出时返回键先收起它们。
     BackHandler(enabled = status.running) {
         activity?.moveTaskToBack(true)
         Toast.makeText(context, "已退到后台继续接收，可在通知栏「停止接收」", Toast.LENGTH_SHORT).show()
