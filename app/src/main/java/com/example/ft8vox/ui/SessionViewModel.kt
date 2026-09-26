@@ -129,7 +129,23 @@ data class ReceiverStatus(
     // ---- PTT / 输入电平（U7b） ----
     /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用。 */
     val voxLevelDb: Float = -100f,
-)
+) {
+    /**
+     * 下一次计划发射的报文（取值与发射调度 `txTick` 一致：一次性手动 > QSO 引擎计划）。
+     */
+    val pendingTxText: String?
+        get() = manualTxText?.takeIf { it.isNotBlank() } ?: qso.txText?.takeIf { it.isNotBlank() }
+
+    /**
+     * 界面显示用的发射报文。
+     *
+     * **发射中固定为本条实际在播的 [lastTxText]**：发射途中改目标 / QSO 状态推进都不会让
+     * 顶栏与抽屉的文案跟着变（否则显示的会与真正在天上的报文不符）；其余时刻显示
+     * [pendingTxText]（下一次会发射什么）。
+     */
+    val displayTxText: String?
+        get() = if (txing) lastTxText?.takeIf { it.isNotBlank() } ?: pendingTxText else pendingTxText
+}
 
 /**
  * 会话状态管理：把实时引擎的轮询结果整理为不可变 UI 状态，并驱动 QSO 自动序列。
