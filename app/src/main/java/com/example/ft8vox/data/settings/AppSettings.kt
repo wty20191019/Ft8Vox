@@ -19,12 +19,6 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** VOX 触发方式（new_ui §6.1；生效依赖 U7 native 能力）。 */
-enum class VoxTrigger(val label: String) {
-    AUDIO("音频检测"),
-    SILENCE("静音检测"),
-}
-
 /** 已通联呼号的呈现方式（new_ui §6.4）。 */
 enum class WorkedStyle(val label: String) {
     STRIKE("删除线"),
@@ -195,13 +189,7 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / VOX（new_ui §6.1；生效依赖 U7） ----
-    /** VOX 触发方式。 */
-    val voxTrigger: VoxTrigger = VoxTrigger.AUDIO,
-    /** VOX 延迟（ms，50–1000）。 */
-    val voxDelayMs: Int = 300,
-    /** VOX 阈值（dB，−60…−20）。 */
-    val voxThresholdDb: Int = -40,
+    // ---- 电台 / PTT（new_ui §6.1） ----
     /** 发射前导音开关。 */
     val txLeadTone: Boolean = false,
     /** 前导音时长（ms，0–2000）。 */

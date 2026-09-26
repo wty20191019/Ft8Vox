@@ -1,9 +1,6 @@
 package com.example.ft8vox.ui
 
-import com.example.ft8vox.data.settings.VoxTrigger
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -140,27 +137,9 @@ class VoxPlanTest {
     }
 
     @Test
-    fun `电平文案区分未运行_无信号与有信号`() {
-        assertEquals("VOX --", voxLabel(-100f, signal = false, running = false))
-        assertEquals("VOX --", voxLabel(-100f, signal = false, running = true))
-        assertEquals("VOX -42 dB", voxLabel(-42.3f, signal = false, running = true))
-        assertEquals("VOX -42 dB ●", voxLabel(-42.3f, signal = true, running = true))
-    }
-
-    @Test
-    fun `VOX 指示随触发方式翻译_音频检测命中是有信号_静音检测命中是静音`() {
-        // 音频检测：命中（电平 ≥ 阈值）＝有信号
-        assertTrue(voxHasSignal(VoxTrigger.AUDIO, open = true))
-        assertFalse(voxHasSignal(VoxTrigger.AUDIO, open = false))
-        // 静音检测：命中（电平 < 阈值）＝静音，反而是「无信号」
-        assertFalse(voxHasSignal(VoxTrigger.SILENCE, open = true))
-        assertTrue(voxHasSignal(VoxTrigger.SILENCE, open = false))
-
-        assertEquals("有信号", voxStateLabel(VoxTrigger.AUDIO, open = true, running = true))
-        assertEquals("空闲", voxStateLabel(VoxTrigger.AUDIO, open = false, running = true))
-        assertEquals("静音", voxStateLabel(VoxTrigger.SILENCE, open = true, running = true))
-        assertEquals("有信号", voxStateLabel(VoxTrigger.SILENCE, open = false, running = true))
-        // 未运行时不看触发方式
-        assertEquals("未运行", voxStateLabel(VoxTrigger.SILENCE, open = true, running = false))
+    fun `电平文案区分未运行与读数`() {
+        assertEquals("电平 --", voxLabel(-100f, running = false))
+        assertEquals("电平 --", voxLabel(-100f, running = true))
+        assertEquals("电平 -42 dB", voxLabel(-42.3f, running = true))
     }
 }

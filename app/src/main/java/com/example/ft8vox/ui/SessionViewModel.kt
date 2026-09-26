@@ -23,7 +23,6 @@ import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.engine.VoxConfig
-import com.example.ft8vox.engine.VoxMode
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.AutoAction
 import com.example.ft8vox.qso.AutoMode
@@ -41,7 +40,6 @@ import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
 import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
-import com.example.ft8vox.data.settings.VoxTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -118,10 +116,8 @@ data class ReceiverStatus(
     val autoQueueSize: Int = 0,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
-    // ---- VOX / PTT（U7b，基于输入电平近似判定，仅作提示） ----
-    /** VOX 判定命中（含义随「VOX 触发」方式：音频检测＝有信号，静音检测＝静音）。 */
-    val voxOpen: Boolean = false,
-    /** 平滑后的输入电平（dBFS，下限约 -100）。 */
+    // ---- PTT / 输入电平（U7b） ----
+    /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用。 */
     val voxLevelDb: Float = -100f,
 )
 
@@ -344,7 +340,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 把 VOX/PTT 配置下发给 native（热生效）。
+     * 把 PTT 配置下发给 native（热生效）。
      * 引擎未初始化时 [AudioEngine.setVox] 为无操作；[start] 会用 force 重下发一次。
      */
     private fun applyVox(s: AppSettings, force: Boolean = false) {
@@ -354,11 +350,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AudioEngine.setVox(cfg)
     }
 
-    /** 由设置组装 native 的 VOX/PTT 配置。 */
+    /** 由设置组装 native 的 PTT 配置。 */
     private fun voxConfigOf(s: AppSettings): VoxConfig = VoxConfig(
-        mode = if (s.voxTrigger == VoxTrigger.SILENCE) VoxMode.SILENCE else VoxMode.AUDIO,
-        thresholdDb = s.voxThresholdDb,
-        delayMs = s.voxDelayMs,
         pttDelayMs = s.pttDelayMs,
         leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
         watchdogMs = s.watchdogMs,
@@ -1157,7 +1150,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         // 2) 状态
         //
-        // 性能（2026-09-26）：`msToNextSlot` / `slotProgress` / `voxLevelDb` / `voxOpen` 这些「实时读数」
+        // 性能（2026-09-26）：`msToNextSlot` / `slotProgress` / `voxLevelDb` 这些「实时读数」
         // native 每个轮询周期（80ms）都在变。若原样发布，`_status` 会以 12.5 Hz 发射，进而让
         // MainShell / 顶栏 / 底栏 / 操作页 / 发射抽屉 —— 即**每一页**（含没有瀑布的日志页、设置页）
         // 整屏 12.5 Hz 全量重组 + 重绘（模拟器实测各页均 105 帧 / 8 s，操作页主线程约 11% CPU，
@@ -1181,7 +1174,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
                     droppedSamples = s.droppedSamples,
-                    voxOpen = if (live) s.voxOpen else it.voxOpen,
                     voxLevelDb = if (live) s.voxLevelDb else it.voxLevelDb,
                 )
             }
@@ -1656,7 +1648,7 @@ internal const val LIVE_PROGRESS_STEPS = 50f
 /**
  * 「实时读数」统一节流窗口（ms）：见 [SessionViewModel] 的轮询。
  *
- * `msToNextSlot` / `slotProgress` / `voxLevelDb` / `voxOpen` 只在跨越本窗口边界时发布一次，
+ * `msToNextSlot` / `slotProgress` / `voxLevelDb` 只在跨越本窗口边界时发布一次，
  * 使 [ReceiverStatus] 的发射率从 12.5 Hz 降到 5 Hz —— 这几项在 UI 上都只是粗略的仪表读数。
  */
 internal const val LIVE_PUBLISH_INTERVAL_MS = 200L

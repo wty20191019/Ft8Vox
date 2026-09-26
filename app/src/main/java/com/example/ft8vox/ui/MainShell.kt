@@ -106,8 +106,6 @@ fun MainShell(
                     queueCount = if (status.manualTxText != null) 1 else 0,
                     timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
                     voxLevelDb = status.voxLevelDb,
-                    // 指示语义随「VOX 触发」方式变化，这里统一折算成「有信号」
-                    voxSignal = voxHasSignal(appSettings.voxTrigger, status.voxOpen),
                 )
                 NavigationBar {
                     for (t in MainTab.entries) {

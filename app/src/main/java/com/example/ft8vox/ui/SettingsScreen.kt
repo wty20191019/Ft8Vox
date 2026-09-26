@@ -57,7 +57,6 @@ import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
-import com.example.ft8vox.data.settings.VoxTrigger
 import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
@@ -177,37 +176,8 @@ fun SettingsScreen(
         SettingsGroup("电台（仅 VOX）") {
             PrefNote(
                 "无 CAT：App 无法直接控制 PTT，只能靠「前导静音 + 前导音」让电台 VOX 抢先键控，" +
-                    "再把 FT8 数据对准时隙起点。VOX 电平与状态指示由 native 依据输入音频估算，仅作提示，" +
-                        "不参与发射。"
+                    "再把 FT8 数据对准时隙起点。"
             )
-            PrefChoice(
-                title = "VOX 触发",
-                subtitle = "音频检测：电平 ≥ 阈值＝有信号；静音检测：电平 < 阈值＝静音（仅作状态指示，不影响发射）",
-                options = VoxTrigger.entries,
-                selected = app.voxTrigger,
-                onSelect = { v -> settings.update { it.copy(voxTrigger = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "VOX 延迟",
-                subtitle = "状态翻转去抖时长",
-                value = app.voxDelayMs,
-                range = 50..1000,
-                step = 50,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(voxDelayMs = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "VOX 阈值",
-                subtitle = "状态指示的判定门限",
-                value = app.voxThresholdDb,
-                range = -60..-20,
-                unit = " dB",
-                onChange = { v -> settings.update { it.copy(voxThresholdDb = v) } },
-            )
-            PrefDivider()
             PrefSwitch(
                 title = "发射前导音",
                 subtitle = "发射前先放一段单音，让 VOX 抢先触发",
@@ -251,7 +221,7 @@ fun SettingsScreen(
                 buttonLabel = "播放",
                 onClick = { session.playTestTone() },
             )
-            VoxLevelRow(sessionStatus, app.voxTrigger)
+            VoxLevelRow(sessionStatus)
             PrefDivider()
             PrefStepper(
                 title = "PTT 延迟",
@@ -296,7 +266,7 @@ fun SettingsScreen(
             PrefDivider()
             PrefStepper(
                 title = "输入增益",
-                subtitle = "对采集样本生效（含 VOX 电平读数），热生效",
+                subtitle = "对采集样本生效（含输入电平读数），热生效",
                 value = app.inputGainDb,
                 range = -12..30,
                 unit = " dB",
@@ -1029,13 +999,13 @@ private fun PrefAction(
 }
 
 /**
- * VOX 输入电平条（6.1「测试音」下方）。
+ * 输入电平条（6.1「测试音」下方）。
  *
- * 电平来自 native 对输入音频的估算，-60 dB 为满格基准；「有信号」时条色用强调色。
- * 状态词随 [trigger] 变化（音频检测＝有信号/空闲，静音检测＝有信号/静音）。
+ * 电平来自 native 对输入音频的估算，-60 dB 为满格基准，**纯显示用**
+ * （观察输入、校准 6.2 的「输入增益」）；不做任何触发判定。
  */
 @Composable
-private fun VoxLevelRow(status: ReceiverStatus, trigger: VoxTrigger) {
+private fun VoxLevelRow(status: ReceiverStatus) {
     val run = status.running
     val db = status.voxLevelDb
     val label = when {
@@ -1043,14 +1013,11 @@ private fun VoxLevelRow(status: ReceiverStatus, trigger: VoxTrigger) {
         db <= -99.5f -> "--"
         else -> "${db.toInt()} dB"
     }
-    val signal = run && voxHasSignal(trigger, status.voxOpen)
-    val suffix = if (run) "  （${voxStateLabel(trigger, status.voxOpen, running = true)}）" else ""
     Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 6.dp)) {
         Text(
-            "VOX 电平  $label$suffix",
+            "输入电平  $label",
             style = MaterialTheme.typography.labelSmall,
-            color = if (signal) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         val frac = if (run) ((db + 60f) / 60f).coerceIn(0f, 1f) else 0f
         Box(
@@ -1066,7 +1033,7 @@ private fun VoxLevelRow(status: ReceiverStatus, trigger: VoxTrigger) {
                         .fillMaxWidth(frac)
                         .height(8.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (signal) MaterialTheme.colorScheme.primary else VoxRxGreen),
+                        .background(VoxRxGreen),
                 )
             }
         }

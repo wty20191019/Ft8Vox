@@ -687,5 +687,29 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   （`mode`/`thresholdDb` 说明 + 「Kotlin 侧必须按 mode 翻译」）。native 只改注释，无行为改动。
 - **测试**：`VoxPlanTest` 13→14（新增 `VOX 指示随触发方式翻译…`：四种组合的有信号判定 + 状态词 + 未运行），
   JVM **267 例 / 30 suite** 全过，`assembleDebug` **BUILD SUCCESSFUL**。
+  —— **本条随后被下一条补记推翻**（用户改主意：整套删掉）。
+
+### 补记：整体删除「VOX 触发」状态指示与三项相关设置
+
+用户随后改主意：「**不要这个状态指示和相关设置了**」。于是把上一条补记修的整套东西删掉，
+只保留**输入电平读数**（校「输入增益」时仍需要）。
+
+- **设置页 6.1**：删掉 `VOX 触发`（`PrefChoice`）、`VOX 延迟`、`VOX 阈值` 三项；`app.voxTrigger/voxDelayMs/voxThresholdDb`
+  与 `VoxTrigger` 枚举、`SettingsRepository` 的三个键与读写全部移除（DataStore 里的旧键留存不影响）。
+  「INPUT 电平条」由 `VoxLevelRow(status, trigger)` 回到 `VoxLevelRow(status)`：**只显示 dB 与进度条**，
+  标题 `VOX 电平 → 输入电平`，去掉「（触发）」与强调色高亮。6.2「输入增益」副标题同步改口径。
+- **UI 指示**：`AppChrome.kt` 删除 `voxHasSignal` / `voxStateLabel`，`voxLabel(levelDb, running)` 只输出
+  `电平 -42 dB` / `电平 --`（底栏不再有 `●`，也不再高亮）；顶栏「音频」速览删掉「状态」与「判定」两行，
+  「电平」改为「输入电平」；`BottomStatusBar` 去掉 `voxSignal` 参数（`MainShell` 同步）。
+- **native**：`audio_engine_t` 删掉 `vox_trigger` / `vox_threshold_db` / `vox_delay_ms` / `vox_open` /
+  `vox_candidate` / `vox_change_ms`；`update_vox()` 收缩为 `update_level()`（只做快攻击/慢释放平滑后落
+  `vox_level_db_x10`）；`nativeSetVox` 只收 `pttDelayMs/leadToneMs/watchdogMs` 三个参数；
+  `nativeGetState` 由 **12 → 11** 项，`[10] = vox_level_db×10`（`AudioState` 同步删 `voxOpen`）。
+- **保留**：`VoxConfig` / `nativeSetVox` / 6.1 分组名「电台（仅 VOX）」—— 前导静音 + 前导音仍是
+  「让电台 VOX 抢先键控」的手段，与显示无关。
+- **文档**：`new_ui.md` §1/§6.1/§6.2/§7、`REGRESSION.md` §2 A 组与 K 组、§4 与 §5、
+  `JNI-CONTRACT.md`（6.1 表 + `nativeGetState` 索引 + `state()` 行 + 增益说明）、`ROADMAP.md` 阶段 9。
+- **测试**：`VoxPlanTest` 回到 13 例（删掉上一条补记新增的用例，只留 `电平文案区分未运行与读数`），
+  JVM **266 例 / 30 suite** 全过；`assembleDebug` + `testDebugUnitTest` **BUILD SUCCESSFUL**。
 
 

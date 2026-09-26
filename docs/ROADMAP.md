@@ -430,12 +430,14 @@ com/example/ft8vox/
 >   （关时 `startCq` / `answer` 直接返回并提示），因此删掉二次确认不会误发；**仅存**的确认是
 >   「启用自动程序」（模式 0 → 1/2，因它会自动打开总开关并开始无人值守发射）。
 >   验收见 `REGRESSION.md` M 组「手动发射没有任何确认框」。
-> - **VOX 指示文案按触发方式翻译（2026-09-26）**：用户问「VOX 触发（音频/静音检测）有什么用、FT8CN 都没有」，
->   确认它是**无 CAT 时用输入电平近似信道活动的纯指示**（不参与发射门控），决定**保留功能、只修文案**。
->   原实现把 `voxOpen=true` 一律显示成「触发」，而该布尔量的含义随方式反转（静音检测下 `true` 表示安静），
->   导致「静音检测」在安静信道反而亮「触发」。新增 `voxHasSignal` / `voxStateLabel` 两个纯函数，
->   底栏（`voxLabel` 参数改为 `signal`）、顶栏「音频」速览、设置页 6.1 电平条统一显示
->   「未运行 / 有信号 / 空闲（音频检测）/ 静音（静音检测）」，高亮与 `●` 一律以「有信号」为准。
+> - **删除 VOX 触发状态指示与三项相关设置（2026-09-26）**：用户先选「保留功能只修文案」（见上一条），
+>   随后改主意，要求整体去掉。已删：设置页 6.1 的 `VOX 触发`（音频/静音检测）、`VOX 延迟`、`VOX 阈值`
+>   三项及其 `AppSettings` / `SettingsRepository` / `VoxTrigger` 枚举；底栏与顶栏「音频」速览、设置页电平条
+>   的「触发 / 空闲 / 静音」状态词与 `●` 高亮；`voxHasSignal` / `voxStateLabel` 两个翻译函数。
+>   native 侧删掉 `vox_trigger` / `vox_threshold_db` / `vox_delay_ms` / `vox_open` / `vox_candidate` /
+>   `vox_change_ms`，`update_vox()` 收缩为 `update_level()`（只算平滑电平），`nativeSetVox` 只收
+>   `pttDelayMs/leadToneMs/watchdogMs`，`nativeGetState` 12 → 11 项（`[10] = 输入电平×10`）。
+>   **保留**纯输入电平读数（校「输入增益」仍需要）与「前导静音 + 前导音」这套 VOX 键控手段。
 >   验收见 `REGRESSION.md` K 组。
 - 长时间运行内存稳定（避免每时隙大分配、JNI 引用泄漏）。
 - 崩溃/ANR 监控与日志。
