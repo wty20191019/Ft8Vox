@@ -5,10 +5,10 @@ import com.example.ft8vox.data.settings.clampOutputGainDb
 
 /** VOX 触发方式（对应设置页「VOX 触发」；无 CAT 时用于输入电平判定）。 */
 enum class VoxMode {
-    /** 音频检测：输入电平 ≥ 阈值视为触发/有信号。 */
+    /** 音频检测：输入电平 ≥ 阈值视为「有信号」。 */
     AUDIO,
 
-    /** 静音检测：输入电平 < 阈值视为静音/空闲。 */
+    /** 静音检测：输入电平 < 阈值视为「静音」（此时反而是无信号）。 */
     SILENCE,
 }
 
@@ -42,7 +42,7 @@ data class AudioState(
     val utcNowMs: Long,
     val droppedSamples: Long,
     val slotsDecoded: Long,
-    /** VOX 判定为已触发（基于输入电平近似，仅作提示）。 */
+    /** VOX 判定命中（含义随「VOX 触发」方式：音频检测＝有信号，静音检测＝静音；仅作提示）。 */
     val voxOpen: Boolean,
     /** 平滑后的输入电平（dBFS，下限约 -100）。 */
     val voxLevelDb: Float,

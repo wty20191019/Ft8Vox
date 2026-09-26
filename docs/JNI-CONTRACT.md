@@ -191,14 +191,14 @@ SNR 估算口径（照搬 JTDX，与 WSJT-X 同一尺度）：对每个符号 i�
 
 | 字段 | 默认 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| `mode` | `AUDIO` | `AUDIO` / `SILENCE` | 电平判定口径：音频检测 / 静音检测 |
-| `thresholdDb` | -40 | -60..-20 | 触发门限（dBFS） |
+| `mode` | `AUDIO` | `AUDIO` / `SILENCE` | 电平判定口径：音频检测 / 静音检测（仅影响「有信号/空闲/静音」指示） |
+| `thresholdDb` | -40 | -60..-20 | 状态指示的判定门限（dBFS） |
 | `delayMs` | 300 | 0..2000 | 候选状态翻转去抖时长 |
 | `pttDelayMs` | 0 | 0..500 | 数据前的前导静音（留给声卡路由/电台起键） |
 | `leadToneMs` | 0 | 0..2000 | 数据前的前导单音（1 kHz），用于抢先键控 VOX |
 | `watchdogMs` | 10000 | 1000..60000 | 发射写入看门狗（卡死保护） |
 
-- **VOX 电平/触发**：native 在 DSP 线程对原始输入块计算 RMS 电平（快攻击/慢释放平滑），按 `mode`/`thresholdDb`/`delayMs` 维护 `voxOpen`。无 CAT 无法读取电台真实键控状态，该状态仅为**输入音频活动的近似**，用于状态栏与音频速览显示，**不参与发射门控**（发射仍按时隙）。
+- **VOX 电平/触发**：native 在 DSP 线程对原始输入块计算 RMS 电平（快攻击/慢释放平滑），按 `mode`/`thresholdDb`/`delayMs` 维护 `voxOpen`。无 CAT 无法读取电台真实键控状态，该状态仅为**输入音频活动的近似**，用于状态栏与音频速览显示，**不参与发射门控**（发射仍按时隙）。`voxOpen` 本身只是「命中判定规则」，**Kotlin 侧必须按 `mode` 翻译**成可读状态：`AUDIO` 命中＝有信号（否则空闲）、`SILENCE` 命中＝静音（否则有信号）——见 `ui/AppChrome.kt` 的 `voxHasSignal` / `voxStateLabel`。
 - **前导与对齐**：`playTx()` 把 `pttDelayMs` 静音与 `leadToneMs` 单音插在数据之前；调用方（`planTx`）相应提前播放起点，保证数据落在时隙起点。
 - **看门狗**：`write_blocking()` 以「本段音频预期播放时长 + 3 s」为实际阈值（不低于 `watchdogMs`），避免截断合法的整时隙发射；仅在音频设备卡死时中止写循环。
 - `nativeGetState` 返回 12 个 `Long`：索引 0–9 同前，`[10]=vox_open`、`[11]=vox_level_db×10`。
