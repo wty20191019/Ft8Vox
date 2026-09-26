@@ -119,13 +119,8 @@ fun Ft8VoxTopBar(
     // 待发/发射中的报文单独放**第三行**（只有我方发射时隙且有报文/正在发射时才出现）。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
     val slotTag: String? = if (status.running) "TX：${status.txParity}" else null
-    val pendingTxText = status.manualTxText?.takeIf { it.isNotBlank() }
-        ?: status.qso.txText?.takeIf { it.isNotBlank() }
-    val txText = if (status.txing) {
-        pendingTxText ?: status.lastTxText?.takeIf { it.isNotBlank() }
-    } else {
-        pendingTxText
-    }
+    // 发射中固定显示「本次实际在播的报文」，只在非发射时显示下一次计划（见 ReceiverStatus.displayTxText）
+    val txText = status.displayTxText
     // 发射中红色、待发用强调蓝（在组合体里取色，`buildAnnotatedString` 内不能调 @Composable）
     val txSlotColor = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.primary
 

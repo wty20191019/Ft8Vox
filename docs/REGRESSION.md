@@ -297,6 +297,114 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 
 ---
 
+### Q. 输出声卡挂起（真机 bug：「发送几次测试音后再也发不出去」）
+
+背景：真机（华为 `LRA-AL00` / EMUI 10 / Android 10 / `HMQ4C19C03003348`）复现，logcat 实证链路：
+
+- 「共享 + 低延迟」时 AAudio 会把输出流选为 **MMAP**（`builder_createStream  tryMMap = true for output`）。
+- 该 HAL 的 MMAP 输出流**空闲数秒**后即被 AAudio 服务端挂起：
+  `AAudioServiceStreamBase: writeUpMessageQueue(): Queue full. Did client stop? Suspending stream.`；
+- 此后客户端每次 `AAudioStream_write` 都在 0.5 s 后返回 **0 帧**
+  （`AudioStreamInternal_Client: processData(): TIMEOUT after 500000000 nanos`），
+  而流句柄仍非空、状态仍 STARTED —— 于是之后**所有**发射/试音永久写 0 帧，
+  用户看到的就是「发送几次测试音后再也发不出去」，只能重启 App。
+- 实测「空闲时周期性写静音保活（240 帧 / 1.5 s）」**拦不住**这次挂起（挂起照旧发生，
+  保活反而不断把流标坏并反复重开，进一步搅乱设备路由）。
+
+修复：
+
+1. 输出流改用 `AAUDIO_PERFORMANCE_MODE_NONE` → 走**传统 AudioTrack 共享路径，不再走 MMAP**。
+   FT8/FT4 是时隙级时序，不需要 MMAP 的低延迟；换路后真机日志 `tryMMap = false for output`，
+   `Suspending stream` 与 `processData(): TIMEOUT` 全部消失。
+2. 保留「写 0 帧 / 报错 / 看门狗触发 → 标记坏流 → 下次播放前关流重开」的自愈路径
+   （`out_bad` + `out_ensure_open`，试音在重开后立刻再放一次），作为其它机型的兜底；
+   因此已删除原先的输出流保活线程（它既不解决问题，又制造重开风暴）。
+3. 采集仍走 MMAP（真机采集正常），本次不动。
+4. 按 `AAudioStream_getChannelCount()` 的**实际声道数**交错写入（单声道请求可能被 AAudio
+   静默回退成立体声，否则越界读 + 波形错乱）。
+
+验收（真机 `HMQ4C19C03003348`，2026-09-26 已实测通过）：
+
+- [x] 设置页「播放」测试音**单击即出声**（修复前单击无声、连点两次才出声、且声音时长异常）。
+- [x] 连点 5 次以上（每次间隔 3~5 s）每次都出声；中途**故意空闲 20 s 以上**再点，仍正常出声。
+- [x] logcat 全程只有 **1 条** `playback started: requested=48000 actual=48000 channels=1`
+  （无重开风暴），无 `output write stalled` / `tx watchdog abort`。
+- [x] logcat 无 `writeUpMessageQueue(): ... Suspending stream.`、无 `processData(): TIMEOUT`。
+- [x] 发射（`nativePlayTx`）与试音共用同一条输出流，行为一致；N 组（发射中关机类操作）回归不受影响。
+
+
+---
+
+### R. 双方互回信号报告（真机 bug：`R-02` / `R-10` 交替死循环）
+
+背景：两台手机互测（一端 `BG7ZJW`、另一端自造 `GB7AAA`，两端都开自动程序）复现：
+解码列表里 `BG7ZJW GB7AAA R-10`（14:35:00 / 14:35:30）与 `GB7AAA BG7ZJW R-02`
+（14:35:15 / 14:35:45）每 30 s 交替重复，两端都停在「发 R 报告 → 等 RR73」，
+谁也不发 RR73；筛选条「回复 6」＝这 6 条全是 R 报告。
+
+根因（第 1 层状态机缺少「收到 R → 发 RR73」这条标准 FT8 规则）：
+
+- 两端同时在应答对方（各自发来 `<我> <对方> <网格>`）时，会双双进入「发信号报告」阶段；
+- 各自回 `R<报告>` 后**双方都停在 `WAIT_RR73` 等对方的 RR73**，而对方也在等自己发 RR73
+  → 每 30 s 重发一次 R 报告，永不结束；
+- 重试耗尽后第 2 层又各自用 `respondToRoger` 收尾，还会各写一条「假通联」日志。
+
+修复：
+
+1. `WAIT_REPLY`(RESPONDER/CALLER) 与 `WAIT_RR73` 收到 `R<报告>` 一律按「对方已确认收到我的
+   报告」处理：回 `RR73` 并直接记日志，**不再回一次 R 报告**（WSJT-X 语义，死循环的直接解药）。
+2. `WAIT_REPLY`(RESPONDER) 收到 `<我> <对方> <网格>`（双方同时在应答对方）时，
+   按标准 FT8 阶梯**转为主叫**并直接发信号报告，不再死等对方永远不会发的报告。
+3. `WAIT_REPORT` 收到对方报告（未加 R）时回**自己实测的** `R<报告>`（原实现回显对方报告值，
+   等于把对方测到的我当成我的报告发出去）。
+
+验收（JVM 单测 `QsoEngineTest`，已通过）：
+
+- [x] `responderFinishesWhenPartnerRogersBeforeReport`：应答方还没发报告就收到 R → `RR73` + 完成。
+- [x] `finishesWhenPartnerRogersWhileWaitingRr73`：`WAIT_RR73` 收到对方 R（对撞）→ `RR73` + 完成。
+- [x] `handlesDirectReportInsteadOfRoger`：回自己的 `R-11`（不再回显对方的 `-03`）。
+- [x] `responderTurnsCallerWhenPartnerAlsoAnswers`：双方同时对呼 → 转主叫发报告。
+- [x] `bothAnsweringConvergeWithoutRepeatingReports`：两端交替时隙全流程模拟 → 双方都 `DONE`
+  并各记一条日志，且空中**无重复报文**（死循环特征消失）。
+
+真机复测（`HMQ4C19C03003348` + 对端）：
+
+- [ ] 两端都开自动程序互测 3 分钟以上，解码列表不再出现 `R-02` / `R-10` 交替重复。
+- [ ] 每段 QSO 只写入 1 条日志，状态由「等待 RR73」推进到「已完成」。
+
+
+### S. 顶栏 / 抽屉「发射报文」文案冻结（发射中不再跟着目标变）
+
+背景：顶栏第三行（`发射中 CQ BG7ZJW OM89`）取的是「下一次计划发射」的报文，而不是「本次在播」
+的报文。于是**发射途中改目标 / QSO 状态推进（`qso.txText` 变了）时，文案会在这一条还没播完时
+就换成下一条**，与真正在天上的报文不符；发射抽屉收起条也只显示报文类型（`CQ` / `回复`），
+看不出下一次到底发什么。
+
+修复：把「计划」与「在播」收敛为 `ReceiverStatus`（`ui/SessionViewModel.kt`）的两个**派生只读
+属性**，顶栏与抽屉共用同一事实来源：
+
+- `pendingTxText`：下一次计划发射的报文（与发射调度 `txTick` 的取值一致：一次性手动 > QSO 引擎计划）。
+- `displayTxText`：**发射中固定取 `lastTxText`（本次实际在播的那条）**，其余时刻取 `pendingTxText`。
+
+改动点：`AppChrome` 顶栏第三行改用 `status.displayTxText`；`TxDrawer` 收起条左侧由
+「`→ 目标` + 报文类型」改为「`→ 目标` + 完整待发报文」（`待发 <报文>` / 发射中 `发射中 <报文>` /
+无待发时「空闲（无待发报文）」），右侧仍为「允许发射 / 只接收」与倒计时。
+
+验收（JVM 单测 `TxDisplayTextTest`，已通过 7 例）：
+
+- [x] 发射中 `qso.txText` 已推进到 `RR73`，`displayTxText` 仍为在播的 `R-11`（冻结）。
+- [x] 发射中缺 `lastTxText` 时回落到 `pendingTxText`。
+- [x] 非发射时显示下一次计划（即使 `lastTxText` 还留着上一次的值）。
+- [x] `manualTxText` 优先于 `qso.txText`；空白串视为 null；无计划时 `displayTxText == null`。
+
+真机 / 模拟器复测：
+
+- [ ] 发射途中改目标 / 让 QSO 推进，顶栏第三行在**本条播完前**不变，播完后自动切到下一条。
+- [ ] 抽屉收起条显示完整待发报文，发射中变红并冻结为在播报文。
+
+
+---
+
 ## 3. 结果记录
 
 | 小节 | 结果（通过/失败） | 备注 / 复现步骤 |
@@ -317,6 +425,9 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 | N 发射中关机类操作（use-after-free 回归） | | |
 | O UI 性能（帧率 / CPU） | | |
 | P 发射时机（报文时长窗口）/ 左滑呼叫 | | |
+| Q 输出声卡挂起（真机 bug：发送几次后再也发不出去） | 真机已通过（2026-09-26） | 单击/连点/空闲 20 s 后均有声；logcat `tryMMap = false for output`，无 `Suspending stream` / `processData TIMEOUT` / 重开风暴 |
+| R 双方互回信号报告（真机 bug：`R-02`/`R-10` 死循环） | 单测已通过（2026-09-26） | 5 条用例（4 新增 + 1 更新）；真机两台互测待复测（列表不再交替重复 R 报告、每段 QSO 只 1 条日志） |
+| S 顶栏/抽屉发射报文文案冻结（`displayTxText`） | 单测已通过（2026-09-26） | 7 条用例 `TxDisplayTextTest`；真机/模拟器观感待复测（发射中改目标文案不变、抽屉显示完整待发报文） |
 
 ---
 
@@ -339,6 +450,10 @@ AudioEngine.playTx`（发射写入与关流/释放引擎并发）。已按 `JNI-
 - 日志页筛选（搜索/波段/模式/日期区间）、表格卡片、长按编辑/删除、底部统计与波段柱图、清空日志确认框。
 - ADIF 导出文件名与往返（导入两次的判重计数）。
 - 设置页 6.1 可改（前导音、测试音、PTT 延迟、看门狗）；点「测试音」后状态栏与设置页的「输入电平」刷新（模拟器无输入，读数偏低或 `--`）。
+- **输出流不走 MMAP**（模拟器/真机都可用日志验收，无需听声音）：点设置页「测试音」后，
+  `adb logcat -d | findstr "builder_createStream"` 中输出流应为 `tryMMap = false for output`
+  （MMAP 输出在真机华为 EMUI 10 上空闲会被服务端挂起 → 「发几次后再也发不出去」，见 Q 组）；
+  日志中不应出现 `writeUpMessageQueue(): ... Suspending stream.` 或 `processData(): TIMEOUT`。
 - 设置页 6.1「输出声卡」与 6.2「输入设备」下拉展开列出「系统默认」+ 实际设备（模拟器可见内置扬声器/麦克风/通话/远端混音）；6.2「输入增益」可步进；6.1「输出音量」可步进（范围 −30~0 dB：`+` 到 0 后置灰，0 为默认）。
 - 顶栏「波段与频率」弹窗多频率切换、自定义波段/频率表单；抽屉收起态条上的「发送总开关」默认关（只接收，打开不发射报文）、展开面板「发送」的默认动作与禁用态。
 - **抽屉跟手展开 / 收起**（模拟器可直接验证，无需音频输入）：按住收起态 56dp 条身向上拖动

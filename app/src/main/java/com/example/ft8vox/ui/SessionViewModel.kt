@@ -52,6 +52,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
+/**
+ * 发射/试音「写入 0 帧」时的统一提示。
+ *
+ * 最典型原因：输出流被系统挂起（真机华为 EMUI 10 的 AAudio **MMAP** 输出空闲数秒后被服务端
+ * `Suspending stream`，之后所有写都 0 帧超时 —— 已改为**非 MMAP 输出路径**从根上规避，见
+ * `audio_engine.c` 的 `out_open_locked`）。native 仍会把这类流标记为坏流、在下次播放前关流重开，
+ * 所以这里提示「已标记重开，请重试」，而不是含糊的「已发射（0 帧）」。
+ */
+private const val OUT_STALLED_FAIL = "输出声卡无响应（已标记重开，请重试）"
+
 /** 接收会话的非瀑布状态（供状态栏/控制区使用）。 */
 data class ReceiverStatus(
     val running: Boolean = false,
@@ -119,7 +129,23 @@ data class ReceiverStatus(
     // ---- PTT / 输入电平（U7b） ----
     /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用。 */
     val voxLevelDb: Float = -100f,
-)
+) {
+    /**
+     * 下一次计划发射的报文（取值与发射调度 `txTick` 一致：一次性手动 > QSO 引擎计划）。
+     */
+    val pendingTxText: String?
+        get() = manualTxText?.takeIf { it.isNotBlank() } ?: qso.txText?.takeIf { it.isNotBlank() }
+
+    /**
+     * 界面显示用的发射报文。
+     *
+     * **发射中固定为本条实际在播的 [lastTxText]**：发射途中改目标 / QSO 状态推进都不会让
+     * 顶栏与抽屉的文案跟着变（否则显示的会与真正在天上的报文不符）；其余时刻显示
+     * [pendingTxText]（下一次会发射什么）。
+     */
+    val displayTxText: String?
+        get() = if (txing) lastTxText?.takeIf { it.isNotBlank() } ?: pendingTxText else pendingTxText
+}
 
 /**
  * 会话状态管理：把实时引擎的轮询结果整理为不可变 UI 状态，并驱动 QSO 自动序列。
@@ -965,7 +991,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
-                _status.update { it.copy(status = "已发射「$trimmed」（$written 帧）") }
+                _status.update {
+                    it.copy(
+                        status = if (written > 0) "已发射「$trimmed」（$written 帧）"
+                        else "发射失败：$OUT_STALLED_FAIL",
+                    )
+                }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "发射失败: ${e.message}") }
             } finally {
@@ -1072,7 +1103,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
-                _status.update { it.copy(status = "已发射测试「$text」（$written 帧）") }
+                _status.update {
+                    it.copy(
+                        status = if (written > 0) "已发射测试「$text」（$written 帧）"
+                        else "发射失败：$OUT_STALLED_FAIL",
+                    )
+                }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "发射失败: ${e.message}") }
             } finally {
@@ -1514,7 +1550,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 scheduler.addTxMs(AudioEngine.utcNowMs() - t0)
             }
             if (written <= 0) {
-                _status.update { it.copy(status = "发射失败（写入 $written 帧）") }
+                _status.update { it.copy(status = "发射失败：$OUT_STALLED_FAIL（写入 $written 帧）") }
             }
         } catch (e: Exception) {
             _status.update { it.copy(status = "发射异常: ${e.message}") }
@@ -1539,7 +1575,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val written = AudioEngine.playTone(freqHz, durationMs)
                 _status.update {
-                    it.copy(status = if (written > 0) "已播放测试音（$written 帧）" else "测试音失败（$written）")
+                    it.copy(
+                        status = if (written > 0) "已播放测试音（$written 帧）"
+                        else "测试音失败：$OUT_STALLED_FAIL（写入 $written 帧）",
+                    )
                 }
             } catch (e: Exception) {
                 _status.update { it.copy(status = "测试音异常: ${e.message}") }
