@@ -215,7 +215,14 @@ fun OperateScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                // 发射抽屉是画在整页之上的覆盖层（不占 Column 高度），这里给收起态条身让出等高的位置
+                .padding(bottom = TX_DRAWER_STRIP_DP.dp),
+        ) {
 
         if (status.myCall.isEmpty()) {
             Text(
@@ -329,31 +336,34 @@ fun OperateScreen(
                 }
             }
         }
+    }
 
-        // ---- §3.4 发射控制（发射抽屉：收起 56dp / 上拉展开） ----
-        TxDrawer(
-            status = status,
-            settings = settings,
-            messages = messages,
-            targetCall = targetCall,
-            onClearTarget = {
-                targetCall = null
-                viewModel.clearTargetSlot()
-            },
-            onStartCq = { request { viewModel.startCq() } },
-            onAnswer = { call, grid, df -> request { viewModel.answer(call, grid, df) } },
-            onSendNow = { viewModel.sendNow(it) },
-            onSendOnce = { viewModel.sendOnce(it) },
-            onStopTx = { viewModel.stopTransmit() },
-            onTxEnabledChange = { viewModel.setTxEnabled(it) },
-            onSameFreqChange = { viewModel.setSameFreqTx(it) },
-            onOpenAutoProgram = onOpenAutoProgram,
-            onMacrosChange = { viewModel.setMacros(it) },
-            onEnqueue = { viewModel.enqueueTx(it) },
-            onRemoveQueued = { viewModel.removeQueuedTx(it) },
-            onMoveQueued = { from, to -> viewModel.moveQueuedTx(from, to) },
-            onClearQueue = { viewModel.clearTxQueue() },
-        )
+    // ---- §3.4 发射控制（发射抽屉：覆盖层，条身跟手拖动展开） ----
+    // 抽屉覆盖在整页之上（不占 Column 高度）；上面已给收起态的 56dp 条身留出等高的底部内边距。
+    TxDrawer(
+        status = status,
+        settings = settings,
+        messages = messages,
+        targetCall = targetCall,
+        onClearTarget = {
+            targetCall = null
+            viewModel.clearTargetSlot()
+        },
+        onStartCq = { request { viewModel.startCq() } },
+        onAnswer = { call, grid, df -> request { viewModel.answer(call, grid, df) } },
+        onSendNow = { viewModel.sendNow(it) },
+        onSendOnce = { viewModel.sendOnce(it) },
+        onStopTx = { viewModel.stopTransmit() },
+        onTxEnabledChange = { viewModel.setTxEnabled(it) },
+        onSameFreqChange = { viewModel.setSameFreqTx(it) },
+        onOpenAutoProgram = onOpenAutoProgram,
+        onMacrosChange = { viewModel.setMacros(it) },
+        onEnqueue = { viewModel.enqueueTx(it) },
+        onRemoveQueued = { viewModel.removeQueuedTx(it) },
+        onMoveQueued = { from, to -> viewModel.moveQueuedTx(from, to) },
+        onClearQueue = { viewModel.clearTxQueue() },
+        modifier = Modifier.align(Alignment.BottomCenter),
+    )
     }
 
     detailFor?.let { row ->

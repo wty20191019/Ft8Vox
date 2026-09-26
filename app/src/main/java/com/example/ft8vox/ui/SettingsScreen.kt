@@ -416,6 +416,8 @@ fun SettingsScreen(
                 program = app.auto,
                 onSetMode = { m -> requestAutoMode(m, sessionStatus, session) { confirmAutoMode = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
+                // 设置页本身可滚动：面板完全展开、跟随整页滚动，不再套一层内部滚动
+                nestedScroll = false,
             )
             PrefNote(
                 "第 1 层（QSO 引擎）按「重发机制」对同一目标重发；" +
