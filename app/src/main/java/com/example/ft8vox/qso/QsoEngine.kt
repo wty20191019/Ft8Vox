@@ -73,6 +73,13 @@ data class QsoProgress(
  * - **RESPONDER**（应答 QSO，[startResponderQso]）：发 `<对方> <我> <网格>` → 收到报告后发 `R<报告>` → 收到 `RR73`/`73` 后发 `73` → 完成。
  * - **CQ**（[startCq]）：发 `CQ <我> <网格>`，之后由第 2 层自动程序收集回应者（见 [QsoProgress.awaitingResponders]）。
  *
+ * **对撞处理**（两端都自动运行时必然出现，见 [applyMessage]）：
+ * - 收到对方的 `R<报告>`（Roger）＝对方已确认收到我的报告 → 无论我当时处于哪个阶段，
+ *   都直接发 `RR73` 收尾并记日志。**绝不**再回一次 `R<报告>`，否则两端会互相重复信号报告
+ *   （真机 bug：`R-02` / `R-10` 每 30 s 交替、永不结束）。
+ * - 我为 RESPONDER 时收到对方发来**我的呼号 + 他的网格**（`<我> <对方> <网格>`）＝双方都在
+ *   应答对方，按标准 FT8 阶梯转为主叫并直接发信号报告，而不是死等对方的报告。
+ *
  * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]；
  * 若该时隙没有带来状态推进，会自动累计重试次数，超过 [maxRetries] 则放弃
  * （[giveUp] 为 false 时永不放弃，用于「已选台回应无反应 N 次后放弃」关闭的情形）。
@@ -331,18 +338,47 @@ class QsoEngine(private var maxRetries: Int = 3) {
                     theirCall = p.from
                     if (p.grid != null) theirGrid = p.grid
                     reportSent = reportFromSnr(m.snr)
+                    if (p.isRoger) {
+                        // 对方已 Roger 我的报告：直接收尾，不要再回一次报告
+                        reportReceived = p.report
+                        txText = "$them $myCall RR73"
+                        complete(m, utcMs)
+                        return true
+                    }
                     txText = "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
                     state = QsoState.WAIT_REPORT
                     true
                 }
-                QsoRole.RESPONDER -> {
+                QsoRole.RESPONDER -> when {
+                    // 对方已 Roger：说明对方已确认收到我的报告（或双方同时进入「发报告」阶段）。
+                    // 我只需回 RR73 收尾；**不能**把它当成「对方给我的报告」再回一次 R 报告，
+                    // 否则两端互相重复信号报告、永不结束（真机 bug）。
+                    p.isRoger -> {
+                        reportReceived = p.report
+                        reportSent = reportSent ?: reportFromSnr(m.snr)
+                        txText = "$them $myCall RR73"
+                        complete(m, utcMs)
+                        true
+                    }
+                    // 双方同时在应答对方（对方发来我的呼号 + 他的网格）：按标准 FT8 阶梯转为主叫，
+                    // 直接发信号报告，把 QSO 推进到 R/RR73，而不是死等对方永远不会发的报告。
+                    p.grid != null && p.report == null -> {
+                        role = QsoRole.CALLER
+                        theirGrid = p.grid
+                        reportSent = reportFromSnr(m.snr)
+                        txText = "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
+                        state = QsoState.WAIT_REPORT
+                        true
+                    }
                     // 等待对方给我的信号报告：<me> <them> <report>
-                    val rep = p.report ?: return false
-                    reportReceived = rep
-                    reportSent = reportFromSnr(m.snr)
-                    txText = "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
-                    state = QsoState.WAIT_RR73
-                    true
+                    else -> {
+                        val rep = p.report ?: return false
+                        reportReceived = rep
+                        reportSent = reportFromSnr(m.snr)
+                        txText = "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
+                        state = QsoState.WAIT_RR73
+                        true
+                    }
                 }
                 else -> false
             }
@@ -363,9 +399,12 @@ class QsoEngine(private var maxRetries: Int = 3) {
                         true
                     }
                     p.report != null -> {
-                        // 对方直接发了报告（未加 R）：我回 R<报告>，等待 RR73
+                        // 双方同时进入「发报告」阶段：对方发来报告（未加 R），我回**自己实测的**
+                        // `R<报告>`（不要回显对方的值，否则会把对方的测量值当成我的报告发出去），
+                        // 然后等对方 RR73。
                         reportReceived = p.report
-                        txText = "$them $myCall R${MessageParser.formatReport(p.report)}"
+                        reportSent = reportSent ?: reportFromSnr(m.snr)
+                        txText = "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
                         state = QsoState.WAIT_RR73
                         true
                     }
@@ -377,6 +416,15 @@ class QsoEngine(private var maxRetries: Int = 3) {
                 if (p.isRr73 || p.is73) {
                     reportReceived = reportReceived ?: p.report
                     txText = "$them $myCall 73"
+                    complete(m, utcMs)
+                    true
+                } else if (p.isRoger) {
+                    // 双方同时发了 R 报告（对撞）：对方这条 R 已确认收到我的报告 →
+                    // 我直接回 RR73 收尾并记日志。缺这一条会一直「互回 R 报告」直到重试耗尽
+                    // （真机 bug：两端 R-02 / R-10 每 30 s 交替重复）。
+                    reportReceived = reportReceived ?: p.report
+                    reportSent = reportSent ?: p.report
+                    txText = "$them $myCall RR73"
                     complete(m, utcMs)
                     true
                 } else if (p.report != null && reportReceived == null) {
