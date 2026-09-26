@@ -616,4 +616,32 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
   进包的是重编码后的 `app/src/main/assets/map/world_z5.jpg`。公开版应替换为公有领域影像（如 NASA
   Blue Marble / 夜间灯光，天然深色更配主题）。
 
+### 补记：顶栏只显示 TX 时隙号 + 左滑呼叫 + 「报文塞得下就本时隙发」
+
+用户三条要求：①顶栏只显示 `TX 0/1`，不要 `RX`；②上一个时隙解出的消息在本时隙内显示，**左滑该条即
+设为目标并呼叫**；③「完成 QSO 有个前提：剩余发射时隙的时间够播完这条报文 —— 一个周期 15 s，发一条
+报文约 12 s，所以不用再等一个时隙」。
+
+- **顶栏**（`AppChrome.kt`）：第 2 行由「接收时隙 `RX：n` / 我方时隙 `TX：n`」互切改为**恒显示 `TX：n`**
+  （`txParity`，0/1）。仍保留原有高亮语义：处在发射时隙且允许发射时该段高亮（待发蓝 / 发射中红）；
+  关闭发送总开关只是不高亮（不再隐藏该段），**未开始接收**才整段消失。第 3 行（待发/发射中报文）逻辑未动。
+- **左滑＝呼叫**（`OperateScreen.kt` / `DecodeList.kt`）：左滑露出的背景条文案 `设为目标` → **`呼叫`**；
+  动作由「只设目标」补齐为设目标 + 选发射频率（红线）+ 对齐对方时隙的相反周期 → `pendingTx = Reply(...)`
+  进**防误发确认框**（与详情面板「呼叫」完全同一条路径，避免误触即发射），确认后由第 3 层接管。
+- **报文时长窗口**（`engine/Ft8Engine.kt` / `ui/SessionViewModel.kt` / `qso/TxCompose.kt`）：新增
+  `Protocol.messageMs`（FT8 = 79 符号 × 160 ms = **12 640 ms**；FT4 = 105 符号 × 42.67 ms ≈ **4 480 ms**）。
+  - `planTx` 就地发射判据由「已过时间 + 前导 ≤ `TX_START_WINDOW_MS`(1200 ms)」**增加**一条
+    「已过时间 + 前导 + 报文时长 ≤ 时隙长」（两条取或，旧窗口作兜底）。
+  - 抽屉「立即发」阈值由固定 `MIN_SEND_NOW_MS`(2.5 s) 改为 `TxScheduler.minSendNowMs(报文时长, 前导)`；
+    前导总时长抽到 `AppSettings.txPreambleMs`（PTT 延迟 + 前导音），`SessionViewModel.txPreambleMs()` 委托它，
+    两处不再各算一遍。
+  - **效果**：FT8 时隙开头 ≈2.3 s（FT4 ≈3 s）内确认呼叫都会落在**紧邻的时隙**（解码结果本来是时隙结束
+    后几百毫秒才到手，原先常被 1200 ms 窗口挡掉 → 白等 30 s）；超出则照旧排下一个我方周期，
+    **报文不会被播进下一个时隙**。`messageMs = 0`（未知）时退回旧行为，因此既有单测无需改动。
+- **测试**：`:app:assembleDebug` + `:app:testDebugUnitTest` BUILD SUCCESSFUL；JVM **266 例 / 30 suite**
+  全过（`VoxPlanTest` 8→13：报文塞得下/塞不下/未提供时长/时隙偏移/FT4 更宽；`TxComposeTest` 14→15：
+  `minSendNowMs`；`TxParityAutoTest` 20→21：整条报文落在同一时隙）。
+- **验收**：`docs/REGRESSION.md` **P 组（新增）** + M 组顶栏项；模拟器可预演项已补记（顶栏指示 +
+  抽屉提示文案；左滑呼叫需解码输入，模拟器不可验证）。
+
 

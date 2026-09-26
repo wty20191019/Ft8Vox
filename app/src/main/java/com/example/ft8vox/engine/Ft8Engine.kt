@@ -1,7 +1,15 @@
 package com.example.ft8vox.engine
 
-/** 协议类型。ordinal 会传给 native，务必保持顺序（0=FT8, 1=FT4）。 */
-enum class Protocol { FT8, FT4 }
+/**
+ * 协议类型。ordinal 会传给 native，务必保持顺序（0=FT8, 1=FT4）。
+ *
+ * @property messageMs 单条报文的波形时长（ms）：FT8 = 79 符号 × 160 ms = 12.64 s，
+ *   FT4 = 105 符号 × 42.67 ms ≈ 4.48 s。用于判断「这条报文能否在本时隙内播完」。
+ */
+enum class Protocol(val messageMs: Int) {
+    FT8(12_640),
+    FT4(4_480),
+}
 
 /** 解码器配置，对应 native 的 monitor_config_t。 */
 data class Ft8Config(

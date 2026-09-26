@@ -114,15 +114,11 @@ fun Ft8VoxTopBar(
         "--.------"
     }
 
-    // 时隙指示（顶栏第二行）：用 0/1 时隙号，不再用「奇/偶」——
-    //   接收时隙 → `· RX：1`；我方发射时隙 → `· TX：0`。
+    // 时隙指示（顶栏第二行）：只显示**我方发射时隙号**（0/1），不再显示接收时隙号。
+    // 处于我方发射时隙时整段高亮（发射中红 / 待发蓝），接收时隙保持弱化色。
     // 待发/发射中的报文单独放**第三行**（只有我方发射时隙且有报文/正在发射时才出现）。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
-    val slotTag: String? = when {
-        !status.running -> null
-        inTxSlot -> "TX：${status.txParity}"
-        else -> "RX：${status.slotParity}"
-    }
+    val slotTag: String? = if (status.running) "TX：${status.txParity}" else null
     val pendingTxText = status.manualTxText?.takeIf { it.isNotBlank() }
         ?: status.qso.txText?.takeIf { it.isNotBlank() }
     val txText = if (status.txing) {
