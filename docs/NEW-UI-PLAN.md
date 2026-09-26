@@ -712,4 +712,32 @@ U1 → U2 → U3 → U4 → U5 → U6 → U7（按能力逐项）
 - **测试**：`VoxPlanTest` 回到 13 例（删掉上一条补记新增的用例，只留 `电平文案区分未运行与读数`），
   JVM **266 例 / 30 suite** 全过；`assembleDebug` + `testDebugUnitTest` **BUILD SUCCESSFUL**。
 
+### 补记：地图页世界无缝循环（横向 + 纵向）
+
+用户要求「改地图无缝循环连接 / 连线文字取短的方向画 / 图上的网格标注只在最近当前可见部分绘制一次」，
+并先确认了细节：**横向与纵向都循环**、「网格标注」= Maidenhead 方格色块、唯一性以**离视口中心最近**为基准、
+**呼号点 / CQ 红旗 / 连线也统一只画最近一份且连线走短弧**。
+
+- **投影层（`grid/MapProjection.kt` 重写）**：视口状态由 `centerLon/centerLat`（带 `clamped()` 边界钳制）
+  改为 **`centerU/centerV`（世界坐标，mod 1）**，`clamped()` 删除，新增工厂 `at(vw, vh, scale, lat, lon)`、
+  `wrap01()`、`visibleWorldRange()`、`nearestCopy()` / `copyNearestTo()`（整数副本号选择）、
+  `linkEnds()`（一条连线的两个端点，终点相对起点取最近副本 → 短弧）、
+  `cellRect()`（方格中心 + 像素尺寸，按中心所在副本一次性折算）、新的 `PlotRect` / `WorldRange` 类型；
+  `toScreen()` 内置 `nearestCopy()`，`panBy`/`zoomBy` 归一化 `mod 1`，`toGeo` 折回取值范围。
+  `centerLon`/`centerLat` 变成派生属性（调用方无感）。
+- **底图（`ui/WorldBaseMap.kt`）**：`visibleBlocks()` → `blockDraws()`，返回 `MapBlockDraw(block, ku, kv)`
+  （块 + 世界副本偏移）；`MapBlock` 仍是缓存标识（**不含副本号**）→ 同一块的多份副本共用解码图，
+  跨缝平移不会重复解码；`ensure()` 接收绘制列表并按 `block.key` 钉住。
+- **绘制（`ui/GridMap.kt`）**：底图按副本绘制（`uv + ku/kv`）；无底图时的纯色矩形也按副本铺满；
+  网格方块改用 `cellRect()`（跨缝不撕裂、只画一份）；连线改用 `linkEnds()`（短弧，文字/方块沿线走）。
+  呼号点 / CQ 旗 / 我方台站无需改动 —— `toScreen()` 已内置最近副本。
+- **视口（`ui/GridScreen.kt`）**：初始化 `fill()` 不变；重建视口时直接 `copy(viewWidth, viewHeight)`
+  （不再经经纬度往返）；`centeredOn()` 改走 `MapProjection.at()`。
+- **测试**：`MapProjectionTest` 12 → 19 例（钳制类用例改写为循环类：整世界平移回原处、跨缝不被钳回、
+  `fill` 尊重给定中心；新增横/纵向跨缝目标落在视口内、最近副本唯一、短弧连线、跨缝方格完整、`toGeo` 折回）；
+  JVM **273 例 / 30 suite** 全过，`assembleDebug` + `testDebugUnitTest` **BUILD SUCCESSFUL**。
+  验收见 `REGRESSION.md` F 组（新增 4 项，含真机/模拟器预演项）。
+- **已知取舍**：纵向循环越过 ±85.05° 会接另一侧极区（墨卡托极点发散，必有纬度跳变，已与用户确认）；
+  最小缩放仍是「世界适应窗口」，不能缩到同时看到多份世界；地图底图版权仍为「仅测试自用」。
+
 

@@ -226,8 +226,8 @@ fun GridScreen(
                     projection = if (cur == null) {
                         MapProjection.fill(wPx, hPx)
                     } else {
-                        MapProjection(cur.viewWidth, cur.viewHeight, cur.scale, cur.centerLon, cur.centerLat)
-                            .copy(viewWidth = wPx, viewHeight = hPx)
+                        // 世界双向循环 → 视口不再需要钳制，尺寸变化只是换个画布大小
+                        cur.copy(viewWidth = wPx, viewHeight = hPx)
                     }
                 }
             }
@@ -329,7 +329,7 @@ fun GridScreen(
 /** 以某点为中心、放大到「适应窗口 × 6」的视口。 */
 private fun centeredOn(p: MapProjection, lat: Double, lon: Double): MapProjection {
     val scale = (p.fitScale * 6.0).coerceIn(p.minScale, p.maxScale)
-    return MapProjection(p.viewWidth, p.viewHeight, scale, lon, lat).clamped()
+    return MapProjection.at(p.viewWidth, p.viewHeight, scale, lat, lon)
 }
 
 /** 命中最近的呼号标记 / CQ 旗帜；超出阈值返回 null。 */
