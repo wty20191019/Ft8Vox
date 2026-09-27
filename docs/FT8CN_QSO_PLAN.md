@@ -504,10 +504,22 @@ FT8CN `QSLRecord` 字段对照：
 
 ### 期 5（文档）
 
-`README`（计数已同步 303）/ `How2use`（§11 单档、§12 解码菜单、§13 日志起止时间）/ `FT8CN_QSO_PLAN` §10.5 已同步；
+`README`（计数已同步 309）/ `How2use`（§11 单档、§12 解码菜单、§13 日志起止时间）/ `FT8CN_QSO_PLAN` §10.5 已同步；
 `REGRESSION.md` 已加 **T 组**（期 2 新口径真机回归清单）与 **U 组**（解码菜单 / 日志起止时间），
 并把 E 组标注为过期、A 组与「模拟器可预演」段落改到新口径。剩余：`new_ui.md`、`NEW-UI-PLAN.md`、
 `UI-DESIGN.md` 等**历史设计稿**中的旧档位 / 确认框描述（不影响使用，可择机统一标注）。
+
+### 期 5 补记（2026-09-27）：`NEW_QSO_.md` 改版 + 补齐「循环 2」
+
+- `docs/NEW_QSO_.md` 从「对标 JTDX」整体改写为 **v4.0「对标 FT8CN」**：删除 AutoSeq 档位、
+  DX 分级选台、LoTW 呼号集、Auto RX filter、QSO history、半自动 Log 确认、看门狗等 FT8CN 没有的机制。
+  `README` / `ROADMAP` / `REGRESSION` 中的相关引用同步更新。
+- **补齐真差距**（FT8CN `checkCQMeOrFollowCQMessage` 循环 2）：有进行中 QSO 且**当前目标本批沉默**时，
+  也要应答「其他呼叫我方」的定向台。落地：
+  - `QsoEngine` / `QsoProgress` 新增 `advanced`（本次 `onDecoded` 是否推进）；
+  - `AutoScheduler.directedTakeover(...)` 挑「非当前目标」的定向候选；
+  - `SessionViewModel.pollOnce` 在 `!advanced` 且仍 active 时先换台、未命中才走无回应判定。
+- 新增单测 6 例（`AutoProgramTest` 4 + `QsoEngineTest` 2），全库 **309 例 / 32 suite**。
 
 ---
 

@@ -395,6 +395,28 @@ class AutoScheduler {
     }
 
     /**
+     * FT8CN `checkCQMeOrFollowCQMessage` **循环 2** 的落地：进行中的 QSO **目标本批沉默**时，
+     * 也必须应答「其他呼叫我方」的定向台（否则忙起来就会漏应答）。
+     *
+     * 与 [onDecoded] 的差别：**不看**两个开关、不看是否已有目标，只排除「当前目标自身」
+     * 与本批已结束的 `RR73`/`73`/`RRR`；命中则返回应切换到的目标，没有则 null
+     * （调用方继续走无回应 / 放弃判定）。保持当前目标不换台由调用方在目标有回应时不调用本方法保证。
+     */
+    fun directedTakeover(
+        messages: List<DecodeResult>,
+        currentTarget: String?,
+        filter: DecodeFilterState = DecodeFilterState(),
+        worked: WorkedIndex = WorkedIndex.EMPTY,
+    ): AutoTarget? {
+        if (protectedStop) return null
+        val directed = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
+            .filter { it.kind != AutoTargetKind.CQ }
+            .filter { !CallMatch.isFrom(it.call, currentTarget) }
+        if (directed.isEmpty()) return null
+        return AutoProgramSelector.rank(directed, myGrid).first()
+    }
+
+    /**
      * 两个开关都开时「优先应答未通联的 CQ 台」（S&P）；否则发 CQ。
      *
      * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3（`autoCallFollow && autoFollowCQ`）。

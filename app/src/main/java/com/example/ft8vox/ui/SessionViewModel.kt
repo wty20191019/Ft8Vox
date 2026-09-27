@@ -1187,7 +1187,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                     "msgs=${incoming.map { it.text }}",
                             )
                             applyQsoProgress(p, s.utcNowMs)
-                            maybeGiveUpTarget(p, incoming, s.utcNowMs)
+                            // FT8CN `checkCQMeOrFollowCQMessage` 循环 2：当前目标本批沉默时，
+                            // 也要应答「其他呼叫我方」的定向台（避免忙起来就漏应答）。
+                            val takeover = if (p.active && !p.advanced && _status.value.txEnabled) {
+                                scheduler.directedTakeover(
+                                    incoming,
+                                    p.theirCall,
+                                    currentFilter(),
+                                    _worked.value,
+                                )
+                            } else {
+                                null
+                            }
+                            if (takeover != null) {
+                                Log.i(TAG_QSO, "听到其他定向呼叫 → 换台 ${takeover.call}（${takeover.kind}）")
+                                startAutoTarget(takeover)
+                            } else {
+                                maybeGiveUpTarget(p, incoming, s.utcNowMs)
+                            }
                         }
                     } else if (st.txEnabled) {
                         runAutoProgram(incoming, s.utcNowMs)

@@ -393,12 +393,14 @@ com/example/ft8vox/
 >   新增**无锁** `nativeAbortTx`（UI 线程只给 `out_gen` 加一，不再关流）；
 >   Kotlin 侧加「发射作废代次」`txAbortGen` 丢弃已排程未落盘的发射。详见 `REGRESSION.md` N 组。
 > - 前台服务保证息屏续跑；省电与发热优化。
-> - **自动程序重写为三层架构（依据 `docs/NEW_QSO_.md`）**：第 3 层＝用户手动干预（临时接管、不改第 2 层状态）；
->   第 2 层＝`AutoScheduler`（模式 `0 手动 / 1 主叫 / 2 混合`、按 SNR/距离/解码先后排序、允许重复通联、报告信息优先、
->   队列与「连续 3 次无人回应转应答」、保护限制：连续无有效 QSO / 单次发射总时长，触发即切回 0 ——**不动发送总开关**）；
->   第 1 层＝`QsoEngine`（`giveUpAfterRetry` + `retryLimit` 决定放弃，`awaitingResponders` 标记「发 CQ 等回应者」交第 2 层收集排序）。
->   旧「等级 0/1/2/3/4+」「单次通联」「优先新呼号」「独立的最大重试次数」已删除/并入。**已知有意偏离**：第 1 层保持标准
->   FT8 语义（主叫收到 `R报告` 即判成功并发 `RR73`），不采纳文档 §1.3 ④/⑤「等对方 73 再发 73」。验收见 `REGRESSION.md` E 组。
+> - **自动程序按 FT8CN 重写（依据 `docs/NEW_QSO_.md` v4.0、`docs/FT8CN-QSO.md`、`docs/FT8CN_QSO_PLAN.md`）**：
+>   三层结构保留（第 3 层＝人工干预；第 2 层＝`AutoScheduler`；第 1 层＝`QsoEngine`），但**模型照 FT8CN**——
+>   **六步指令序列**（网格 / 报告 / R 报告 / RR73 / 73 / CQ）+ **单档常开的自动程序**（唯一闸门＝发送总开关 `txEnabled`）
+>   + **两个安全阀**（发射监管超时 → 关闭总开关；无回应限制 → 换台 / 回 CQ）。应答照「三循环」：
+>   目标优先 → 「任何人呼叫我一定应答」（`directedTakeover` 在目标本批沉默时换台）→ S&P 自动应答未通联 CQ。
+>   FT8CN 没有的机制（AutoSeq 等级 0/1/2/3/4+、模式 0/1/2、按 SNR/距离/解码先后排序、`allowRepeat`、
+>   报告信息优先、`retryLimit`/`giveUpAfterRetry`、`paused`/手动接管、`AutoEnableConfirmDialog`）**已全部删除**，
+>   明确不做（`docs/NEW_QSO_.md` §十三）。验收见 `REGRESSION.md` T 组。
 > - **UI 性能优化（模拟器实测定位并优化，2026-09-26）**：以 `dumpsys gfxinfo`（帧数 / 各分位 GPU 耗时）
 >   + 逐线程 `/proc/<pid>/task/*/stat` CPU 采样定位出两个最大开销点：
 >   1. **地图页无条件 60 fps 重绘**：`GridScreen` 的 `rememberInfiniteTransition`（信号连线相位）**永不停歇**，

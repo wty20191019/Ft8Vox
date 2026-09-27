@@ -438,4 +438,24 @@ class QsoEngineTest {
         assertEquals(-18, log!!.reportSent)
         assertEquals(-5, log.reportReceived)
     }
+
+    @Test
+    fun advancedFlagTrueOnlyWhenTargetReplies() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 空批 / 别人呼叫我方 → 未推进
+        assertFalse(q.onDecoded(emptyList()).advanced)
+        assertFalse(q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))).advanced)
+        // 目标有效回复 → 推进，且无回应计数清零
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertTrue(s.advanced)
+        assertEquals(0, s.noReplyCount)
+    }
+
+    @Test
+    fun advancedFlagTrueOnCompletion() {
+        val q = engine()
+        q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertTrue(q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))).advanced)
+    }
 }

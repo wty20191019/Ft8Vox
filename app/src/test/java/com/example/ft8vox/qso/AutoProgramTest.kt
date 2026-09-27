@@ -274,6 +274,45 @@ class AutoProgramTest {
         )
     }
 
+    // ---- 忙时：目标本批沉默 → 应答其他定向台（FT8CN `checkCQMeOrFollowCQMessage` 循环 2） ----
+
+    @Test
+    fun directedTakeoverPicksOtherCallerWhenTargetSilent() {
+        val s = scheduler()
+        val t = s.directedTakeover(
+            listOf(
+                decoded("F4FSY JA1ABC PM95"), // 当前目标 → 排除
+                decoded("CQ W1AW FN42"),      // CQ 不参与换台
+                decoded("F4FSY DL1ABC PM95"), // 其他定向呼叫 → 命中
+            ),
+            currentTarget = "JA1ABC",
+        )
+        assertEquals("DL1ABC", t?.call)
+        assertEquals(AutoTargetKind.CALL, t?.kind)
+    }
+
+    @Test
+    fun directedTakeoverNullWhenOnlyCurrentTargetOrCq() {
+        val s = scheduler()
+        assertNull(s.directedTakeover(listOf(decoded("F4FSY JA1ABC PM95")), currentTarget = "JA1ABC"))
+        assertNull(s.directedTakeover(listOf(decoded("CQ W1AW FN42")), currentTarget = "JA1ABC"))
+    }
+
+    @Test
+    fun directedTakeoverIgnoresEndOfQsoReports() {
+        val s = scheduler()
+        // RR73 / 73 表示通联已结束，不作为新 QSO 起点
+        assertNull(s.directedTakeover(listOf(decoded("F4FSY DL1ABC RR73")), currentTarget = "JA1ABC"))
+        assertNull(s.directedTakeover(listOf(decoded("F4FSY DL1ABC 73")), currentTarget = "JA1ABC"))
+    }
+
+    @Test
+    fun directedTakeoverTreatsCompoundedCallAsSameTarget() {
+        val s = scheduler()
+        // 宽松匹配：JA1ABC/P 与当前目标 JA1ABC 是同一台，不算「其他人」
+        assertNull(s.directedTakeover(listOf(decoded("F4FSY JA1ABC/P PM95")), currentTarget = "JA1ABC"))
+    }
+
     // ---- 发射监管 ----
 
     @Test

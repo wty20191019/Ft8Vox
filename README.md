@@ -79,7 +79,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 # 构建 Debug APK（任一平台）
 ./gradlew :app:assembleDebug            # Windows: .\gradlew.bat :app:assembleDebug
 
-# 构建 + 跑 JVM 单测（当前 303 例 / 32 suite 全绿）
+# 构建 + 跑 JVM 单测（当前 309 例 / 32 suite 全绿）
 ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
 ```
 
@@ -119,7 +119,7 @@ docs/                                       # 路线图、用户手册、构建�
 | [docs/JNI-CONTRACT.md](docs/JNI-CONTRACT.md) | Kotlin ↔ native 接口契约、SNR 口径、采集预设 |
 | [docs/new_ui.md](docs/new_ui.md) | 新 UI 设计（配色、字号、顶栏/底栏、四页布局） |
 | [docs/NEW-UI-PLAN.md](docs/NEW-UI-PLAN.md) | U1–U9 实施计划与补记（含每条决策的取舍与后果） |
-| [docs/NEW_QSO_.md](docs/NEW_QSO_.md) | 自动程序（第 2 层）设计依据：三层架构、流程 / 重试 / 时隙规则、§五菜单 |
+| [docs/NEW_QSO_.md](docs/NEW_QSO_.md) | QSO 自动系统设计（**对标 FT8CN**）：六步序列、单档常开自动程序、两个安全阀、三循环、人工覆盖 |
 | [docs/REGRESSION.md](docs/REGRESSION.md) | 真机/模拟器回归清单（A–S 组）与结果记录 |
 | [docs/UI-DESIGN.md](docs/UI-DESIGN.md) | 阶段 7 版 UI 设计（已被 `new_ui.md` 取代，保留存档） |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 贡献指南（分支、提交信息、代码规范） |

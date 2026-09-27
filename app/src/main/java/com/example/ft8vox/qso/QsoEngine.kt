@@ -60,6 +60,13 @@ data class QsoProgress(
      * 直接认第一个回应者；`SessionViewModel` 据此分流。
      */
     val awaitingResponders: Boolean = false,
+    /**
+     * 最近一次 [QsoEngine.onDecoded] 是否发生了推进（收到**当前对手**的有效回复）。
+     *
+     * 第 2 层据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
+     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/NEW_QSO_.md` §三）。
+     */
+    val advanced: Boolean = false,
 ) {
     /** 是否处于进行中的 QSO。 */
     val active: Boolean
@@ -143,6 +150,8 @@ class QsoEngine {
     private var startedUtcMs = 0L
     /** 无回应计数（FT8CN 口径，按解码批次累计，收到回复清零）。 */
     private var noReplyCount = 0
+    /** 最近一次 [onDecoded] 是否推进（供第 2 层识别「目标本批沉默」，见 [QsoProgress.advanced]）。 */
+    private var lastAdvanced = false
     private var logEntry: QsoLogEntry? = null
 
     /** 是否处于「已发 CQ、等回应者」阶段（见 [QsoProgress.awaitingResponders]）。 */
@@ -171,6 +180,7 @@ class QsoEngine {
         order = step.order,
         noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
+        advanced = lastAdvanced,
     )
 
     /** 取走刚完成的通联记录（一次性，取走后清空）。 */
@@ -316,6 +326,7 @@ class QsoEngine {
      * （由第 2 层据此判断换台）；深度/弱信号批次不计。
      */
     fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
+        lastAdvanced = false
         if (!canOperate) return progress()
         if (!progress().active) return progress()
         // 「已发 CQ、等回应者」阶段由第 2 层自动程序收集/排序回应者，状态机不自行认人
@@ -340,6 +351,7 @@ class QsoEngine {
             }
         }
 
+        lastAdvanced = advanced
         if (advanced) {
             noReplyCount = 0
             // 非终态转移只改了 step，需要把对外 state 同步过来（终态分支里 finish 已同步，幂等）
@@ -502,6 +514,7 @@ class QsoEngine {
         txText = null
         startedUtcMs = 0L
         noReplyCount = 0
+        lastAdvanced = false
         logEntry = null
         awaitingResponders = false
     }
