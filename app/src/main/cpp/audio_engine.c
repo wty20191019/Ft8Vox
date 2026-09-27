@@ -33,8 +33,12 @@
 // 内部工作采样率：FT8/FT4 协议标准
 #define WORK_RATE 12000
 
-// 采集环形缓冲（2 的幂），48 kHz 下约 0.68 s
-#define CAP_RING_CAP (1u << 15)
+// 采集环形缓冲（2 的幂）。48 kHz 下 2^15 ≈ 0.68 s，2^17 ≈ 2.7 s。
+//
+// 取 2.7 s 而不是 0.68 s：DSP 线程偶尔会被系统调度拖住（GC/降频/其它 App 抢占），
+// 缓冲越深越不容易溢出丢样。解码已移到独立线程（见 ftx_session.h「瀑布快照」），
+// 正常情况下 DSP 线程只做「重采样 + STFT」，这两秒多的余量几乎用不到。
+#define CAP_RING_CAP (1u << 17)
 // DSP 每次从环形缓冲读取的原始采样数
 #define DSP_CHUNK 1024
 // 重采样输出缓冲（应 >= DSP_CHUNK * 最大降采样倍率）
@@ -324,6 +328,17 @@ typedef struct
     int64_t result_slot_ms[RESULT_CAP];
     int result_count;
 
+    // ---- 后台解码线程（见 ftx_session.h「瀑布快照」） ----
+    //
+    // 解码必须离开 DSP 线程：真机上单次解码 1 s 量级，期间 DSP 线程停摆会让采集
+    // 环形缓冲溢出丢样，并让下一个时隙因「迟到最后期限」而被整隙丢弃。
+    pthread_t dec_thread;
+    bool dec_started;
+    pthread_mutex_t dec_mutex;  ///< 保护 [dec_pending] 的交接
+    pthread_cond_t dec_cond;    ///< 有新快照可解 / 要收工
+    ftx_frozen_t* dec_pending;  ///< 已冻结、等解码线程取走的快照（NULL = 无）
+    _Atomic bool dec_run;       ///< 解码线程存活标志（销毁引擎时置 false）
+
     // 统计
     _Atomic int64_t dropped;
     _Atomic int64_t slots_decoded;
@@ -392,21 +407,45 @@ static aaudio_data_callback_result_t capture_callback(
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
-/// 解码当前时隙并把结果追加到待轮询队列。返回本次解出的条数。
-static int decode_and_store(audio_engine_t* e)
+/// 把当前时隙的瀑布交给后台解码线程（**DSP 线程调用，不阻塞**）。
+///
+/// 真机上单次解码在 1 s 量级：以前在 DSP 线程里同步解码，解码期间采集环形缓冲
+/// 不再被消费 → 溢出丢样约 0.5 s（真机实测每时隙 19000~27000 样），且解码结束时
+/// 已经迟到 1 s 以上 → 整个下一个时隙被判「无法对齐」而丢弃（瀑布跟着停一整个时隙）。
+static void submit_decode(audio_engine_t* e, int64_t slot)
+{
+    ftx_frozen_t* f = ftx_session_freeze(e->session, slot);
+    pthread_mutex_lock(&e->dec_mutex);
+    if (e->dec_pending != NULL)
+    {
+        // 上一份还没被取走（解码线程忙不过来）：作废它，只保留最新时隙
+        ftx_session_thaw(e->session, e->dec_pending);
+        LOGW("decode: previous slot dropped (decoder busy)");
+    }
+    e->dec_pending = f;
+    pthread_cond_signal(&e->dec_cond);
+    pthread_mutex_unlock(&e->dec_mutex);
+    if (f == NULL)
+        LOGW("decode: no free snapshot, slot %lld skipped", (long long)slot);
+}
+
+/// 解码一份冻结快照并把结果追加到待轮询队列。返回本次解出的条数。
+///
+/// **只允许在解码线程调用**：会话里的 SIC 减谱缓冲与呼号哈希表都是进程级单份。
+static int decode_frozen_and_store(audio_engine_t* e, ftx_frozen_t* f, int64_t slot)
 {
     ftx_decode_result_t results[DECODE_BATCH];
     const int64_t t0 = monotonic_ms();
-    int n = ftx_session_decode(e->session, results, DECODE_BATCH);
+    int n = ftx_session_decode_frozen(e->session, f, results, DECODE_BATCH);
     // 先记耗时（纯显示：顶栏「解码 nms」），再记「哪个时隙解码完了」与计数
     atomic_store(&e->last_decode_ms, monotonic_ms() - t0);
-    atomic_store(&e->last_decoded_slot, atomic_load(&e->last_slot));
+    atomic_store(&e->last_decoded_slot, slot);
     atomic_fetch_add(&e->slots_decoded, 1);
     if (n <= 0)
         return 0;
 
     // 本次解码对应的时隙起点（用于 UI 显示时间）
-    int64_t slot_start_ms = atomic_load(&e->last_slot) * e->slot_ms;
+    const int64_t slot_start_ms = slot * e->slot_ms;
 
     pthread_mutex_lock(&e->res_mutex);
     for (int i = 0; i < n && e->result_count < RESULT_CAP; ++i)
@@ -417,6 +456,36 @@ static int decode_and_store(audio_engine_t* e)
     }
     pthread_mutex_unlock(&e->res_mutex);
     return n;
+}
+
+/// 后台解码线程：等快照 → 解码 → 归还。DSP 线程因此永远不必等解码。
+static void* decode_thread_fn(void* arg)
+{
+    audio_engine_t* e = (audio_engine_t*)arg;
+    for (;;)
+    {
+        pthread_mutex_lock(&e->dec_mutex);
+        while (e->dec_pending == NULL && atomic_load(&e->dec_run))
+            pthread_cond_wait(&e->dec_cond, &e->dec_mutex);
+        ftx_frozen_t* f = e->dec_pending;
+        e->dec_pending = NULL;
+        const bool run = atomic_load(&e->dec_run);
+        pthread_mutex_unlock(&e->dec_mutex);
+
+        if (f == NULL)
+        {
+            if (!run)
+                break;
+            continue;
+        }
+
+        const int64_t slot = ftx_frozen_slot(f);
+        const int n = decode_frozen_and_store(e, f, slot);
+        ftx_session_thaw(e->session, f);
+        LOGI("decode: slot=%lld decoded=%d ms=%lld", (long long)slot, n,
+             (long long)atomic_load(&e->last_decode_ms));
+    }
+    return NULL;
 }
 
 // -----------------------------------------------------------------------------
@@ -492,8 +561,12 @@ static void cap_dump_slot_append(audio_engine_t* e, const float* x, int n)
     e->cap_dump_len += n;
 }
 
-/// 时隙结束：落盘 + 一行诊断（丢样数 / 实际喂入样本数 / 墙钟时长 / 解出条数）。
-static void cap_dump_slot_end(audio_engine_t* e, int64_t fed, int decoded)
+/// 时隙结束：落盘 + 一行诊断（丢样数 / 实际喂入样本数 / 墙钟时长）。
+///
+/// `wall`（墙钟）与 `samples`（样本数 ÷ 12 kHz）应当基本相等：差值就是「采集侧
+/// 被别的东西拖住」的时间。解出条数由解码线程另行打点（`decode: slot=… decoded=…`），
+/// 因为解码已经不在 DSP 线程里了。
+static void cap_dump_slot_end(audio_engine_t* e, int64_t fed)
 {
     if (e->cap_dump_slot < 0)
         return;
@@ -530,9 +603,9 @@ static void cap_dump_slot_end(audio_engine_t* e, int64_t fed, int decoded)
         }
         fclose(fp);
     }
-    LOGI("capdump end: slot=%lld samples=%d (~%d ms) wall=%lld ms fed=%lld dropped=%lld decoded=%d%s",
+    LOGI("capdump end: slot=%lld samples=%d (~%d ms) wall=%lld ms fed=%lld dropped=%lld%s",
          (long long)slot, n, n / (WORK_RATE / 1000), (long long)wall, (long long)fed,
-         (long long)dropped, decoded, ok ? "" : " WRITE_FAILED");
+         (long long)dropped, ok ? "" : " WRITE_FAILED");
 }
 #else
 static void cap_dump_slot_begin(audio_engine_t* e, int64_t slot, int align_ms)
@@ -547,11 +620,10 @@ static void cap_dump_slot_append(audio_engine_t* e, const float* x, int n)
     (void)x;
     (void)n;
 }
-static void cap_dump_slot_end(audio_engine_t* e, int64_t fed, int decoded)
+static void cap_dump_slot_end(audio_engine_t* e, int64_t fed)
 {
     (void)e;
     (void)fed;
-    (void)decoded;
 }
 #endif
 
@@ -584,12 +656,13 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
         }
     }
 
-    // 已跨入新时隙：解码当前（可能不完整）后重新对齐
+    // 已跨入新时隙：把当前（可能不完整的）时隙交给后台解码，然后重新对齐
     if (slot != atomic_load(&e->last_slot))
     {
         const int64_t fed = atomic_load(&e->fed_samples);
-        const int decoded = (fed > 0) ? decode_and_store(e) : 0;
-        cap_dump_slot_end(e, fed, decoded);
+        if (fed > 0)
+            submit_decode(e, atomic_load(&e->last_slot));
+        cap_dump_slot_end(e, fed);
         atomic_store(&e->capturing, false);
         return;
     }
@@ -599,8 +672,8 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
     int64_t fed = atomic_fetch_add(&e->fed_samples, count) + count;
     if (fed >= e->slot_samples)
     {
-        const int decoded = decode_and_store(e);
-        cap_dump_slot_end(e, fed, decoded);
+        submit_decode(e, atomic_load(&e->last_slot));
+        cap_dump_slot_end(e, fed);
         atomic_store(&e->capturing, false);
     }
 }
@@ -723,6 +796,16 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->out_req_rate, 0);
     atomic_store(&e->out_device_id, 0);
 
+    // 后台解码线程（见 ftx_session.h「瀑布快照」）：与引擎同生共死，销毁时收工。
+    pthread_mutex_init(&e->dec_mutex, NULL);
+    pthread_cond_init(&e->dec_cond, NULL);
+    e->dec_pending = NULL;
+    atomic_store(&e->dec_run, true);
+    if (pthread_create(&e->dec_thread, NULL, decode_thread_fn, e) == 0)
+        e->dec_started = true;
+    else
+        LOGE("decode thread create failed: decoding disabled");
+
     return (jlong)(intptr_t)e;
 }
 
@@ -841,6 +924,18 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject th
         LOGE("nativeDestroy: playback call still alive, engine leaked to avoid use-after-free");
         return;
     }
+    // 停后台解码线程（采集已停，不会再有新快照；若它正在解码则等它做完）
+    if (e->dec_started)
+    {
+        pthread_mutex_lock(&e->dec_mutex);
+        atomic_store(&e->dec_run, false);
+        pthread_cond_broadcast(&e->dec_cond);
+        pthread_mutex_unlock(&e->dec_mutex);
+        pthread_join(e->dec_thread, NULL);
+        e->dec_started = false;
+    }
+    pthread_mutex_destroy(&e->dec_mutex);
+    pthread_cond_destroy(&e->dec_cond);
     pthread_mutex_destroy(&e->tx_mutex);
     pthread_cond_destroy(&e->tx_cond);
     pthread_mutex_destroy(&e->out_mutex);
@@ -991,7 +1086,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopCapture(JNIEnv* env, jobjec
         e->in_stream = NULL;
     }
     atomic_store(&e->capturing, false);
-    cap_dump_slot_end(e, atomic_load(&e->fed_samples), 0);
+    cap_dump_slot_end(e, atomic_load(&e->fed_samples));
     ring_free(&e->cap_ring);
     LOGI("capture stopped");
 }

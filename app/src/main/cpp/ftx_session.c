@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
 
 #include <ft8/decode.h>
 #include <ft8/encode.h>
@@ -46,6 +47,10 @@
 
 // waterfall 行流环形缓冲行数（约 600 * 0.08 s ≈ 48 s 的滚动窗口）
 #define K_WF_RING_ROWS 600
+
+// 瀑布快照的乒乓份数（见 ftx_session.h「瀑布快照」说明）：2 份足以吸收「解码落后
+// 一个时隙」；两份都忙说明解码落后 ≥2 个时隙，此时宁可跳过本次解码，也不让采集侧等待。
+#define K_FROZEN_SLOTS 2
 
 // -----------------------------------------------------------------------------
 // 呼号哈希表：用于 ftx_message_decode() 还原被哈希压缩的呼号。
@@ -155,6 +160,16 @@ static void ensure_mag_power_lut(void)
 // -----------------------------------------------------------------------------
 // 会话
 // -----------------------------------------------------------------------------
+/// 一份冻结的瀑布（见 ftx_session.h「瀑布快照」说明）。
+/// `mag` 与 `mon.wf.mag` 各自独立，因此「解码线程读快照」与「采集线程写实时瀑布」互不干扰。
+struct ftx_frozen
+{
+    _Atomic int busy;   ///< 1 = 已交给解码线程使用中（采集侧不要碰）
+    int64_t slot;       ///< 快照所属时隙号
+    ftx_waterfall_t wf; ///< 快照时刻的瀑布元数据；mag 已指向下面的副本缓冲
+    WF_ELEM_T* mag;     ///< 幅度副本（尺寸同 mon.wf.mag）
+};
+
 struct ftx_session
 {
     monitor_t mon;
@@ -176,6 +191,9 @@ struct ftx_session
     WF_ELEM_T* sic_mag;
     size_t sic_elems; ///< sic_mag 的元素个数（= max_blocks * block_stride）
     size_t sic_bytes; ///< sic_mag 的字节数（memcpy 用）
+
+    /// 供后台解码线程使用的乒乓快照（见 ftx_session.h）。
+    struct ftx_frozen frozen[K_FROZEN_SLOTS];
 };
 
 static int clamp_int(int v, int lo, int hi)
@@ -268,11 +286,25 @@ ftx_session_t* ftx_session_create(const monitor_config_t* cfg)
     s->sic_bytes = s->sic_elems * sizeof(WF_ELEM_T);
     s->sic_mag = (WF_ELEM_T*)malloc(s->sic_bytes);
 
-    if (s->pending == NULL || s->wf_ring == NULL || s->sic_mag == NULL)
+    // 后台解码用的乒乓快照（尺寸同瀑布幅度）
+    for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+    {
+        s->frozen[i].mag = (WF_ELEM_T*)malloc(s->sic_bytes);
+        atomic_store(&s->frozen[i].busy, 0);
+        s->frozen[i].slot = -1;
+    }
+
+    bool frozen_ok = true;
+    for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+        frozen_ok = frozen_ok && (s->frozen[i].mag != NULL);
+
+    if (s->pending == NULL || s->wf_ring == NULL || s->sic_mag == NULL || !frozen_ok)
     {
         free(s->pending);
         free(s->wf_ring);
         free(s->sic_mag);
+        for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+            free(s->frozen[i].mag);
         monitor_free(&s->mon);
         free(s);
         return NULL;
@@ -287,6 +319,8 @@ void ftx_session_free(ftx_session_t* session)
 {
     if (session == NULL)
         return;
+    for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+        free(session->frozen[i].mag);
     free(session->sic_mag);
     free(session->wf_ring);
     free(session->pending);
@@ -603,12 +637,14 @@ static void sic_subtract_message(const ftx_waterfall_t* wf, WF_ELEM_T* dst, size
     }
 }
 
-int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results)
+/// 解码一份瀑布：`wf` 既可以是实时瀑布（`&session->mon.wf`），也可以是后台解码线程的
+/// 冻结快照。只读 `session` 的解码参数与 SIC 缓冲、**不碰实时瀑布**，故可与采集线程并发。
+static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
+                            ftx_decode_result_t* results, int max_results)
 {
-    if (session == NULL || results == NULL || max_results <= 0)
+    if (session == NULL || wf == NULL || results == NULL || max_results <= 0)
         return 0;
 
-    const ftx_waterfall_t* wf = &session->mon.wf;
     const ftx_decode_params_t p = session->decode;
 
     // 本时隙已解码消息的哈希表（去重），decoded_cand 记录各自的位置供 SIC 减谱
@@ -725,4 +761,58 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
     hashtable_cleanup(10);
 
     return num_out;
+}
+
+int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results)
+{
+    if (session == NULL)
+        return 0;
+    return decode_waterfall(session, &session->mon.wf, results, max_results);
+}
+
+ftx_frozen_t* ftx_session_freeze(ftx_session_t* session, int64_t slot)
+{
+    if (session == NULL || session->sic_mag == NULL || session->sic_bytes == 0)
+        return NULL;
+
+    const ftx_waterfall_t* wf = &session->mon.wf;
+    if (wf->mag == NULL)
+        return NULL;
+
+    for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+    {
+        struct ftx_frozen* f = &session->frozen[i];
+        if (f->mag == NULL)
+            continue;
+        int expected = 0;
+        // 抢占一份空闲快照；失败说明解码线程还在用这一份
+        if (!atomic_compare_exchange_strong(&f->busy, &expected, 1))
+            continue;
+        memcpy(f->mag, wf->mag, session->sic_bytes);
+        f->wf = *wf;
+        f->wf.mag = f->mag;
+        f->slot = slot;
+        return f;
+    }
+    return NULL; // 两份都忙：解码落后 ≥2 个时隙，跳过本次（不阻塞采集）
+}
+
+int64_t ftx_frozen_slot(const ftx_frozen_t* frozen)
+{
+    return (frozen != NULL) ? frozen->slot : -1;
+}
+
+int ftx_session_decode_frozen(ftx_session_t* session, ftx_frozen_t* frozen,
+                              ftx_decode_result_t* results, int max_results)
+{
+    if (frozen == NULL)
+        return 0;
+    return decode_waterfall(session, &frozen->wf, results, max_results);
+}
+
+void ftx_session_thaw(ftx_session_t* session, ftx_frozen_t* frozen)
+{
+    (void)session;
+    if (frozen != NULL)
+        atomic_store(&frozen->busy, 0);
 }

@@ -69,6 +69,38 @@ void ftx_session_process(ftx_session_t* session, const float* samples, int count
 /// @return 实际解出的条数
 int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results);
 
+// -----------------------------------------------------------------------------
+// 瀑布快照（后台解码线程用）
+// -----------------------------------------------------------------------------
+//
+// 动机：真机上单次解码在 1 s 量级（强台多、SIC 两趟、LDPC 高迭代），若在 DSP 线程
+// 里同步解码，解码期间采集环形缓冲不再被消费 → 溢出丢样，且解码结束时已迟到 1 s 以上
+// → 整个下一个时隙被判「无法对齐」而丢弃（瀑布跟着停一整个时隙）。
+//
+// 用法：DSP 线程在时隙末尾 `ftx_session_freeze()` 拷一份瀑布（~200 KB，<1 ms）就立刻
+// 回去继续喂样；解码线程慢慢 `ftx_session_decode_frozen()`，完事 `ftx_session_thaw()`
+// 归还缓冲。解码数据源与实时瀑布彻底分离，互不干扰。
+//
+// 契约：
+// - 会话内含 [K_FROZEN_SLOTS] 份乒乓快照；`freeze` 由采集侧调用、`thaw`/`decode_frozen`
+//   由解码侧调用，同一份快照同一时刻只有一个线程碰（内部用原子 busy 标志交接）。
+// - **同一会话同一时刻只允许一个解码在进行**（呼号哈希表是进程级全局）。
+typedef struct ftx_frozen ftx_frozen_t;
+
+/// 冻结当前瀑布并记下所属时隙号。两份快照都还在被解码线程占用时返回 NULL
+/// （调用方应跳过本次解码，例如解码落后两个时隙以上）。
+ftx_frozen_t* ftx_session_freeze(ftx_session_t* session, int64_t slot);
+
+/// 取该快照对应的时隙号（解码线程用它回填「哪个时隙解码完了」）。
+int64_t ftx_frozen_slot(const ftx_frozen_t* frozen);
+
+/// 在冻结的瀑布上解码（语义同 ftx_session_decode，只是数据源是快照）。
+int ftx_session_decode_frozen(ftx_session_t* session, ftx_frozen_t* frozen,
+                              ftx_decode_result_t* results, int max_results);
+
+/// 解码完成，归还快照给采集侧复用。
+void ftx_session_thaw(ftx_session_t* session, ftx_frozen_t* frozen);
+
 /// 本会话一个时隙所需的 12 kHz 采样数（= max_blocks * block_size）。
 int ftx_session_slot_samples(const ftx_session_t* session);
 
