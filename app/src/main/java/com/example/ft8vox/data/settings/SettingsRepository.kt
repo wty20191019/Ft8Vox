@@ -98,8 +98,8 @@ private object Keys {
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
     val followCalls = stringSetPreferencesKey("follow_calls")
     val autoFollowOrder = stringPreferencesKey("auto_follow_order")
-    val txQueue = stringPreferencesKey("tx_queue")
-    val macros = stringPreferencesKey("macros")
+    val cqPrefixes = stringPreferencesKey("cq_prefixes")
+    val cqPrefixIndex = intPreferencesKey("cq_prefix_index")
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
     val mapCqShowSnr = booleanPreferencesKey("map_cq_show_snr")
     val mapShowLinkText = booleanPreferencesKey("map_show_link_text")
@@ -157,12 +157,24 @@ private fun readFilterTags(prefs: Preferences, defaults: Set<DecodeFilterTag>): 
 private fun splitLines(s: String?): List<String>? =
     s?.split('\n')?.map { it.trim() }?.filter { it.isNotEmpty() }
 
+/**
+ * CQ 前缀格子：与 [splitLines] 不同，**保留空格子**（空串＝普通 CQ），因此不能去空。
+ *
+ * `cqPrefixes` 的格子序号要稳定（选了第几格由 `cqPrefixIndex` 记住），去空会让下标错位。
+ */
+private fun readPrefixSlots(s: String?): List<String>? =
+    s?.split('\n')?.map { it.trim() }?.takeIf { it.isNotEmpty() }
+
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
     val followCalls = this[Keys.followCalls]
         ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
         ?.toSet()
         ?: defaults.followCalls
+    // CQ 前缀格子：保留空格子（空串＝普通 CQ），最后按格子数夹一下选中的下标
+    val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
+    val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
+        .coerceIn(0, (cqPrefixes.size - 1).coerceAtLeast(0))
     // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
     val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
         .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
@@ -195,8 +207,8 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?: defaults.ignoredCalls,
         followCalls = followCalls,
         autoFollowOrder = autoFollowOrder,
-        txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
-        macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
+        cqPrefixes = cqPrefixes,
+        cqPrefixIndex = cqPrefixIndex,
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
         mapCqFlagShowSnr = this[Keys.mapCqShowSnr] ?: defaults.mapCqFlagShowSnr,
         mapShowLinkText = this[Keys.mapShowLinkText] ?: defaults.mapShowLinkText,
@@ -256,8 +268,8 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.ignoredCalls] = ignoredCalls
     prefs[Keys.followCalls] = followCalls
     prefs[Keys.autoFollowOrder] = autoFollowOrder.joinToString("\n")
-    prefs[Keys.txQueue] = txQueue.joinToString("\n")
-    prefs[Keys.macros] = macros.joinToString("\n")
+    prefs[Keys.cqPrefixes] = cqPrefixes.joinToString("\n")
+    prefs[Keys.cqPrefixIndex] = cqPrefixIndex
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall
     prefs[Keys.mapCqShowSnr] = mapCqFlagShowSnr
     prefs[Keys.mapShowLinkText] = mapShowLinkText

@@ -108,8 +108,10 @@ fun AutoProgramPanel(
         )
 
         AutoOptionRow(
-            title = "自动收录 CQ 台",
-            subtitle = "每解到一个新的 CQ 台就自动加入 ⭐ 关注列表（自动收录最多 100 个，超出淘汰最早加入的；手动关注的不受此限）",
+            title = "自动收录 CQ 台（本波段）",
+            subtitle = "每解到一个本波段还没通联过的 CQ 台就自动加入 ⭐ 关注列表（" +
+                "跨波段通联过的台在本波段仍会收录；自动收录最多 100 个，超出淘汰最早加入的；" +
+                "手动关注的不受此限）",
             checked = program.autoAddCqToFollow,
             onChange = { v -> onOption { it.copy(autoAddCqToFollow = v) } },
         )
@@ -122,11 +124,11 @@ fun AutoProgramPanel(
 
         Text(
             "「关注」名单：在解码列表长按某台 →「关注」，或由「自动收录 CQ 台」自动加入；" +
-                "点筛选条最右的 ⭐ 可查看 / 删除（右滑取消关注）；" +
+                "点筛选条最右的 ⭐ 可查看 / 删除（右滑取消关注）；关注的台通联完成后会自动取消关注。\n" +
                 "「自动收录 CQ 台」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
-                "两个开关都开＝自动应答任何未通联的 CQ 台；只关「自动收录 CQ 台」＝只呼叫关注的台；" +
+                "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动收录 CQ 台」＝只呼叫关注的台；" +
                 "关掉「自动呼叫 CQ 台」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
-                "对方直接呼叫我方一定应答；已通联的 CQ 台不再主动呼叫。",
+                "对方直接呼叫我方一定应答；本波段已通联的 CQ 台不再主动呼叫。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp),
@@ -269,7 +271,7 @@ private fun AutoStepButton(label: String, enabled: Boolean, onClick: () -> Unit)
 internal fun autoProgramSummary(p: AutoProgramSettings): String {
     val supervision = if (p.supervisionMinutes <= 0) "监管关" else "监管 ${p.supervisionMinutes} 分"
     val noReply = if (p.noReplyLimit <= 0) "无回应不限" else "无回应 ${p.noReplyLimit} 次换台"
-    val follow = if (p.autoAddCqToFollow) "收录 CQ" else "不收录 CQ"
+    val follow = if (p.autoAddCqToFollow) "收录本波段新 CQ" else "不收录 CQ"
     val call = if (p.autoCallFollow) "自动呼叫" else "不自动呼叫"
     return "$supervision｜$noReply｜$follow｜$call"
 }

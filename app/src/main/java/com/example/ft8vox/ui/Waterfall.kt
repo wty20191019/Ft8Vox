@@ -85,11 +85,16 @@ object WaterfallColors {
 }
 
 /**
- * 瀑布视图：把 [frame] 画到 Canvas 上，并叠加发射频率红线与 QSO 标记。
+ * 瀑布视图：把 [frame] 画到 Canvas 上，并叠加发射频带（红线 + 半透明红条）与 QSO 标记。
  *
- * **发射频率（红线）就是唯一可调频率**：在瀑布上**单击或水平拖动**即把红线移到该处
+ * **发射频率就是唯一可调频率**：在瀑布上**单击或水平拖动**即把发射频率移到该处
  * （回调 [onMoveTxFreq]），**长按**回调 `onLongPress(freqHz)` 打开最近一条解码的详情。
  * 不再画「接收频率」绿线。频率轴固定铺满 `fMin–fMax`，**不做缩放与平移**（避免误触捏合改变频率刻度）。
+ *
+ * 发射频率在瀑布上画成两件东西（见 [txBandPx]）：
+ * - **红色竖线**＝报文**下边频**（就是报文音频频率本身，拖动它改频率的那条线）；
+ * - **半透明红条**＝整条报文实际占用的带宽 `[f, f + occupiedHz]`（FT8 50 Hz / FT4 83 Hz），
+ *   用来一眼看出这条报文会占掉频谱的哪一段。
  *
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
  * [txing] 为真时画红色边框表示正在发射。
@@ -102,6 +107,7 @@ fun WaterfallView(
     onMoveTxFreq: (Int) -> Unit,
     modifier: Modifier = Modifier,
     txing: Boolean = false,
+    occupiedHz: Int = 50,
     onLongPress: ((Int) -> Unit)? = null,
 ) {
     val bitmap = remember(frame?.bins, frame?.rows) {
@@ -185,17 +191,20 @@ fun WaterfallView(
 
         if (f != null && f.bins > 0 && size.width > 0f) {
             val span = f.bins * f.binHz
-            fun hzToX(hz: Int): Float {
-                val frac = (hz - f.fMinHz) / span
-                return frac.coerceIn(0f, 1f) * size.width
-            }
 
-            // 发射频率红线（可拖动调整）
-            val x = hzToX(selectedFreqHz)
+            // 发射频带：线＝下边频（可拖动调整），条＝整条报文占用的带宽（FT8 50 Hz / FT4 83 Hz）
+            val (xStart, xEnd) = txBandPx(selectedFreqHz, occupiedHz, f.fMinHz, span, size.width)
+            if (xEnd > xStart) {
+                drawRect(
+                    color = Color(0x40FF5252),
+                    topLeft = Offset(xStart, 0f),
+                    size = Size(xEnd - xStart, size.height),
+                )
+            }
             drawLine(
                 color = Color(0xFFFF5252),
-                start = Offset(x, 0f),
-                end = Offset(x, size.height),
+                start = Offset(xStart, 0f),
+                end = Offset(xStart, size.height),
                 strokeWidth = 2f,
             )
         }
@@ -211,4 +220,29 @@ fun WaterfallView(
             )
         }
     }
+}
+
+/**
+ * 发射频带 `[selectedFreqHz, selectedFreqHz + occupiedHz]` 在瀑布横轴上的**像素区间**
+ * （左＝下边频、右＝上边频），供 [WaterfallView] 画半透明红条与红线。
+ *
+ * 频率轴固定铺满 `fMinHz … fMinHz + spanHz`：越界自动夹到 `[0, width]`（红线贴在边缘上），
+ * 因此下边频已到最右侧时返回的区间宽度为 0（此时不画条，只画线）。
+ *
+ * @param fMinHz 频率轴左端（Hz）
+ * @param spanHz 频率轴总跨度（Hz）＝`bins × binHz`
+ * @param width 瀑布像素宽度
+ */
+internal fun txBandPx(
+    selectedFreqHz: Int,
+    occupiedHz: Int,
+    fMinHz: Float,
+    spanHz: Float,
+    width: Float,
+): Pair<Float, Float> {
+    fun x(hz: Float): Float {
+        if (spanHz <= 0f) return 0f
+        return ((hz - fMinHz) / spanHz).coerceIn(0f, 1f) * width
+    }
+    return x(selectedFreqHz.toFloat()) to x((selectedFreqHz + occupiedHz.coerceAtLeast(0)).toFloat())
 }

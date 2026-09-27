@@ -31,7 +31,7 @@ import com.example.ft8vox.qso.AutoProgramSelector
 import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
-import com.example.ft8vox.qso.DEFAULT_MACROS
+import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.FollowRoster
@@ -40,7 +40,6 @@ import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
-import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -85,6 +84,8 @@ data class ReceiverStatus(
     val droppedSamples: Long = 0,
     /** 本会话累计解码条数（docs/UI.md 底部状态条「总数」）。 */
     val decodedTotal: Long = 0,
+    /** 最近一次解码耗时（ms，0=还没解码过）；顶栏「解码 nms」，用于调解码深度参数。 */
+    val lastDecodeMs: Long = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
     val myCall: String = "",
@@ -187,6 +188,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val _worked = MutableStateFlow(WorkedIndex.EMPTY)
     val workedIndex: StateFlow<WorkedIndex> = _worked.asStateFlow()
 
+    /**
+     * **当前波段**已通联呼号（键＝波段名大写），照 FT8CN `checkQSLCallsign`
+     * （`DatabaseOpr.GetAllQSLCallsign` 的 `where band=?`）。
+     *
+     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选 / 是否自动收录）；界面高亮与
+     * 「已通联」筛选仍用跨波段的 [_worked]。
+     */
+    private var workedCallsByBand: Map<String, Set<String>> = emptyMap()
+
     private val qsoEngine = QsoEngine()
 
     private var pollJob: Job? = null
@@ -239,9 +249,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * QSO 已完成、但最后一条（RR73/73）还没发出去。
      *
-     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失。
+     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失；
+     * 期间 `pollOnce` 也不让第 2 层启动新 QSO（见那里的「收尾报文待发」分支）。
      */
     private var pendingAutoFinish = false
+
+    /**
+     * 最近一次**已处理**的解码所属时隙序号（native `lastDecodedSlot`；与 `planTx` 的
+     * `targetSlotIndex` 同一坐标系，-1=还没解码过）。见 [txTick] 的「先处理完上一时隙解码」。
+     */
+    private var lastDecodedSlotIndex = -1L
+
+    /**
+     * 最近一次处理解码批次的时间（UTC ms）。
+     *
+     * [txTick] 只在解码还在正常推进（最近两个时隙内）时才拦发射，避免采集/解码异常时
+     * 反而把自己锁死。
+     */
+    private var lastDecodeAtMs = 0L
 
     /**
      * 本段会话内已落库的呼号（会话内去重，见方案 §4.2）。
@@ -314,6 +339,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     calls = list.map { it.theirCall },
                     grids = list.mapNotNull { it.theirGrid },
                 )
+                // 自动程序用「本波段」已通联呼号（照 FT8CN checkQSLCallsign 的波段口径）
+                workedCallsByBand = list
+                    .groupBy { it.band.trim().uppercase() }
+                    .mapValues { (_, rows) ->
+                        rows.mapNotNull { it.theirCall.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+                            .toSet()
+                    }
             }
         }
         // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
@@ -542,9 +574,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 「自动收录 CQ 台」：把本批解到的**新** CQ 呼号并入关注名单（超出 `FollowRoster.AUTO_MAX` 时
-     * 淘汰最早收录的；手动关注的永不被淘汰）。
+     * 「自动收录 CQ 台」：把本批解到的、**当前波段还没通联过**的**新** CQ 呼号并入关注名单
+     * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动关注的永不被淘汰）。
      *
+     * 波段口径照 FT8CN `checkQSLCallsign`（`where band=?`）：跨波段通联过的台在本波段仍算没通联过。
      * 与 FT8CN 的**有意偏离**：FT8CN 只推送到「呼叫」列表、不写关注名单，见 [FollowRoster] 文档。
      */
     private fun autoCollectCqToFollow(batch: List<DecodeResult>) {
@@ -556,6 +589,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             myCall = _status.value.myCall,
             ignoredCalls = s.ignoredCalls,
             followedCalls = s.followCalls,
+            workedCalls = workedCallsOnBand(_status.value.band),
         )
         if (incoming.isEmpty()) return
         persist { cur ->
@@ -569,26 +603,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(callFilter = value) }
     }
 
-    /** 保存宏模板（最多 8 个；全空则回落默认）。 */
-    fun setMacros(list: List<String>) {
-        val cleaned = list.map { it.trim() }.filter { it.isNotEmpty() }.take(8)
-        persist { it.copy(macros = cleaned.ifEmpty { DEFAULT_MACROS }) }
+    /** 保存 CQ 前缀格子（最多 8 个，**保留空格子**＝普通 CQ；全空则回落默认）。 */
+    fun setCqPrefixes(list: List<String>) {
+        val cleaned = list.map { it.trim().uppercase() }.take(8)
+        persist { it.copy(cqPrefixes = if (cleaned.any { p -> p.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES) }
     }
 
-    fun enqueueTx(text: String) {
-        persist { it.copy(txQueue = TxQueue.enqueue(it.txQueue, text)) }
-    }
-
-    fun removeQueuedTx(index: Int) {
-        persist { it.copy(txQueue = TxQueue.removeAt(it.txQueue, index)) }
-    }
-
-    fun moveQueuedTx(from: Int, to: Int) {
-        persist { it.copy(txQueue = TxQueue.move(it.txQueue, from, to)) }
-    }
-
-    fun clearTxQueue() {
-        persist { it.copy(txQueue = emptyList()) }
+    /** 选中某个 CQ 前缀格子（所有 CQ 都用它）。 */
+    fun setCqPrefixIndex(index: Int) {
+        persist { it.copy(cqPrefixIndex = index.coerceIn(0, (it.cqPrefixes.size - 1).coerceAtLeast(0))) }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -898,7 +921,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
-        val p = qsoEngine.startCq(AudioEngine.utcNowMs())
+        val p = qsoEngine.startCq(AudioEngine.utcNowMs(), latestSettings.cqPrefix)
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
@@ -1191,6 +1214,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                         if (live) (s.slotProgress * LIVE_PROGRESS_STEPS).toInt() / LIVE_PROGRESS_STEPS else it.slotProgress,
                     slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
+                    lastDecodeMs = s.lastDecodeMs,
                     droppedSamples = s.droppedSamples,
                     voxLevelDb = if (live) s.voxLevelDb else it.voxLevelDb,
                 )
@@ -1199,6 +1223,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // 3) 每完成一个接收时隙，交给 QSO 状态机或自动程序
             if (s.slotsDecoded > lastSlotsDecoded) {
                 lastSlotsDecoded = s.slotsDecoded
+                // 记下「已处理到哪个时隙的解码」：txTick 靠它避免用上一时隙的旧报文抢发本时隙
+                lastDecodedSlotIndex = s.lastDecodedSlot
+                lastDecodeAtMs = s.utcNowMs
                 val st = _status.value
                 val batch = pendingDecodes.toList()
                 pendingDecodes = mutableListOf()
@@ -1245,7 +1272,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                     incoming,
                                     p.theirCall,
                                     currentFilter(),
-                                    _worked.value,
+                                    workedForAutoProgram(),
                                 )
                             } else {
                                 null
@@ -1257,8 +1284,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                 maybeGiveUpTarget(p, incoming, s.utcNowMs)
                             }
                         }
-                    } else if (st.txEnabled) {
+                    } else if (st.txEnabled && st.qso.txText == null) {
                         runAutoProgram(incoming, s.utcNowMs)
+                    } else if (st.txEnabled) {
+                        // 「QSO 已结束、收尾报文（RR73/73）还没真正发出去」：本时隙不启动新 QSO，
+                        // 否则 startCq/应答会 reset 引擎并把 qso.txText 覆盖成 CQ，这条收尾报文
+                        // 就永远发不出去了（真机现象：对方给我 RR73，我没回 73）。
+                        Log.i(TAG_QSO, "收尾报文待发 ${st.qso.txText}：本时隙不启动新 QSO")
                     }
                 }
             }
@@ -1278,8 +1310,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 把状态机进度同步到 UI 状态、写入日志，并收口第 2 层调度。
      *
      * QSO 结束时（成功/作废）：
-     * - 还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它发完在 [txTick] 里收口；
-     *   否则第 2 层下一个动作（如 `startCq`）会覆盖状态机，最后一条就丢了。
+     * - 还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它**真正发出去**后在 [txTick]
+     *   里收口；期间第 2 层既不会 `onQsoFinished`，`pollOnce` 也不会启动新 QSO —— 否则
+     *   `startCq` 会 reset 引擎把这条收尾报文覆盖掉（真机现象：收到 RR73 不回 73）。
      * - 没有收尾报文 → 立刻通知第 2 层（[AutoScheduler.onQsoFinished]）决定下一步。
      * - 发送总开关关闭时不通知第 2 层（自动程序已停）。
      *
@@ -1324,9 +1357,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch(Dispatchers.IO) {
                 qsoRepo.add(entity)
             }
-            // 完成即写「已通联」索引（本波段、立即生效；DB 回流会幂等重算）
+            // 完成即写「已通联」索引（立即生效；DB 回流会幂等重算）
             _worked.update { it.plus(entry.theirCall, entry.theirGrid) }
-            _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
+            // 自动程序用的「本波段」索引也立刻更新（否则要等 Room 回流才生效）
+            val bandKey = st.band.trim().uppercase()
+            workedCallsByBand = workedCallsByBand +
+                (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
+            // 「关注的呼号通联完成后取消关注」：本段通联已落库，无需再盯这个台
+            //（名单与自动收录顺序一并移除；幂等）
+            val wasFollowed = key in latestSettings.followCalls
+            if (wasFollowed) {
+                persist {
+                    it.copy(followCalls = it.followCalls - key, autoFollowOrder = it.autoFollowOrder - key)
+                }
+            }
+            _status.update {
+                it.copy(
+                    status = if (wasFollowed) {
+                        "已记录通联：${entry.theirCall}（已取消关注）"
+                    } else {
+                        "已记录通联：${entry.theirCall}"
+                    },
+                )
+            }
         }
         if (!finished) return
         if (!_status.value.txEnabled) return
@@ -1354,7 +1407,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p2, txArmed = false, status = "无回应超限：换台 / 回 CQ")
         }
-        runAutoAction(scheduler.onTargetGaveUp(incoming, currentFilter(), _worked.value, utcNowMs))
+        runAutoAction(
+            scheduler.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
+        )
     }
 
     /**
@@ -1367,7 +1422,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val action = scheduler.onDecoded(
             messages = batch,
             filter = currentFilter(),
-            worked = _worked.value,
+            worked = workedForAutoProgram(),
             utcNowMs = utcNowMs,
         )
         Log.i(
@@ -1484,6 +1539,32 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** 指定波段的已通联呼号（照 FT8CN `checkQSLCallsign`）；自动程序的 CQ 闸门与「自动收录」共用。 */
+    private fun workedCallsOnBand(band: String): Set<String> =
+        workedCallsByBand[band.trim().uppercase()].orEmpty()
+
+    /**
+     * 自动程序用的已通联索引：**只含当前波段**。
+     *
+     * 照 FT8CN `checkQSLCallsign`（按 band 过滤）——跨波段通联过的 CQ 台在本波段仍会作为候选
+     * （波段新槽位）；界面高亮 / 「已通联」筛选另用跨波段的 [_worked]。
+     */
+    private fun workedForAutoProgram(): WorkedIndex =
+        WorkedIndex(calls = workedCallsOnBand(_status.value.band))
+
+    /**
+     * 当前待发报文是否要「等刚结束那个时隙的解码」才能定下来。
+     *
+     * 只要 QSO 状态机还在进行中（`active`），本时隙发什么就要等这一批解码：
+     * - **等对方回复**：解码可能推进/收尾（如 `WAIT_RR73` 收到 RR73 → 要发 73）；
+     * - **已发 CQ、等回应者**：解码里可能有人应答或定向呼叫我，此时应**应答**而不是再发一遍 CQ
+     *   （真机现象：对端在 `1` 时隙呼叫我，我在 `0` 时隙仍发 CQ，隔一个周期才应答）。
+     *
+     * 反之，收尾报文（DONE 下的 RR73/73）与手动一次性发送的文本不随后续解码变化，不拦。
+     * 见 [txTick]：拦的只是「提前抢发」，解码到手后照发。
+     */
+    private fun txTextAwaitsDecode(): Boolean = _status.value.qso.active
+
     /** 把频率钳制到当前解码频段内。 */
     private fun clampFreq(hz: Int): Int {
         val d = latestSettings.decode
@@ -1508,18 +1589,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             } else {
-                qsoEngine.onTransmitted()
+                // 实际发出去的文本：本时隙发射可能在前导提前量到点时就用旧报文排定了，
+                // 而上一时隙的解码（可能把 qso 推进到收尾的 73/RR73）随后才处理 ——
+                // 把真实文本交给引擎，它就不会把还没发出去的收尾报文误清掉。
+                val sentText = _status.value.lastTxText
+                qsoEngine.onTransmitted(sentText)
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
-                if (finished) {
-                    // 最后一条（RR73/73）已发完：只解除「目标时隙固定」，
+                // 收尾报文（RR73/73）**还没真正发出去** → 保留武装与周期，等下一个我方时隙。
+                val finalPending = finished && p.txText != null
+                if (finished && !finalPending) {
+                    // 最后一条已发完 / 本就没有收尾报文：只解除「目标时隙固定」，
                     // **保留当前发射周期**——下一段 QSO 沿用同一周期。
                     // 若在这里把周期清掉，下一段会按当前时间重锁，导致偶/奇来回跳时隙。
                     pinnedTxParity = null
                 }
-                _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
-                // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
-                if (finished && pendingAutoFinish) {
+                _status.update {
+                    it.copy(qso = p, txArmed = if (finished && !finalPending) false else it.txArmed)
+                }
+                if (finalPending) {
+                    Log.i(TAG_QSO, "收尾报文未发完：${p.txText}，保持发射、暂不启动新 QSO")
+                } else if (finished && pendingAutoFinish) {
+                    // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
                     pendingAutoFinish = false
                     runAutoAction(scheduler.onQsoFinished(AudioEngine.utcNowMs()))
                 }
@@ -1551,6 +1642,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
 
         if (plan.targetSlotIndex == lastTxSlotIndex) return
+
+        // **QSO 进行中**时，不能用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于上一时隙
+        // 的解码 —— ① 等对方回复时可能推进/收尾（`WAIT_RR73` 收到 RR73 → 要发 73）；
+        // ② 已发 CQ 等回应者时可能有人呼叫我（应改判为应答，而不是再发一遍 CQ）。
+        // 真机时序是：解码要等时隙末尾才出结果，比前导提前量（`plan.startAtMs`）晚；抢发会让
+        // 旧报文占据该时隙（阻塞写要播十几秒，期间无法改发），新报文被挤到下下个周期——
+        // 现象就是「对方给我 RR73 我没回 73」与「别人呼叫我，我却还在发 CQ」。
+        //
+        // 等到该解码处理完再发：此时 `planTx` 走「就地发射」路径，前导仍然完整，只是数据起点
+        // 后移几十毫秒（对端 DT 偏移很小）；若解码改判了报文，`startCqInternal`/`answerInternal`/
+        // `startAutoTarget` 会把 `lastTxSlotIndex` 复位，同一时隙仍能发出去。
+        // 收尾报文 / 手动一次性发送的文本不随后续解码变化，不拦；解码停摆（超过两个时隙没推进）
+        // 时也不拦，免得把自己锁死。
+        if (txTextAwaitsDecode() &&
+            txShouldWaitForDecode(
+                targetSlotIndex = plan.targetSlotIndex,
+                lastDecodedSlotIndex = lastDecodedSlotIndex,
+                nowMs = now,
+                lastDecodeAtMs = lastDecodeAtMs,
+                slotMs = slotMs,
+            )
+        ) {
+            return
+        }
+
         if (now < plan.startAtMs) return
 
         // 已晚于计划起点：用缩水的前导补偿，补偿不够则放弃本时隙
@@ -1834,6 +1950,28 @@ internal fun planTx(
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
 internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
+
+/**
+ * 「发射排定」是否要停下来等上一时隙的解码（`txTick` 的闸门；纯函数便于单测）。
+ *
+ * QSO 进行中时，本时隙该发什么取决于**上一时隙**（[targetSlotIndex] − 1）的解码：它可能把
+ * 状态推进/收尾（`WAIT_RR73` 收到 RR73 → 要发 73），也可能带来「有人呼叫我」而该改判为应答
+ * （而不是再发一遍 CQ）。native 的 FT8 解码要到时隙末尾（14.88 s）才出结果，比前导提前量
+ * （`planTx.startAtMs`）晚，所以必须等：抢发出去的会是上一时隙的旧报文，而且该时隙已被占用
+ * （阻塞写要播十几秒，期间无法改发），新报文只能再等一个周期 —— 真机现象就是「对方给我 RR73
+ * 我没回 73」与「别人呼叫我，我却还在发 CQ」。
+ *
+ * [lastDecodeAtMs] 是健康判据：解码停摆（超过两个时隙没推进）时**不再拦**，避免采集/解码异常
+ * 时把自己锁死（宁可发旧报文，也不能一条都不发）。
+ */
+internal fun txShouldWaitForDecode(
+    targetSlotIndex: Long,
+    lastDecodedSlotIndex: Long,
+    nowMs: Long,
+    lastDecodeAtMs: Long,
+    slotMs: Long,
+): Boolean =
+    lastDecodedSlotIndex < targetSlotIndex - 1 && nowMs - lastDecodeAtMs <= slotMs * 2
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L

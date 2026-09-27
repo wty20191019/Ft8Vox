@@ -94,10 +94,16 @@ class WorkedIndex(
 /**
  * 解码行的最高优先级高亮类别（docs/UI.md §3.1 色条）。
  *
- * 优先级（高→低）：正在发射 > 与我有关 > CQ > 已通联 > 重复 > 新网格 > 新 DXCC/ITU > 新呼号 > 新解码。
+ * 优先级（高→低）：正在发射 / 自己发的报文 > 与我有关 > CQ > 已通联 > 重复 > 新网格 >
+ * 新 DXCC/ITU > 新呼号 > 新解码。
  */
 enum class HighlightRole {
-    /** 正在发射（黄底黑字）。 */
+    /**
+     * **最高优先级**（黄底黑字）：正在发射的那条报文，以及**自己发的报文**。
+     *
+     * 「自己发的报文」＝解码行的**发方呼号就是我方呼号**（本地回采：声学耦合 / 监听口，
+     * 或对端把我方报文转发回来）。这类行在解码列表里最显眼，一眼就能和别人的信号区分开。
+     */
     TX,
 
     /** 与我有关 / 当前 QSO 对手（蓝）。 */
@@ -218,6 +224,9 @@ object DecodeHighlight {
             from.equals(currentQsoCall, ignoreCase = true)
         val transmitting = currentTxText != null &&
             parsed.raw.trim().equals(currentTxText.trim(), ignoreCase = true)
+        // 自己发的报文：解码行的**发方就是我方呼号**（本地回采 / 对端转发时会解码到自己）。
+        // 按「正在发射」同一档高亮（黄底黑字，最高优先级）；用 CallMatch 比较以兼容复合呼号（`/P`）。
+        val fromMe = CallMatch.isFrom(parsed.from, myCall)
 
         // 被关闭的高亮类别不参与角色判定，也不显示标记点
         val newGrid = rawNewGrid && prefs.newGrid
@@ -228,7 +237,7 @@ object DecodeHighlight {
         val newCall = from != null && !workedCall && prefs.newCall
 
         val role = when {
-            transmitting -> HighlightRole.TX
+            transmitting || fromMe -> HighlightRole.TX
             current || toMe -> HighlightRole.TO_ME
             parsed.isCq -> HighlightRole.CQ
             workedCall -> HighlightRole.WORKED

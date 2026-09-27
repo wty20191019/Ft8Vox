@@ -5,10 +5,13 @@ package com.example.ft8vox.engine
  *
  * @property messageMs 单条报文的波形时长（ms）：FT8 = 79 符号 × 160 ms = 12.64 s，
  *   FT4 = 105 符号 × 42.67 ms ≈ 4.48 s。用于判断「这条报文能否在本时隙内播完」。
+ * @property occupiedHz 单条报文实际占用的音频带宽（Hz）：FT8 = 8 音 × 6.25 Hz = 50 Hz，
+ *   FT4 = 4 音 × 20.833 Hz ≈ 83 Hz。报文的下边频就是报文的音频频率（瀑布上的红线），
+ *   整段频率＝`[f, f + occupiedHz]`，瀑布按这个宽度画半透明红条（见 `WaterfallView`）。
  */
-enum class Protocol(val messageMs: Int) {
-    FT8(12_640),
-    FT4(4_480),
+enum class Protocol(val messageMs: Int, val occupiedHz: Int) {
+    FT8(12_640, 50),
+    FT4(4_480, 83),
 }
 
 /** 解码器配置，对应 native 的 monitor_config_t。 */

@@ -9,6 +9,10 @@ import com.example.ft8vox.engine.DecodeResult
  * `auto_follow_help.txt` 明确写「该呼号不会被长久保存到关注的呼号数据库中」；本机改为**真的写入
  * 关注名单**（2026-09-27 用户决定），这样 ⭐「关注呼号列表」会随解码自动增长，关掉开关后这些台
  * 仍按「名单例外」被自动呼叫。
+ *
+ * **波段口径**（2026-09-27 用户决定）：只收录**当前波段还没通联过**的 CQ 台——与 FT8CN
+ * `checkQSLCallsign`（`where band=?`，见 `DatabaseOpr.GetAllQSLCallsign`）的波段口径一致；
+ * 跨波段已通联的台在本波段仍算「没通联过」。
  */
 object FollowRoster {
 
@@ -23,13 +27,15 @@ object FollowRoster {
     /**
      * 从一批解码里挑出可自动收录的呼号（保持入参顺序；解码列表为「新→旧」，故结果即「最近在前」）。
      *
-     * 只收 **CQ** 报文；跳过自己、[ignoredCalls]、以及[followedCalls]里已有的；同一批去重。
+     * 只收 **CQ** 报文；跳过自己、[ignoredCalls]、[workedCalls]（**当前波段**已通联过的）、
+     * 以及[followedCalls]里已有的；同一批去重。
      */
     fun pickCqCalls(
         messages: List<DecodeResult>,
         myCall: String,
         ignoredCalls: Set<String> = emptySet(),
         followedCalls: Set<String> = emptySet(),
+        workedCalls: Set<String> = emptySet(),
     ): List<String> {
         val out = ArrayList<String>()
         for (m in messages) {
@@ -37,7 +43,7 @@ object FollowRoster {
             if (!p.isCq) continue
             val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
             if (from.equals(myCall, ignoreCase = true)) continue
-            if (from in ignoredCalls || from in followedCalls || from in out) continue
+            if (from in ignoredCalls || from in followedCalls || from in workedCalls || from in out) continue
             out += from
         }
         return out

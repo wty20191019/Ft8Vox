@@ -107,11 +107,12 @@ class AutoProgramTest {
 
     @Test
     fun collectSkipsWorkedCqButAlwaysHandlesDirected() {
+        // 调用方（SessionViewModel）传入的 worked 只含**当前波段**已通联呼号（FT8CN checkQSLCallsign 口径）
         val worked = WorkedIndex(calls = listOf("W1AW", "DL1ABC"))
         val list = AutoProgramSelector.collect(
             listOf(
-                decoded("CQ W1AW FN42"), // 已通联 CQ：跳过
-                decoded("F4FSY DL1ABC -12"), // 已通联，但定向 → 一定应答
+                decoded("CQ W1AW FN42"), // 本波段已通联 CQ：跳过
+                decoded("F4FSY DL1ABC -12"), // 本波段已通联，但定向 → 一定应答
             ),
             program,
             // 显示筛选为「什么都不选」（会隐藏一切），定向仍不受影响

@@ -26,20 +26,23 @@ data class AutoProgramSettings(
     /**
      * 自动收录 CQ 台（默认开；对应 FT8CN `autoFollowCQ` `GeneralVariables.java:205`）。
      *
+     * 收录口径：**当前波段还没通联过**的 CQ 台（照 FT8CN `checkQSLCallsign` 的 `where band=?`）。
+     *
      * **本机有意偏离 FT8CN**：FT8CN 只把 CQ 报文推送到「呼叫」列表、**不写关注名单**（其帮助文件
      * `auto_follow_help.txt` 明确说明）；本机改为**真的把解到的 CQ 台写入关注名单**
      * （`AppSettings.followCalls` + `autoFollowOrder`，见 [FollowRoster]），这样 ⭐「关注呼号列表」
      * 会随解码自动增长。
      *
-     * 它同时是 [AutoProgramSelector.collect] 的 CQ 候选闸门：开启 ⇒ 任何未通联的 CQ 台都可呼叫；
+     * 它同时是 [AutoProgramSelector.collect] 的 CQ 候选闸门：开启 ⇒ 任何本波段未通联的 CQ 台都可呼叫；
      * 关闭 ⇒ **只**呼叫「关注名单」（`AppSettings.followCalls`）里的 CQ 台（名单不受本开关限制）。
      */
     val autoAddCqToFollow: Boolean = true,
     /**
      * 自动呼叫 CQ 台：是否真的去呼叫候选里的 CQ 台（默认开，FT8CN `autoCallFollow`）。
      *
-     * 它是**总闸**（FT8CN `:714`，关掉一条 CQ 都不叫）；开启时，[autoAddCqToFollow] 也开 ⇒ 任何未通联
-     * CQ 台都可呼叫，[autoAddCqToFollow] 关 ⇒ **只**呼叫「关注名单」（`AppSettings.followCalls`）里的 CQ 台。
+     * 它是**总闸**（FT8CN `:714`，关掉一条 CQ 都不叫）；开启时，[autoAddCqToFollow] 也开 ⇒ 任何本波段
+     * 未通联的 CQ 台都可呼叫，[autoAddCqToFollow] 关 ⇒ **只**呼叫「关注名单」（`AppSettings.followCalls`）
+     * 里的 CQ 台。
      */
     val autoCallFollow: Boolean = true,
 )
@@ -111,8 +114,9 @@ sealed interface AutoAction {
  * - **定向报文一律入选**（CALL/REPORT/ROGER），不受显示筛选、不受已通联、不受两个开关影响；
  *   只有显式「忽略该呼号」才会被挡住。
  * - **CQ 台**：仅当 [AutoProgramSettings.autoAddCqToFollow] 为真、**或**该台在 `filter.followedCalls`
- *   （关注名单）里，才入选（照 FT8CN：`autoFollowCQ || callsignInFollow`）；**已通联的一律跳过**
- *   （硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；**不再套用 `DecodeFilter.matches`**（显示筛选只影响显示）。
+ *   （关注名单）里，才入选（照 FT8CN：`autoFollowCQ || callsignInFollow`）；**本波段已通联的一律跳过**
+ *   （硬编码，对应 FT8CN `checkQSLCallsign` 的 `where band=?`；调用方传入的 [worked] 即「只含当前波段」，
+ *   跨波段通联过的台在本波段仍可入选）；**不再套用 `DecodeFilter.matches`**（显示筛选只影响显示）。
  * - 深度/弱信号解码（[DecodeResult.deep]）不驱动自动程序。
  */
 object AutoProgramSelector {
@@ -143,7 +147,8 @@ object AutoProgramSelector {
             val report: Int?
             if (p.isCq) {
                 // CQ 台：默认「自动收录 CQ 台」打开才纳入候选；照 FT8CN，**关注名单里的台是例外**
-                //（开关关掉也照样纳入、会被自动呼叫）。已通联的 CQ 台一律跳过（硬编码）。
+                //（开关关掉也照样纳入、会被自动呼叫）。本波段已通联的 CQ 台一律跳过（照 FT8CN
+                // `checkQSLCallsign` 的 `where band=?`；[worked] 由调用方按当前波段构造）。
                 val followed = from in filter.followedCalls
                 if (!program.autoAddCqToFollow && !followed) continue
                 if (workedCall) continue

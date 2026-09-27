@@ -3,6 +3,7 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -125,6 +126,57 @@ class DecodeHighlightTest {
         )
         assertEquals(HighlightRole.TX, style.role)
         assertTrue(style.transmitting)
+    }
+
+    @Test
+    fun classifyMyOwnCqIsTopPriority() {
+        // 本地回采（声学耦合 / 监听口）：解码列表里出现**我自己发的 CQ**（发方 = 我方呼号）
+        val parsed = MessageParser.parse("CQ DX BG7ZW OM89")
+        val style = DecodeHighlight.classify(parsed, myCall = "BG7ZW")
+        assertEquals(HighlightRole.TX, style.role)
+        assertFalse("不是「正在发射」的报文文本匹配路径", style.transmitting)
+        assertFalse(style.toMe)
+    }
+
+    @Test
+    fun classifyMyOwnDirectedMessageIsTopPriority() {
+        // 我方发出的定向报文：发方 = 我、收方是对端 ⇒ 既不是「与我有关」也未被文本匹配命中
+        val parsed = MessageParser.parse("BG7ZJW BG7ZW R-11")
+        val style = DecodeHighlight.classify(parsed, myCall = "BG7ZW")
+        assertEquals(HighlightRole.TX, style.role)
+        assertFalse(style.transmitting)
+        assertFalse(style.toMe)
+    }
+
+    @Test
+    fun classifyMyOwnPortableCallIsTopPriority() {
+        // 复合呼号按宽松口径（`/P`）同样算「我发出去的」
+        val parsed = MessageParser.parse("BG7ZJW BG7ZW/P -08")
+        val style = DecodeHighlight.classify(parsed, myCall = "BG7ZW")
+        assertEquals(HighlightRole.TX, style.role)
+    }
+
+    @Test
+    fun classifyMyOwnMessageBeatsWorkedAndDuplicate() {
+        val w = WorkedIndex(calls = listOf("BG7ZW"))
+        val parsed = MessageParser.parse("BG7ZJW BG7ZW R-11")
+        val style = DecodeHighlight.classify(parsed, worked = w, duplicate = true, myCall = "BG7ZW")
+        assertEquals(HighlightRole.TX, style.role)
+    }
+
+    @Test
+    fun classifyOtherStationIsNotMarkedAsMyOwnMessage() {
+        val parsed = MessageParser.parse("BG7ZJW F4FSY -08")
+        assertNotEquals(HighlightRole.TX, DecodeHighlight.classify(parsed, myCall = "BG7ZW").role)
+    }
+
+    @Test
+    fun classifySimilarCallOrEmptyMyCallIsNotMarkedAsMyOwnMessage() {
+        // 只差一个字母的呼号不是自己；未填呼号时也不判
+        val similar = MessageParser.parse("CQ BG7ZWX OM89")
+        assertNotEquals(HighlightRole.TX, DecodeHighlight.classify(similar, myCall = "BG7ZW").role)
+        val mine = MessageParser.parse("CQ BG7ZW OM89")
+        assertNotEquals(HighlightRole.TX, DecodeHighlight.classify(mine, myCall = "").role)
     }
 
     @Test
