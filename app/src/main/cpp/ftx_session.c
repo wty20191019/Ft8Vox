@@ -22,14 +22,16 @@
 // -----------------------------------------------------------------------------
 // 解码参数
 //
-// 默认值与 ft8_lib 官方示例 demo/decode_ft8.c 保持一致；运行期可经
+// 默认值与 Kotlin 侧 DecodeSettings「快」预设（= FT8CN「快速解码」）保持一致：
+// 10 / 120 / 20 / 100。native 这份只是在「Kotlin 未下发参数」时兜底（实际总是会
+// 下发），两边口径必须同步，否则会出现第三个默认值。运行期可经
 // ftx_session_set_decode_params() 调整。数组按「上限」静态分配，实际使用的
 // 条数由 ftx_decode_params_t 控制，因此调参不会改变内存占用或引起分配失败。
 // -----------------------------------------------------------------------------
 #define K_DEFAULT_MIN_SCORE      10
-#define K_DEFAULT_MAX_CANDIDATES 140
-#define K_DEFAULT_LDPC_ITERATIONS 25
-#define K_DEFAULT_MAX_DECODED    50
+#define K_DEFAULT_MAX_CANDIDATES 120
+#define K_DEFAULT_LDPC_ITERATIONS 20
+#define K_DEFAULT_MAX_DECODED    100
 
 // SIC（多趟减谱重解）默认趟数与上限：1 = 关闭（单趟）。实测单趟无论怎么放宽候选
 // 数 / LDPC 迭代 / 得分门槛都涨不了，而「同频被强台压住」的弱信号要靠抹掉强信号
