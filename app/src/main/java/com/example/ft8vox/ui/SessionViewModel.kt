@@ -85,6 +85,8 @@ data class ReceiverStatus(
     val droppedSamples: Long = 0,
     /** 本会话累计解码条数（docs/UI.md 底部状态条「总数」）。 */
     val decodedTotal: Long = 0,
+    /** 最近一次解码耗时（ms，0=还没解码过）；顶栏「解码 nms」，用于调解码深度参数。 */
+    val lastDecodeMs: Long = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
     val myCall: String = "",
@@ -1224,6 +1226,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                         if (live) (s.slotProgress * LIVE_PROGRESS_STEPS).toInt() / LIVE_PROGRESS_STEPS else it.slotProgress,
                     slotParity = slotParityOf(s.utcNowMs, s.slotMs) ?: 0,
                     slotsDecoded = s.slotsDecoded,
+                    lastDecodeMs = s.lastDecodeMs,
                     droppedSamples = s.droppedSamples,
                     voxLevelDb = if (live) s.voxLevelDb else it.voxLevelDb,
                 )

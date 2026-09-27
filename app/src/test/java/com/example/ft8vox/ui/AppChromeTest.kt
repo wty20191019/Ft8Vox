@@ -40,4 +40,18 @@ class AppChromeTest {
         assertNull(timeSyncWarning(0.2f))
         assertNull(timeSyncWarning(null))
     }
+
+    @Test
+    fun decodeTimeHiddenUntilFirstDecode() {
+        // 未接收 / 还没解码过：整段不显示，不占位
+        assertNull(decodeTimeLabel(0L, running = false))
+        assertNull(decodeTimeLabel(0L, running = true))
+        assertNull(decodeTimeLabel(118L, running = false))
+    }
+
+    @Test
+    fun decodeTimeShowsMillisecondsWhileRunning() {
+        assertEquals("解码 118ms", decodeTimeLabel(118L, running = true))
+        assertEquals("解码 1500ms", decodeTimeLabel(1500L, running = true))
+    }
 }

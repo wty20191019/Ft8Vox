@@ -89,6 +89,15 @@ fun timeSyncWarning(latestDt: Float?): String? =
     if (latestDt != null && abs(latestDt) >= 1.5f) "时间不同步" else null
 
 /**
+ * 顶栏「解码耗时」文案（`解码 118ms`）。
+ *
+ * 纯显示用：调「解码深度」（最低得分 / LDPC 迭代 / 候选上限 / 单时隙上限）时看计算量代价。
+ * 未开始接收或还没解码过（0）时返回 null（不占位）。
+ */
+fun decodeTimeLabel(lastDecodeMs: Long, running: Boolean): String? =
+    if (running && lastDecodeMs > 0L) "解码 ${lastDecodeMs}ms" else null
+
+/**
  * docs/UI.md §2.1 顶部 AppBar（56dp）。
  *
  * 左：菜单（波段 / 模式 / 设置）；中：UTC 时钟 + `刻度 MHz · 模式`；右：RX/TX 圆点 + 音频速览。
@@ -119,6 +128,8 @@ fun Ft8VoxTopBar(
     // 待发/发射中的报文单独放**第三行**（只有我方发射时隙且有报文/正在发射时才出现）。
     val inTxSlot = status.running && status.txEnabled && status.slotParity == status.txParity
     val slotTag: String? = if (status.running) "TX：${status.txParity}" else null
+    // 解码耗时（纯显示：调解码深度参数时看计算量代价），未接收/未解码过时为 null
+    val decodeTag = decodeTimeLabel(status.lastDecodeMs, status.running)
     // 发射中固定显示「本次实际在播的报文」，只在非发射时显示下一次计划（见 ReceiverStatus.displayTxText）
     val txText = status.displayTxText
     // 发射中红色、待发用强调蓝（在组合体里取色，`buildAnnotatedString` 内不能调 @Composable）
@@ -203,6 +214,10 @@ fun Ft8VoxTopBar(
                             } else {
                                 append(slotTag)
                             }
+                        }
+                        if (decodeTag != null) {
+                            append(" · ")
+                            append(decodeTag)
                         }
                     },
                     style = MaterialTheme.typography.labelSmall.copy(lineHeight = 13.sp),

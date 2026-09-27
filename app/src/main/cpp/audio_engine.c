@@ -306,6 +306,13 @@ typedef struct
      * 时隙的旧报文抢发出去，而真正的新报文（收尾的 `RR73`/`73`）就再没有时隙可发。
      */
     _Atomic int64_t last_decoded_slot;
+    /**
+     * 最近一次解码（`ftx_session_decode`）的耗时（ms，0=还没解码过）。
+     *
+     * 纯显示用：顶栏「解码 nms」——调「解码深度」（最低得分 / LDPC 迭代 / 候选上限 /
+     * 单时隙上限）时用它看计算量代价。不含结果搬运与 UI 轮询。
+     */
+    _Atomic int64_t last_decode_ms;
     _Atomic int64_t fed_samples;
     _Atomic int64_t last_slot;
 
@@ -329,6 +336,14 @@ static int64_t utc_now_ms(void)
     return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
 }
 
+/// 单调时钟（ms）：只用于测**耗时**，不受 NTP 校时/用户改表影响。
+static int64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
 // 采集回调：只做环形缓冲写入，绝不分配内存或加锁
 static aaudio_data_callback_result_t capture_callback(
     AAudioStream* stream, void* user_data, void* audio_data, int32_t num_frames)
@@ -345,8 +360,10 @@ static aaudio_data_callback_result_t capture_callback(
 static void decode_and_store(audio_engine_t* e)
 {
     ftx_decode_result_t results[DECODE_BATCH];
+    const int64_t t0 = monotonic_ms();
     int n = ftx_session_decode(e->session, results, DECODE_BATCH);
-    // 先记「哪个时隙解码完了」（空批也要记，Kotlin 靠它判断发射能否开始），再计数
+    // 先记耗时（纯显示：顶栏「解码 nms」），再记「哪个时隙解码完了」与计数
+    atomic_store(&e->last_decode_ms, monotonic_ms() - t0);
     atomic_store(&e->last_decoded_slot, atomic_load(&e->last_slot));
     atomic_fetch_add(&e->slots_decoded, 1);
     if (n <= 0)
@@ -514,6 +531,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->tx_active, 0);
     atomic_store(&e->out_gen, 1);
     atomic_store(&e->last_decoded_slot, -1); // 还没解码过
+    atomic_store(&e->last_decode_ms, 0);     // 还没解码过
 
     // PTT 默认值（随后由 Kotlin 下发覆盖）
     atomic_store(&e->ptt_delay_ms, 0);
@@ -1440,7 +1458,7 @@ JNIEXPORT jlongArray JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject thiz, jlong handle)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    jlong values[12] = { 0 };
+    jlong values[13] = { 0 };
     if (e != NULL)
     {
         values[0] = atomic_load(&e->running) ? 1 : 0;
@@ -1455,10 +1473,11 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject t
         values[9] = atomic_load(&e->slots_decoded);
         values[10] = atomic_load(&e->vox_level_db_x10);
         values[11] = atomic_load(&e->last_decoded_slot);
+        values[12] = atomic_load(&e->last_decode_ms); ///< 最近一次解码耗时（ms，0=还没解过）
     }
-    jlongArray result = (*env)->NewLongArray(env, 12);
+    jlongArray result = (*env)->NewLongArray(env, 13);
     if (result != NULL)
-        (*env)->SetLongArrayRegion(env, result, 0, 12, values);
+        (*env)->SetLongArrayRegion(env, result, 0, 13, values);
     return result;
 }
 

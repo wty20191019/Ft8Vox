@@ -37,6 +37,13 @@ data class AudioState(
      * 才能排定本时隙的发射」（见 `SessionViewModel.txTick`）。
      */
     val lastDecodedSlot: Long,
+    /**
+     * 最近一次解码（native `ftx_session_decode`）的耗时（ms，0=还没解码过）。
+     *
+     * 纯显示用（顶栏「解码 nms」）：调「解码深度」（最低得分 / LDPC 迭代 / 候选上限 /
+     * 单时隙上限）时用它看计算量代价。不含结果搬运与 UI 轮询。
+     */
+    val lastDecodeMs: Long,
     /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用，不参与任何判定。 */
     val voxLevelDb: Float,
 ) {
@@ -258,6 +265,7 @@ object AudioEngine {
             droppedSamples = v[8],
             slotsDecoded = v[9],
             lastDecodedSlot = if (v.size > 11) v[11] else -1L,
+            lastDecodeMs = if (v.size > 12) v[12] else 0L,
             voxLevelDb = v[10] / 10f,
         )
     }
