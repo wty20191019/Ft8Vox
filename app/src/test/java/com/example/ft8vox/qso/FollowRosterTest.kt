@@ -48,6 +48,19 @@ class FollowRosterTest {
         assertEquals(listOf("W1AW", "JA1ABC"), picked)
     }
 
+    @Test
+    fun pickSkipsCallsWorkedOnCurrentBand() {
+        val picked = FollowRoster.pickCqCalls(
+            messages = listOf(
+                decoded("CQ W1AW FN42"), // 本波段已通联 → 跳过
+                decoded("CQ JA1ABC PM95"), // 本波段没通联过 → 收录
+            ),
+            myCall = "F4FSY",
+            workedCalls = setOf("W1AW"),
+        )
+        assertEquals(listOf("JA1ABC"), picked)
+    }
+
     // ---- merge ----
 
     @Test

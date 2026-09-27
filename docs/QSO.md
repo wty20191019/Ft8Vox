@@ -287,7 +287,7 @@
 | `qso/AutoProgram.kt` | 第 2 层：`AutoProgramSettings`（四项）、`SUPERVISION_MINUTES`、`NO_REPLY_LIMIT_RANGE`、`AutoTarget`/`AutoTargetKind`、`AutoAction` 封闭接口、`AutoProgramSelector.collect` / `toTarget` / `rank` / `modifierPriority` / `areaOfGrid`、`AutoScheduler` |
 | `qso/QsoEngine.kt` | 第 1 层：`QsoState`、`QsoProgress`（含 `order`/`noReplyCount`/`advanced`）、六步 `Step`、收敛阶梯、报告快照、`finish()`/`consumeCompleted()` |
 | `qso/TxCompose.kt` | `TxMessageKind`（六步）、`DEFAULT_MACROS`、`TxScheduler`（`MIN_SEND_NOW_MS` / `minSendNowMs`）、`TxQueue` |
-| `qso/FollowRoster.kt` | 「自动收录 CQ 台」纯逻辑：`pickCqCalls` / `merge` / `AUTO_MAX` |
+| `qso/FollowRoster.kt` | 「自动收录 CQ 台」纯逻辑：`pickCqCalls`（跳过**本波段**已通联）/ `merge` / `AUTO_MAX` |
 | `qso/Message.kt` | `ParsedMessage` / `MessageParser` / `CallMatch`（`shortCall` / `isCallingMe` / `isFrom`） |
 | `qso/DecodeFilter.kt` / `qso/DecodeHighlight.kt` | 显示筛选 / `WorkedIndex` + `plus` |
 | `ui/SessionViewModel.kt` | `pollOnce` 驱动、`replyTo`、`setTxEnabled`、`resetSupervision`、`autoCollectCqToFollow`、`maybeGiveUpTarget`、`stopAutoBySupervision` |
@@ -311,7 +311,7 @@
 
 | 报文 | 类型 | 是否入选 |
 | --- | --- | --- |
-| 对方的 `CQ` | `CQ` | 仅当 `autoAddCqToFollow` 开、**或**发信人在「关注名单」里，**且**未通联；**不套用显示筛选** |
+| 对方的 `CQ` | `CQ` | 仅当 `autoAddCqToFollow` 开、**或**发信人在「关注名单」里，**且**本波段未通联（`checkQSLCallsign` 口径）；**不套用显示筛选** |
 | 发给我的网格 | `CALL` | **一律入选** |
 | 发给我的报告 | `REPORT` | **一律入选** |
 | 发给我的 `R<报告>` | `ROGER` | **一律入选** |
@@ -336,7 +336,7 @@
 
 ### 4.5 `SessionViewModel.pollOnce`
 
-1. 取本批解码（新→旧）→ 汇入消息流；`autoCollectCqToFollow(decoded)` 把新 CQ 呼号并入关注名单。
+1. 取本批解码（新→旧）→ 汇入消息流；`autoCollectCqToFollow(decoded)` 把**本波段未通联**的新 CQ 呼号并入关注名单。
 2. 刷新状态读数（节流 + 量化后发布）。
 3. **每个接收时隙结束**：
    - **逐条**过滤「落在我方刚发射那个时隙」的解码（不整批丢弃）；
@@ -385,9 +385,10 @@
 ### 5.2 两个开关的新语义（本机**有意偏离** FT8CN）
 
 - **自动收录 CQ 台（`autoAddCqToFollow`）**：
-  - 每解到一个**新的 CQ 台**就**写入关注名单**（⭐ 列表），封顶 `FollowRoster.AUTO_MAX = 100`，
-    超出淘汰**最早收录**的（**手动关注的不淘汰**）；
-  - 同时是 `collect` 的 CQ 候选闸门：开 ⇒ 任何未通联 CQ 台都纳入候选；关 ⇒ **只**纳入关注名单里的 CQ 台。
+  - 只收录**当前波段还没通联过**的 CQ 台（波段口径照 FT8CN `checkQSLCallsign` 的 `where band=?`；
+    跨波段通联过的台在本波段仍算没通联过），每解到一个就**写入关注名单**（⭐ 列表），
+    封顶 `FollowRoster.AUTO_MAX = 100`，超出淘汰**最早收录**的（**手动关注的不淘汰**）；
+  - 同时是 `collect` 的 CQ 候选闸门：开 ⇒ 任何**本波段未通联**的 CQ 台都纳入候选；关 ⇒ **只**纳入关注名单里的 CQ 台。
   - FT8CN 的 `autoFollowCQ` **只推送到呼叫列表、不写关注名单**（帮助文件明确）——本机**有意偏离**。
 - **自动呼叫 CQ 台（`autoCallFollow`）**：是否**真的去呼叫**候选里的 CQ 台（**总闸**）；
   关掉后只回应定向呼叫 ＋ 自己发 CQ。
@@ -396,6 +397,7 @@
   它**不是解码筛选**；照 FT8CN，名单里的台**不受** `autoAddCqToFollow` 限制。
   入口：解码长按「关注 / 取消关注」，或由「自动收录 CQ 台」自动加入（带「自动」标记）；
   筛选条最右 **⭐** 打开「关注呼号列表」面板（列表里**左滑＝呼叫、右滑＝取消关注**）。
+  名单里的台**通联完成后自动取消关注**（落库时从 `followCalls` + `autoFollowOrder` 移除）。
 
 ### 5.3 关键常量与默认值
 
@@ -434,7 +436,7 @@
 | 监管超时动作 | `setActivated(false)` | 关**发送总开关**（`txEnabled=false`） | 照搬 |
 | 完成收尾 | 收到 73/RR73 立即落库、不弹框、不关 TX | 同 | 照搬 |
 | 落库去重 | `QslRecordList` + `saved` 标记 | 会话内一条 + `saved` 标记 | 照搬 |
-| 已通联标记 | `addQSLCallsign`（本波段表） | 完成即写 `WorkedIndex`（本波段，立即生效） | 照搬 |
+| 已通联标记 | `addQSLCallsign`（本波段表） | 完成即写 `_worked`（跨波段，供高亮/筛选）与 `workedCallsByBand`（本波段，供自动程序） | 照搬 |
 | 日志字段 | 起止时间 / 波段 / 基频 / 收发报告 | 补齐 `startUtcMs` + 保留 `Distance: … km, Qso by Ft8Vox` | 照搬 |
 | 深度解码 / 弱信号 | `isDeep` 不驱动自动、弱信号不计无回应 | 预留 `DecodeResult.deep` 钩子（当前恒 `false`），同规则 | 照搬（占位） |
 | 手动接管 paused | 无此概念，人工不暂停自动 | 取消 `paused`；人工只改目标 / 指令 | 照搬 |
@@ -446,7 +448,7 @@
 | 2 秒时窗闸门 | 有（漏应答根因） | **无**（逐条判定，晚到 / 大批量也能触发） | 有意偏离（避隐患） |
 | 首条整批丢弃 | 有 | **逐条**自听过滤（仅丢本槽那一条） | 有意偏离（避隐患） |
 | 选台排序 | 无 DX 分级 | `rank`：`DX > 我所在区域 > 其它修饰符 > 无`（稳定保序） | 超集（自定） |
-| 关注呼号名单 | `followCallsigns` 表：手动关注、持久保存、App 内不能删；不受 `autoFollowCQ` 限制 | `AppSettings.followCalls` + `autoFollowOrder`：手动或自动加入；⭐ 面板内可删；不受 `autoAddCqToFollow` 限制 | 有意偏离 |
+| 关注呼号名单 | `followCallsigns` 表：手动关注、持久保存、App 内不能删；不受 `autoFollowCQ` 限制 | `AppSettings.followCalls` + `autoFollowOrder`：手动或自动加入；⭐ 面板内可删；**通联完成后自动取消关注**；不受 `autoAddCqToFollow` 限制 | 有意偏离 |
 | 两个 CQ 开关 | `autoFollowCQ`＝推送到呼叫列表（**不写名单**）；`autoCallFollow`＝是否自动呼叫（总闸） | `autoAddCqToFollow`＝**写入关注名单** + 把关 CQ 候选；`autoCallFollow`＝把关是否呼叫 | 有意偏离 |
 | RR73 三重兜底 | ③④⑤ | 引擎结构上 `RR73` 不滞留，兜底不可达；以「收敛兜底 + 逐条过滤」代替 | 有意偏离（等价防死） |
 
@@ -464,12 +466,14 @@
 6. **逐条自听过滤**：只丢「落在我方发射那个时隙」的解码，保留同批中对方的回复（不整批丢弃）。
 7. **CQ 修饰符 tie-break**：`DX` ＞ 我所在区域 ＞ 其它 ＞ 无；只做同级加分，不影响「一定应答」。
 8. **深度解码不驱动自动**：`DecodeResult.deep` 当前恒 `false`，仅预留钩子（与 FT8CN 同口径）。
-9. **`autoFollowCQ` 改成真写名单**：`autoAddCqToFollow` 每解到一个新 CQ 台就写入关注名单（封顶 100、淘汰最早收录；
-   手动关注不淘汰），FT8CN 只推送到呼叫列表、不写名单。
+9. **`autoFollowCQ` 改成真写名单**：`autoAddCqToFollow` 每解到一个**本波段未通联**的新 CQ 台就写入关注名单（封顶 100、
+   淘汰最早收录；手动关注不淘汰），FT8CN 只推送到呼叫列表、不写名单。
 10. **关注名单可从 App 内删除**：存 `AppSettings.followCalls`，App 内即可删；FT8CN 是独立表、只能在局域网 Web 后台删。
 11. **RR73 三重兜底不补码**：本引擎 `RR73` 不滞留（收到即回 73 完成），三条兜底**结构上不可达**，
     防跑死由「收敛阶梯 4a + 逐条自听过滤」承担。
 12. **收敛阶梯 4a**：收到纯报告而己方已回过 R → 直接 `RR73` 收尾（FT8CN 无此分支），根治两端互回报告死循环。
+13. **关注名单「通联完成后自动取消关注」**：QSO 落库时把对方从 `followCalls` + `autoFollowOrder` 移除
+    （开关一开名单只增不减会把已做过的台一直留在⭐里）；FT8CN 无此行为。
 
 ---
 

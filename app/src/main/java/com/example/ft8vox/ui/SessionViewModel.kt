@@ -187,6 +187,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val _worked = MutableStateFlow(WorkedIndex.EMPTY)
     val workedIndex: StateFlow<WorkedIndex> = _worked.asStateFlow()
 
+    /**
+     * **当前波段**已通联呼号（键＝波段名大写），照 FT8CN `checkQSLCallsign`
+     * （`DatabaseOpr.GetAllQSLCallsign` 的 `where band=?`）。
+     *
+     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选 / 是否自动收录）；界面高亮与
+     * 「已通联」筛选仍用跨波段的 [_worked]。
+     */
+    private var workedCallsByBand: Map<String, Set<String>> = emptyMap()
+
     private val qsoEngine = QsoEngine()
 
     private var pollJob: Job? = null
@@ -314,6 +323,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     calls = list.map { it.theirCall },
                     grids = list.mapNotNull { it.theirGrid },
                 )
+                // 自动程序用「本波段」已通联呼号（照 FT8CN checkQSLCallsign 的波段口径）
+                workedCallsByBand = list
+                    .groupBy { it.band.trim().uppercase() }
+                    .mapValues { (_, rows) ->
+                        rows.mapNotNull { it.theirCall.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+                            .toSet()
+                    }
             }
         }
         // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
@@ -542,9 +558,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 「自动收录 CQ 台」：把本批解到的**新** CQ 呼号并入关注名单（超出 `FollowRoster.AUTO_MAX` 时
-     * 淘汰最早收录的；手动关注的永不被淘汰）。
+     * 「自动收录 CQ 台」：把本批解到的、**当前波段还没通联过**的**新** CQ 呼号并入关注名单
+     * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动关注的永不被淘汰）。
      *
+     * 波段口径照 FT8CN `checkQSLCallsign`（`where band=?`）：跨波段通联过的台在本波段仍算没通联过。
      * 与 FT8CN 的**有意偏离**：FT8CN 只推送到「呼叫」列表、不写关注名单，见 [FollowRoster] 文档。
      */
     private fun autoCollectCqToFollow(batch: List<DecodeResult>) {
@@ -556,6 +573,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             myCall = _status.value.myCall,
             ignoredCalls = s.ignoredCalls,
             followedCalls = s.followCalls,
+            workedCalls = workedCallsOnBand(_status.value.band),
         )
         if (incoming.isEmpty()) return
         persist { cur ->
@@ -1245,7 +1263,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                     incoming,
                                     p.theirCall,
                                     currentFilter(),
-                                    _worked.value,
+                                    workedForAutoProgram(),
                                 )
                             } else {
                                 null
@@ -1324,9 +1342,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch(Dispatchers.IO) {
                 qsoRepo.add(entity)
             }
-            // 完成即写「已通联」索引（本波段、立即生效；DB 回流会幂等重算）
+            // 完成即写「已通联」索引（立即生效；DB 回流会幂等重算）
             _worked.update { it.plus(entry.theirCall, entry.theirGrid) }
-            _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
+            // 自动程序用的「本波段」索引也立刻更新（否则要等 Room 回流才生效）
+            val bandKey = st.band.trim().uppercase()
+            workedCallsByBand = workedCallsByBand +
+                (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
+            // 「关注的呼号通联完成后取消关注」：本段通联已落库，无需再盯这个台
+            //（名单与自动收录顺序一并移除；幂等）
+            val wasFollowed = key in latestSettings.followCalls
+            if (wasFollowed) {
+                persist {
+                    it.copy(followCalls = it.followCalls - key, autoFollowOrder = it.autoFollowOrder - key)
+                }
+            }
+            _status.update {
+                it.copy(
+                    status = if (wasFollowed) {
+                        "已记录通联：${entry.theirCall}（已取消关注）"
+                    } else {
+                        "已记录通联：${entry.theirCall}"
+                    },
+                )
+            }
         }
         if (!finished) return
         if (!_status.value.txEnabled) return
@@ -1354,7 +1392,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p2, txArmed = false, status = "无回应超限：换台 / 回 CQ")
         }
-        runAutoAction(scheduler.onTargetGaveUp(incoming, currentFilter(), _worked.value, utcNowMs))
+        runAutoAction(
+            scheduler.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
+        )
     }
 
     /**
@@ -1367,7 +1407,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val action = scheduler.onDecoded(
             messages = batch,
             filter = currentFilter(),
-            worked = _worked.value,
+            worked = workedForAutoProgram(),
             utcNowMs = utcNowMs,
         )
         Log.i(
@@ -1483,6 +1523,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             followedCalls = s.followCalls,
         )
     }
+
+    /** 指定波段的已通联呼号（照 FT8CN `checkQSLCallsign`）；自动程序的 CQ 闸门与「自动收录」共用。 */
+    private fun workedCallsOnBand(band: String): Set<String> =
+        workedCallsByBand[band.trim().uppercase()].orEmpty()
+
+    /**
+     * 自动程序用的已通联索引：**只含当前波段**。
+     *
+     * 照 FT8CN `checkQSLCallsign`（按 band 过滤）——跨波段通联过的 CQ 台在本波段仍会作为候选
+     * （波段新槽位）；界面高亮 / 「已通联」筛选另用跨波段的 [_worked]。
+     */
+    private fun workedForAutoProgram(): WorkedIndex =
+        WorkedIndex(calls = workedCallsOnBand(_status.value.band))
 
     /** 把频率钳制到当前解码频段内。 */
     private fun clampFreq(hz: Int): Int {
