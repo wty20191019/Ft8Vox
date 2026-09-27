@@ -105,7 +105,7 @@ val DEFAULT_CQ_PREFIXES: List<String> = listOf(
  * 「本周期剩余时间够播完这一条报文就立即发，否则排下一周期」。
  *
  * 判据是**报文波形 + 前导必须能在本时隙内播完**：FT8 报文 12.64 s / 时隙 15 s、
- * FT4 报文 4.48 s / 时隙 7.5 s，因此本时隙开头约 2 s 都还来得及就地发射 ——
+ * FT4 报文 5.04 s / 时隙 7.5 s，因此本时隙开头约 2 s 都还来得及就地发射 ——
  * 不必白等一个周期（解码结果本来就是在时隙结束后几百毫秒才到手）。
  */
 object TxScheduler {
@@ -137,4 +137,56 @@ object TxScheduler {
         msToNextSlot: Long,
         minNeededMs: Long = MIN_SEND_NOW_MS,
     ): Boolean = currentParity == txParity && msToNextSlot >= minNeededMs
+
+    /**
+     * 报文波形自带的前导静音（ms）。
+     *
+     * 见 `jni_bridge.c` 的 `lead = 0.5 s`：按 WSJT-X 约定，波形在时隙起点后 0.5 s 才开始
+     * 发声，末尾再留白填满整个时隙。算「还来不来得及播完」时**必须**把它算进去。
+     */
+    const val WAVE_LEAD_MS = 500L
+
+    /**
+     * 「发射途中换目标、就地重发」的额外余量（ms）。
+     *
+     * 重启要作废正在写的那一段（native 侧最多再响一块，约 85 ms）、重新编码、重开写入，
+     * 所以判据要比「刚好播得完」再宽一点，否则容易拖到下一时隙边界。
+     */
+    const val RETARGET_MARGIN_MS = 300L
+
+    /**
+     * **发射途中换目标**：本时隙剩余时间是否还够完整播完新报文（就地重发判据）。
+     *
+     * 判据 ＝ 前导（PTT 静音 + 前导音）+ 波形自带保护间隔 [WAVE_LEAD_MS] + 报文时长
+     * + 重启余量 [marginMs] ≤ 本时隙剩余时间；且当前必须是**我方发射时隙**
+     * （换目标时可能刚按对方时隙重锁了周期，那就只能在下一个我方时隙发）。
+     *
+     * FT8：报文 12.64 s / 时隙 15 s → 只在时隙开头约 1.5 s 内换目标才来得及；
+     * FT4：报文约 5.04 s / 时隙 7.5 s → 约 1.6 s。够就当场重发，不够则照旧等下一个我方周期。
+     *
+     * @param nowMs 当前 UTC 毫秒
+     * @param slotMs 时隙长度（FT8 15000 / FT4 7500）
+     * @param txParity 我方发射周期（0=偶，1=奇）
+     * @param preambleMs 本次发射的完整前导（PTT 延迟 + 前导音，见 `AppSettings.txPreambleMs`）
+     * @param messageMs 新报文的波形时长（ms，见 `Protocol.messageMs`）；≤0 视为未知 → 不可就地重发
+     * @param slotOffsetMs 整个时隙的偏移（ms，与 `planTx` 同一口径）
+     */
+    fun canRetargetInSlot(
+        nowMs: Long,
+        slotMs: Long,
+        txParity: Int,
+        preambleMs: Long,
+        messageMs: Int,
+        slotOffsetMs: Long = 0L,
+        marginMs: Long = RETARGET_MARGIN_MS,
+    ): Boolean {
+        if (slotMs <= 0L || messageMs <= 0) return false
+        val shiftedNow = nowMs - slotOffsetMs
+        val slotIdx = Math.floorDiv(shiftedNow, slotMs)
+        if ((slotIdx % 2L).toInt() != txParity) return false
+        val posInSlot = shiftedNow - slotIdx * slotMs
+        val needed = preambleMs.coerceAtLeast(0L) + WAVE_LEAD_MS +
+            messageMs.toLong() + marginMs.coerceAtLeast(0L)
+        return posInSlot + needed <= slotMs
+    }
 }

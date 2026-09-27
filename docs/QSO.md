@@ -161,7 +161,7 @@
 | 协议 | `Protocol` 枚举 | 时隙长度 | 报文波形时长 |
 | --- | --- | --- | --- |
 | FT8 | `Protocol.FT8`（ordinal 0） | 15000 ms | `messageMs = 12_640`（79 符号 × 160 ms） |
-| FT4 | `Protocol.FT4`（ordinal 1） | 7500 ms | `messageMs = 4_480`（105 符号 × 42.67 ms） |
+| FT4 | `Protocol.FT4`（ordinal 1） | 7500 ms | `messageMs = 5_040`（105 符号 × 48 ms，与 native `FT4_SYMBOL_PERIOD` 一致） |
 
 - 时隙奇偶由 UTC 时刻判定（`slotParityOf`）；`EVEN=0` / `ODD=1`。
 - **应答 / 被呼时固定到对方时隙的相反周期**（`pinToTargetSlot`）。

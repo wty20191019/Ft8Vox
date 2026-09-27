@@ -146,8 +146,8 @@ class TxComposeTest {
     fun minSendNowNeedsWholeMessagePlusPreamble() {
         // FT8：12.64 s 报文 + 50 ms 前导
         assertEquals(12_690L, TxScheduler.minSendNowMs(12_640, 50))
-        // FT4：4.48 s 报文 + 200 ms 前导
-        assertEquals(4_680L, TxScheduler.minSendNowMs(4_480, 200))
+        // FT4：5.04 s 报文 + 200 ms 前导
+        assertEquals(5_240L, TxScheduler.minSendNowMs(5_040, 200))
         // 报文时长未知 → 兜底 2.5 s；前导为负按 0 处理
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0))
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0, -100))
@@ -156,5 +156,109 @@ class TxComposeTest {
         val ft8 = TxScheduler.minSendNowMs(12_640, 50)
         assertTrue(TxScheduler.canSendNow(0, 0, 14_000, ft8))
         assertFalse(TxScheduler.canSendNow(0, 0, 10_000, ft8))
+    }
+
+    // ---- 发射途中换目标：就地重发 ----
+
+    /** 我方偶数周期、FT8、前导 300 ms：所需 = 0.3 + 0.5（波形自带保护间隔）+ 12.64 + 0.3（重启余量）= 13.74 s。 */
+    private fun ft8RetargetAt(posInSlotMs: Long, txParity: Int = 0): Boolean =
+        TxScheduler.canRetargetInSlot(
+            nowMs = posInSlotMs,          // 时隙 0 是偶数周期，直接拿 pos 当绝对时间
+            slotMs = 15_000,
+            txParity = txParity,
+            preambleMs = 300,
+            messageMs = 12_640,
+        )
+
+    @Test
+    fun retargetAllowedOnlyAtSlotHead() {
+        // 时隙开头 1 s 处：0.3 + 0.5 + 12.64 + 0.3 = 13.74 s，剩 14 s → 够
+        assertTrue(ft8RetargetAt(0))
+        assertTrue(ft8RetargetAt(1_000))
+        // 13.74 + pos > 15 000（pos ≈ 1.26 s 起）→ 不够，照旧等下一个我方周期
+        assertFalse(ft8RetargetAt(1_300))
+        assertFalse(ft8RetargetAt(5_000))
+        assertFalse(ft8RetargetAt(14_000))
+    }
+
+    @Test
+    fun retargetCountsWaveLeadAndMargin() {
+        // 不含重启余量时的边界：0.3 + 0.5 + 12.64 = 13.44 s → pos = 1.56 s 正好卡住
+        assertFalse(ft8RetargetAt(1_560))
+        assertTrue(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 1_560, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, marginMs = 0,
+            ),
+        )
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 1_561, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, marginMs = 0,
+            ),
+        )
+        // 余量调大 → 窗口收窄（pos = 1 s 也不够了）
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 1_000, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, marginMs = 1_000,
+            ),
+        )
+    }
+
+    @Test
+    fun retargetOnlyOnOwnSlot() {
+        // 当前处于奇数时隙、我方是偶数周期 → 不能在此时隙就地重发（下一个我方时隙才发）
+        assertFalse(ft8RetargetAt(15_000, txParity = 0))
+        // 我方是奇数周期 → 奇数时隙开头可以
+        assertTrue(ft8RetargetAt(15_000, txParity = 1))
+    }
+
+    @Test
+    fun retargetRespectsSlotOffsetAndUnknownMessage() {
+        // 时隙网格整体推后 2 s：名义 0 s 处还在上一个（奇数）时隙里 → 不是我方周期
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 0, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, slotOffsetMs = 2_000,
+            ),
+        )
+        // 推后 2 s 后的时隙起点（名义 2 s）→ 偶数周期开头，够播完
+        assertTrue(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 2_000, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, slotOffsetMs = 2_000,
+            ),
+        )
+        // 偏移 −1 s：名义 2 s 处已是偏移后时隙的第 3 s → 放不下整条报文
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 2_000, slotMs = 15_000, txParity = 0,
+                preambleMs = 300, messageMs = 12_640, slotOffsetMs = -1_000,
+            ),
+        )
+        // 报文时长未知（0）→ 不就地重发
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 0, slotMs = 15_000, txParity = 0, preambleMs = 0, messageMs = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun retargetFt4MessageFitsLater() {
+        // FT4：时隙 7.5 s、报文 5.04 s、前导 300 ms → 0.3 + 0.5 + 5.04 + 0.3 = 6.14 s（pos ≤ 1.36 s）
+        assertTrue(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 1_000, slotMs = 7_500, txParity = 0,
+                preambleMs = 300, messageMs = 5_040,
+            ),
+        )
+        assertFalse(
+            TxScheduler.canRetargetInSlot(
+                nowMs = 2_000, slotMs = 7_500, txParity = 0,
+                preambleMs = 300, messageMs = 5_040,
+            ),
+        )
     }
 }

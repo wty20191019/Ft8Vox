@@ -40,6 +40,7 @@ import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
+import com.example.ft8vox.qso.TxScheduler
 import com.example.ft8vox.qso.WorkedIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -922,7 +923,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         val p = qsoEngine.startCq(AudioEngine.utcNowMs(), latestSettings.cqPrefix)
-        _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
+        // 开始 QSO 即以 QSO 为准：清掉可能还排着的「一次性待发」报文（否则它会抢占下一个时隙，
+        // 把新 QSO 的第一条报文压住、状态机也不推进）
+        _status.update {
+            it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
+        }
+        tryRetargetNow(p.txText, manual = false)
     }
 
     /** 应答指定 CQ。人工操作不暂停自动程序，只复位发射监管计时。 */
@@ -955,7 +961,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "无法应答（呼号无效或与自身相同）") }
             return
         }
-        _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
+        _status.update {
+            it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
+        }
+        tryRetargetNow(p.txText, manual = false)
     }
 
     /**
@@ -993,6 +1002,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(manualTxText = trimmed, txArmed = true, status = "待发（一次性）：$trimmed")
         }
+        tryRetargetNow(trimmed, manual = true)
     }
 
     /**
@@ -1501,7 +1511,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!p.active && p.state != QsoState.DONE) return
         Log.i(TAG_QSO, "auto start kind=${t.kind} call=${t.call} -> ${p.state} tx=${p.txText}")
-        _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}") }
+        _status.update {
+            it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
+        }
+        tryRetargetNow(p.txText, manual = false)
         // ROGER 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
     }
@@ -1737,8 +1750,60 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             _status.update { it.copy(status = "发射异常: ${e.message}") }
         } finally {
-            _status.update { it.copy(txing = false) }
-            txJustFinished = true
+            // 只有「仍是当前有效的那一次」才收尾 / 记账：被「停止发射」或「发射途中换目标就地重发」
+            // 作废的这次不再推进状态机 —— 否则会把没播完的旧报文当成已发出去，抢先推进 QSO。
+            if (abortAtPlan == txAbortGen) {
+                _status.update { it.copy(txing = false) }
+                txJustFinished = true
+            }
+        }
+    }
+
+    /**
+     * **发射途中换目标**：本时隙剩余时间还够完整播完新报文时，立刻作废正在响的那段音频、
+     * 当场重新编码并发射（不白等一个完整周期）；不够就什么都不做，照旧排到下一个我方周期。
+     *
+     * 触发点：所有「换目标 / 换报文」的人工入口（[startCqInternal] / [answerInternal] /
+     * [startAutoTarget] / [sendOnceInternal]）在写入新状态后调用一次 —— 由它统一判断该不该就地重发。
+     *
+     * 安全性：判断走纯函数 [TxScheduler.canRetargetInSlot]（含波形自带 0.5 s 保护间隔与重启余量）；
+     * 作废走 [abortTransmit]（非阻塞，native 最多再响一块）；被作废的那次不会再记账
+     * （见 [transmit] 的 `finally`）；新报文与在播报文相同时直接跳过，避免无意义的打断。
+     *
+     * @param text 刚设定的新报文（由调用方给出，避免被别处的待发报文抢占）
+     * @param manual 该报文是否属于「一次性发送」（决定发完是否推进 QSO 状态机）
+     */
+    private fun tryRetargetNow(text: String?, manual: Boolean) {
+        val st = _status.value
+        if (text.isNullOrBlank()) return
+        if (!st.running || !st.txEnabled || !st.txArmed) return
+        // 没有在飞的发射（含「已排定但还在编码」的那一小段）就没什么可换的，交给 txTick
+        if (txJob?.isActive != true && !st.txing) return
+        // 新目标与正在播的是同一条报文：不必打断
+        if (text.trim() == st.lastTxText?.trim()) return
+        val slotMs = st.slotMs.toLong()
+        val now = AudioEngine.utcNowMs()
+        val preambleMs = txPreambleMs().toLong()
+        if (!TxScheduler.canRetargetInSlot(
+                nowMs = now,
+                slotMs = slotMs,
+                txParity = st.txParity,
+                preambleMs = preambleMs,
+                messageMs = st.protocol.messageMs,
+                slotOffsetMs = latestSettings.slotOffsetMs.toLong(),
+            )
+        ) {
+            Log.i(TAG_QSO, "换目标：本时隙剩余时间不够播完，排到下一个我方周期 -> $text")
+            return
+        }
+        Log.i(TAG_QSO, "换目标：就地重发 -> $text")
+        abortTransmit()   // 作废在飞的那段（非阻塞；它不再记账）
+        lastTxSlotIndex = Math.floorDiv(now - latestSettings.slotOffsetMs, slotMs)
+        manualInFlight = manual
+        val genAtPlan = engineGen
+        val abortAtPlan = txAbortGen
+        txJob = viewModelScope.launch(Dispatchers.IO) {
+            transmit(text, now + preambleMs, preambleMs, genAtPlan, abortAtPlan)
         }
     }
 
@@ -1914,7 +1979,7 @@ internal fun planTx(
      * 单条报文的波形时长（ms，0=未知）：非 0 时放宽「就地发射」窗口 —— 只要**整条报文能在
      * 本时隙内播完**（已过时间 + 前导 + 报文 ≤ 时隙长）就直接本时隙发射，不必白等一个周期。
      *
-     * FT8 报文 12.64 s 远短于时隙 15 s（FT4 4.48 s / 7.5 s），而解码结果在时隙结束后几百
+     * FT8 报文 12.64 s 远短于时隙 15 s（FT4 5.04 s / 7.5 s），而解码结果在时隙结束后几百
      * 毫秒才到手，所以应答通常正好落在紧邻的时隙。传 0 时退回只按 [startWindowMs] 判定。
      */
     messageMs: Long = 0L,
