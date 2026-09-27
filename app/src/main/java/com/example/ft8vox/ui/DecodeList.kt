@@ -91,8 +91,8 @@ fun barColor(role: HighlightRole): Color = when (role) {
     HighlightRole.NORMAL -> BarNewDecode
 }
 
-private val SwipeCallGreen = Color(0xFF2E7D32)
-private val SwipeDeleteGray = Color(0xFF455A64)
+internal val SwipeCallGreen = Color(0xFF2E7D32)
+internal val SwipeDeleteGray = Color(0xFF455A64)
 
 /**
  * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，

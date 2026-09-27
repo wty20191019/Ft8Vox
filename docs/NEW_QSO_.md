@@ -259,8 +259,9 @@
 | 自动关注 CQ | `autoFollowCq` | true | 把解码到的 CQ 台**纳入候选**（照 FT8CN＝推送到呼叫列表）；关掉后**只**呼叫「关注名单」里的 CQ 台 |
 | 自动呼叫关注的呼号 | `autoCallFollow` | true | 是否**真的去呼叫**候选里的 CQ 台（总闸）；关掉后只回应定向呼叫 + 自己发 CQ |
 
-> **「关注名单」**（`AppSettings.followCalls`）：在解码列表**长按某台 →「关注 / 取消关注」**维护；
-> 筛选项「关注」只看这些台；照 FT8CN，它**不受 `autoFollowCq` 限制**（关掉开关仍会呼叫名单里 CQ 台的 CQ）。
+> **「关注名单」**（`AppSettings.followCalls`）：在解码列表**长按某台 →「关注 / 取消关注」**加入 / 移除；
+> 点筛选条最右的 **⭐** 打开「**关注呼号列表**」面板查看（列表里**左滑＝呼叫、右滑＝取消关注**）。
+> **它不是解码筛选**（不新增 chip）：照 FT8CN，它**不受 `autoFollowCq` 限制**（关掉开关仍会呼叫名单里 CQ 台的 CQ）。
 > 与 FT8CN 的差异只有一处：FT8CN 的 `followCallsigns` 是独立 SQLite 表、**只能在局域网 Web 后台删除**，
 > 本机存在设置里、App 内即可删。
 
@@ -381,7 +382,7 @@
 | `RR73` 兜底 | `checkTargetCallMe` 等三重兜底 | **结构上不可达**（不滞留 RR73） | 等价防死，代码更少 |
 | 选台 | 无优先级，按解码先后 | **CQ 修饰符**同级 tie-break | 叠加加分，不影响应答 |
 | 深度解码 | 不驱动自动（有闸门） | 不驱动（`deep` 恒 false，占位） | 同口径 |
-| 关注呼号名单 | `followCallsigns` 表（手动 / 地图 / Web 后台删除，持久保存） | `AppSettings.followCalls`（解码长按「关注」，App 内可删） | 同口径；本机多一个 App 内删除入口 |
+| 关注呼号名单 | `followCallsigns` 表（手动 / 地图 / Web 后台删除，持久保存） | `AppSettings.followCalls`（解码长按「关注」，⭐ 列表里可删；**不是解码筛选**） | 同口径；本机多一个 App 内删除入口 |
 | 2 s 时窗闸门 | 有（`MainViewModel:318`） | **无**，逐条处理 | 整批闸门会丢对方回复 |
 
 ---

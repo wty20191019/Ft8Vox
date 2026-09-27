@@ -27,6 +27,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -160,12 +163,10 @@ fun OperateScreen(
         ignoredCalls = settings.ignoredCalls,
         followedCalls = settings.followCalls,
     )
-    // 「关注」筛选视图（只选中「关注」这一项）里右滑＝取消关注；其余视图右滑＝删除该条解码
-    val followView = settings.filterTags == setOf(DecodeFilterTag.FOLLOW)
-    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls, settings.followCalls) {
-        DecodeFilter.counts(
-            messages, worked, status.myCall, settings.ignoredCalls, settings.followCalls,
-        )
+    // 「关注呼号列表」面板开关（筛选条最右 ⭐，与最左的垃圾桶对称）
+    var followListOpen by rememberSaveable { mutableStateOf(false) }
+    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls) {
+        DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
     }
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     val highlightPrefs = HighlightPrefs(
@@ -264,6 +265,9 @@ fun OperateScreen(
             onClear = { viewModel.clearMessages() },
             onToggleSearch = { queryOpen = !queryOpen },
             onToggle = { viewModel.setFilterTags(filter.toggle(it).tags) },
+            followCount = settings.followCalls.size,
+            followOpen = followListOpen,
+            onToggleFollowList = { followListOpen = !followListOpen },
         )
         if (queryOpen) {
             var query by remember { mutableStateOf(settings.callFilter) }
@@ -281,12 +285,24 @@ fun OperateScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 3.dp))
 
-        // ---- §3.3 解码列表 ----
+        // ---- §3.3 解码列表 / 「关注呼号列表」 ----
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            if (rows.isEmpty()) {
+            if (followListOpen) {
+                FollowListPanel(
+                    follows = settings.followCalls,
+                    messages = messages,
+                    myGrid = status.myGrid,
+                    onCall = { call, grid, df ->
+                        targetCall = call
+                        request { viewModel.answer(call, grid, df) }
+                    },
+                    onUnfollow = { viewModel.unfollowCall(it) },
+                    onClose = { followListOpen = false },
+                )
+            } else if (rows.isEmpty()) {
                 Text(
                     decodeEmptyHint(status, messages.size, filter.isEmptySelection),
                     style = MaterialTheme.typography.bodySmall,
@@ -338,11 +354,7 @@ fun OperateScreen(
                                 }
                             },
                             onOpenLog = { onOpenLog(from) },
-                            // 「关注」视图里右滑＝取消关注；其余视图右滑＝删除该条解码
-                            onSwipeDelete = {
-                                if (followView && from != null) viewModel.unfollowCall(from)
-                                else viewModel.removeMessage(row.msg)
-                            },
+                            onSwipeDelete = { viewModel.removeMessage(row.msg) },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
                             followed = from != null && from in settings.followCalls,
@@ -495,7 +507,7 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
     }
 }
 
-/** 筛选 Chip 行（横向滚动）：最左侧「清除解码信息」，其余 Chip 全部互斥、多选，附角标计数。 */
+/** 筛选条：最左 🗑「清除解码信息」＋ 中间可多选 Chip ＋ 最右 🔍（呼号过滤）/ ⭐（关注呼号列表，与 🗑 对称）。 */
 @Composable
 private fun FilterChipRow(
     filter: DecodeFilterState,
@@ -505,6 +517,10 @@ private fun FilterChipRow(
     onClear: () -> Unit,
     onToggleSearch: () -> Unit,
     onToggle: (DecodeFilterTag) -> Unit,
+    /** 关注的呼号数量（角标）与「关注呼号列表」面板开关。 */
+    followCount: Int,
+    followOpen: Boolean,
+    onToggleFollowList: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -544,6 +560,19 @@ private fun FilterChipRow(
                     Icons.Filled.Search,
                     contentDescription = "呼号过滤",
                     tint = if (queryOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // 最右：关注呼号列表（与最左的垃圾桶对称）
+        BadgedBox(
+            badge = { if (followCount > 0) Badge { Text("$followCount") } },
+        ) {
+            IconButton(onClick = onToggleFollowList) {
+                Icon(
+                    Icons.Filled.Star,
+                    contentDescription = "关注呼号列表",
+                    tint = if (followOpen) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

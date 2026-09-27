@@ -156,7 +156,7 @@ newOrder == 5                                             // ① 收到 73
 2. 保留「报文驱动收敛兜底」（§1.8 第 2 条）。
 3. 报告值改为「每次重测最新 / R 复用 Tx2」（§1.7）。
 4. `deep`/`weak` 双通道仅预留字段，当前行为等价现状。
-5. 「关注呼号名单」用**最轻量**方案做：`AppSettings.followCalls`（设置里存 `Set<String>`，**不建 Room 表**），入口＝**解码列表长按「关注 / 取消关注」**；筛选项「关注」只看名单里的台；照 FT8CN，名单里的台**不受 `autoFollowCq` 限制**。与 FT8CN 的差别仅在于删除入口在 App 内（FT8CN 只能经局域网 Web 后台删）。
+5. 「关注呼号名单」用**最轻量**方案做：`AppSettings.followCalls`（设置里存 `Set<String>`，**不建 Room 表**），入口＝**解码列表长按「关注 / 取消关注」**＋筛选条最右 **⭐** 打开「关注呼号列表」面板（左滑呼叫 / 右滑取消关注）；**不做成解码筛选标签**；照 FT8CN，名单里的台**不受 `autoFollowCq` 限制**。与 FT8CN 的差别仅在于删除入口在 App 内（FT8CN 只能经局域网 Web 后台删）。
 6. **无任何发射确认框**：删除 `AutoEnableConfirmDialog`，总开关直接生效（FT8CN 的 `activated` 也是直接生效）。
 
 ---
@@ -529,12 +529,13 @@ FT8CN `QSLRecord` 字段对照：
   `autoCallFollow` 把关（`collect` 已按 `autoFollowCq` 过滤，**行为等价**、职责清晰），
   `AutoProgramDialog` 文案、`FT8CN-QSO.md` §7/§12、`NEW_QSO_.md`、`How2use.md` §11 全部更正。
 - **补上「关注名单」**（上一条里「本机不做」的部分改为实现）：`AppSettings.followCalls: Set<String>`
-  + `SettingsRepository` 一个 `stringSetPreferencesKey("follow_calls")`；`DecodeFilterTag` 新增
-  `FOLLOW("关注")`（筛选项显示名单里那些**全部**解码，不限 CQ）；`DecodeFilterState.followedCalls`
-  同时供显示与选台（`collect` 的 CQ 分支＝`autoFollowCq || followed`）；入口＝解码长按
-  「关注 / 取消关注」（`DecodeCard` + `SessionViewModel.toggleFollow`）；只选「关注」的视图里**右滑＝取消关注**。
-  `AutoProgramDialog` / `How2use` §6.3·§7·§11 / `NEW_QSO_` §3.2·§3.4·§7·§十三 / `FT8CN-QSO` §12 同步。
-- 单测 +4（`DecodeFilterTest` 2 + `AutoProgramTest` 2），全库 **314 例 / 32 suite**。
+  + `SettingsRepository` 一个 `stringSetPreferencesKey("follow_calls")`；**不新增解码筛选标签**——
+  关注是**一份呼号名单**，`DecodeFilterState.followedCalls` 只作选台输入（`collect` 的 CQ 分支＝
+  `autoFollowCq || followed`）；入口＝① 解码长按「关注 / 取消关注」（`DecodeCard` + `SessionViewModel.toggleFollow`）；
+  ② 筛选条最右 **⭐**（与最左 🗑 对称，带数量角标）打开「**关注呼号列表**」面板（`ui/FollowList.kt`：
+  列表里 **左滑＝呼叫、右滑＝取消关注**，行内显示本次会话最近一次的网格 / SNR / 时间 / 距离）。
+  `AutoProgramDialog` / `How2use` §6.3·§6.5·§7·§11 / `NEW_QSO_` §3.2·§3.4·§7·§十三 / `FT8CN-QSO` §12 同步。
+- 单测 +2（`AutoProgramTest`：关注 CQ 在开关关掉时仍入选 / 仍被呼叫），全库 **312 例 / 32 suite**。
 
 ---
 

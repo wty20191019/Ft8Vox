@@ -89,31 +89,6 @@ class DecodeFilterTest {
     }
 
     @Test
-    fun followTagKeepsAllMessagesFromFollowedCalls() {
-        val f = DecodeFilterState(tags = setOf(DecodeFilterTag.FOLLOW), followedCalls = setOf("W1AW"))
-        assertTrue(DecodeFilter.matches("CQ W1AW FN42", f))
-        assertTrue(DecodeFilter.matches("DL1ABC W1AW -12", f)) // 不限 CQ：定向报文也算
-        assertFalse(DecodeFilter.matches("CQ JA1ABC PM95", f))
-    }
-
-    @Test
-    fun followCountRespectsIgnoredFirst() {
-        val msgs = listOf(
-            decoded("CQ W1AW FN42"),
-            decoded("DL1ABC W1AW -12"),
-            decoded("CQ JA1ABC PM95"),
-        )
-        assertEquals(2, DecodeFilter.counts(msgs, followedCalls = setOf("W1AW"))[DecodeFilterTag.FOLLOW])
-        // 忽略优先于关注
-        assertEquals(
-            0,
-            DecodeFilter.counts(
-                msgs, ignoredCalls = setOf("W1AW"), followedCalls = setOf("W1AW"),
-            )[DecodeFilterTag.FOLLOW],
-        )
-    }
-
-    @Test
     fun multiSelectIsUnion() {
         val worked = WorkedIndex(calls = listOf("JA1ABC"))
         val f = DecodeFilterState(tags = setOf(DecodeFilterTag.CQ, DecodeFilterTag.WORKED))
