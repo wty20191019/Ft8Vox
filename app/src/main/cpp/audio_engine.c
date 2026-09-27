@@ -9,7 +9,6 @@
 #include <time.h>
 #include <stdatomic.h>
 #include <unistd.h>
-#include <sys/stat.h>
 
 #include <aaudio/AAudio.h>
 #include <android/log.h>
@@ -49,32 +48,6 @@
 
 // 允许在时隙起点后多久开始采集（毫秒）；超过则丢弃等下一个时隙
 #define ALIGN_TOLERANCE_MS 200
-
-// -----------------------------------------------------------------------------
-// 采集录音（**仅 Debug 构建**；排查真机声学/采集链路用）
-//
-// 把「真机实际喂给解码器的那段 12 kHz PCM」逐时隙原样落盘。拿到文件后：
-//   ① 用离线 harness（同一套 ftx_session）解一遍 → 应解出条数；
-//   ② 用 WSJT-X 解同一段 → 对照条数。
-// 两者接近 ⇒ 问题在声学/采集链路（扬声器低频、电平、回声）；我方明显更少 ⇒ 解码器。
-//
-// 默认关闭：设备上存在哨兵文件才录（正常使用绝不会产生该文件）；
-// 且整段实现被 `#ifndef NDEBUG` 包住，Release 包一行都不编进去。
-//
-// 位置用 App **内部**私有目录：对本进程必然可访问；外部 /sdcard/Android/data
-// 在 Android 11+ 上常被 FUSE 拦（连 run-as 都 Permission denied），故不用。
-// 取文件：`adb exec-out run-as com.example.ft8vox cat files/capdump/<名> > 本地`
-// （或先 `run-as ... cp` 到 /sdcard/Download 再 pull）。
-// 兼容 /data/user/0 与 /data/data 两种规范路径（同一目录的软链）。
-// -----------------------------------------------------------------------------
-#ifndef NDEBUG
-#define CAP_DUMP_SENTINEL_A "/data/user/0/com.example.ft8vox/files/capdump.on"
-#define CAP_DUMP_SENTINEL_B "/data/data/com.example.ft8vox/files/capdump.on"
-#define CAP_DUMP_DIR_A "/data/user/0/com.example.ft8vox/files/capdump"
-#define CAP_DUMP_DIR_B "/data/data/com.example.ft8vox/files/capdump"
-/// 单次录音的样本上限（16 s @12 kHz，时隙 15 s，留余量）
-#define CAP_DUMP_MAX_SAMPLES (WORK_RATE * 16)
-#endif
 
 // 时隙偏移（发射 + 解码窗口）的允许范围（ms）：FT8 的 DT 搜索窗约 ±2.5s，
 // 超过这个范围既测不出也解不出；与设置页 6.3「时隙偏移」范围一致
@@ -371,13 +344,6 @@ typedef struct
     // ---- 输入电平读数（纯显示用；dsp 线程写，任意线程读） ----
     _Atomic int vox_level_db_x10;  ///< 平滑后的输入电平（dBFS × 10）
 
-    // ---- 采集录音（仅 Debug 构建；见 CAP_DUMP_* 说明，Release 下为空壳） ----
-    float* cap_dump_buf;     ///< 当前时隙累积的 12 kHz 样本（惰性分配）
-    int cap_dump_len;        ///< 已累积样本数
-    int64_t cap_dump_slot;   ///< 正在录的时隙序号（-1 = 未录）
-    int64_t cap_dump_t0;     ///< 开录时的单调时刻（ms）
-    int64_t cap_dump_drop0;  ///< 开录时的 dropped 计数（收尾时相减得本时隙丢样）
-    const char* cap_dump_dir; ///< 本时隙落盘目录（NULL = 未录）
 } audio_engine_t;
 
 static int64_t utc_now_ms(void)
@@ -488,145 +454,6 @@ static void* decode_thread_fn(void* arg)
     return NULL;
 }
 
-// -----------------------------------------------------------------------------
-// 采集录音（仅 Debug 构建；见 CAP_DUMP_* 说明）
-// -----------------------------------------------------------------------------
-#ifndef NDEBUG
-/// 写 44 字节 WAV 头（PCM / 16-bit / 单声道 / 12 kHz）。
-static void cap_dump_wav_header(uint8_t* h, uint32_t data_bytes)
-{
-    uint16_t u16;
-    uint32_t u32;
-    memcpy(h, "RIFF", 4);
-    u32 = 36 + data_bytes;
-    memcpy(h + 4, &u32, 4);
-    memcpy(h + 8, "WAVEfmt ", 8);
-    u32 = 16;
-    memcpy(h + 16, &u32, 4);
-    u16 = 1;
-    memcpy(h + 20, &u16, 2); // PCM
-    u16 = 1;
-    memcpy(h + 22, &u16, 2); // 单声道
-    u32 = WORK_RATE;
-    memcpy(h + 24, &u32, 4);
-    u32 = WORK_RATE * 2;
-    memcpy(h + 28, &u32, 4);
-    u16 = 2;
-    memcpy(h + 32, &u16, 2); // 块对齐字节数
-    u16 = 16;
-    memcpy(h + 34, &u16, 2); // 位深
-    memcpy(h + 36, "data", 4);
-    u32 = data_bytes;
-    memcpy(h + 40, &u32, 4);
-}
-
-/// 时隙开始：存在哨兵文件才准备录音（每次检查，方便中途开关）。
-static void cap_dump_slot_begin(audio_engine_t* e, int64_t slot, int align_ms)
-{
-    e->cap_dump_slot = -1;
-    e->cap_dump_len = 0;
-    e->cap_dump_dir = NULL;
-    if (access(CAP_DUMP_SENTINEL_A, F_OK) == 0)
-        e->cap_dump_dir = CAP_DUMP_DIR_A;
-    else if (access(CAP_DUMP_SENTINEL_B, F_OK) == 0)
-        e->cap_dump_dir = CAP_DUMP_DIR_B;
-    if (e->cap_dump_dir == NULL)
-        return;
-    if (e->cap_dump_buf == NULL)
-    {
-        e->cap_dump_buf = (float*)malloc(sizeof(float) * CAP_DUMP_MAX_SAMPLES);
-        if (e->cap_dump_buf == NULL)
-        {
-            LOGE("capdump: out of memory");
-            return;
-        }
-    }
-    e->cap_dump_slot = slot;
-    e->cap_dump_t0 = monotonic_ms();
-    e->cap_dump_drop0 = atomic_load(&e->dropped);
-    LOGI("capdump begin: slot=%lld align=%d ms dir=%s", (long long)slot, align_ms,
-         e->cap_dump_dir);
-}
-
-/// 累积一块样本：每时隙末尾一次性落盘，避免时隙中途做 I/O 干扰采集。
-static void cap_dump_slot_append(audio_engine_t* e, const float* x, int n)
-{
-    if (e->cap_dump_slot < 0 || e->cap_dump_buf == NULL || n <= 0)
-        return;
-    if (e->cap_dump_len + n > CAP_DUMP_MAX_SAMPLES)
-        n = CAP_DUMP_MAX_SAMPLES - e->cap_dump_len;
-    if (n <= 0)
-        return;
-    memcpy(e->cap_dump_buf + e->cap_dump_len, x, sizeof(float) * (size_t)n);
-    e->cap_dump_len += n;
-}
-
-/// 时隙结束：落盘 + 一行诊断（丢样数 / 实际喂入样本数 / 墙钟时长）。
-///
-/// `wall`（墙钟）与 `samples`（样本数 ÷ 12 kHz）应当基本相等：差值就是「采集侧
-/// 被别的东西拖住」的时间。解出条数由解码线程另行打点（`decode: slot=… decoded=…`），
-/// 因为解码已经不在 DSP 线程里了。
-static void cap_dump_slot_end(audio_engine_t* e, int64_t fed)
-{
-    if (e->cap_dump_slot < 0)
-        return;
-    const int64_t slot = e->cap_dump_slot;
-    const int n = e->cap_dump_len;
-    const int64_t wall = monotonic_ms() - e->cap_dump_t0;
-    const int64_t dropped = atomic_load(&e->dropped) - e->cap_dump_drop0;
-    e->cap_dump_slot = -1;
-    e->cap_dump_len = 0;
-    const char* dir = e->cap_dump_dir;
-    e->cap_dump_dir = NULL;
-
-    mkdir(dir, 0700);
-    char path[256];
-    snprintf(path, sizeof(path), "%s/slot_%lld.wav", dir, (long long)slot);
-
-    bool ok = false;
-    FILE* fp = fopen(path, "wb");
-    if (fp != NULL)
-    {
-        uint8_t h[44];
-        cap_dump_wav_header(h, (uint32_t)n * 2);
-        int16_t* pcm = (int16_t*)malloc(sizeof(int16_t) * (size_t)(n > 0 ? n : 1));
-        if (pcm != NULL)
-        {
-            for (int i = 0; i < n; ++i)
-            {
-                float v = e->cap_dump_buf[i] * 32767.0f;
-                pcm[i] = (int16_t)(v > 32767.0f ? 32767 : (v < -32768.0f ? -32768 : v));
-            }
-            ok = fwrite(h, 1, sizeof(h), fp) == sizeof(h) &&
-                 fwrite(pcm, sizeof(int16_t), (size_t)n, fp) == (size_t)n;
-            free(pcm);
-        }
-        fclose(fp);
-    }
-    LOGI("capdump end: slot=%lld samples=%d (~%d ms) wall=%lld ms fed=%lld dropped=%lld%s",
-         (long long)slot, n, n / (WORK_RATE / 1000), (long long)wall, (long long)fed,
-         (long long)dropped, ok ? "" : " WRITE_FAILED");
-}
-#else
-static void cap_dump_slot_begin(audio_engine_t* e, int64_t slot, int align_ms)
-{
-    (void)e;
-    (void)slot;
-    (void)align_ms;
-}
-static void cap_dump_slot_append(audio_engine_t* e, const float* x, int n)
-{
-    (void)e;
-    (void)x;
-    (void)n;
-}
-static void cap_dump_slot_end(audio_engine_t* e, int64_t fed)
-{
-    (void)e;
-    (void)fed;
-}
-#endif
-
 /// 把重采样后的 12 kHz 样本按时隙窗口喂给解码会话。
 static void feed_slot(audio_engine_t* e, const float* samples, int count)
 {
@@ -648,7 +475,6 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
             atomic_store(&e->fed_samples, 0);
             atomic_store(&e->last_slot, slot);
             atomic_store(&e->capturing, true);
-            cap_dump_slot_begin(e, slot, pos);
         }
         else
         {
@@ -662,18 +488,15 @@ static void feed_slot(audio_engine_t* e, const float* samples, int count)
         const int64_t fed = atomic_load(&e->fed_samples);
         if (fed > 0)
             submit_decode(e, atomic_load(&e->last_slot));
-        cap_dump_slot_end(e, fed);
         atomic_store(&e->capturing, false);
         return;
     }
 
     ftx_session_process(e->session, samples, count);
-    cap_dump_slot_append(e, samples, count);
     int64_t fed = atomic_fetch_add(&e->fed_samples, count) + count;
     if (fed >= e->slot_samples)
     {
         submit_decode(e, atomic_load(&e->last_slot));
-        cap_dump_slot_end(e, fed);
         atomic_store(&e->capturing, false);
     }
 }
@@ -782,7 +605,6 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     atomic_store(&e->out_gen, 1);
     atomic_store(&e->last_decoded_slot, -1); // 还没解码过
     atomic_store(&e->last_decode_ms, 0);     // 还没解码过
-    e->cap_dump_slot = -1;                   // 采集录音尚未开始（见 cap_dump_*）
 
     // PTT 默认值（随后由 Kotlin 下发覆盖）
     atomic_store(&e->ptt_delay_ms, 0);
@@ -941,7 +763,6 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeDestroy(JNIEnv* env, jobject th
     pthread_mutex_destroy(&e->out_mutex);
     pthread_mutex_destroy(&e->res_mutex);
     ftx_session_free(e->session);
-    free(e->cap_dump_buf);
     free(e);
 }
 
@@ -1086,7 +907,6 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeStopCapture(JNIEnv* env, jobjec
         e->in_stream = NULL;
     }
     atomic_store(&e->capturing, false);
-    cap_dump_slot_end(e, atomic_load(&e->fed_samples));
     ring_free(&e->cap_ring);
     LOGI("capture stopped");
 }
