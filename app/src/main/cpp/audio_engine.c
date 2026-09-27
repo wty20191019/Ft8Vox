@@ -299,6 +299,13 @@ typedef struct
     // 统计
     _Atomic int64_t dropped;
     _Atomic int64_t slots_decoded;
+    /**
+     * 最近一次完成解码的时隙序号（`(utc - slot_offset) / slot_ms`）；-1=引擎创建后还没解码过。
+     *
+     * Kotlin 侧用它判断「上一时隙的解码是否已经处理完」：发射排定必须晚于它，否则会把上一
+     * 时隙的旧报文抢发出去，而真正的新报文（收尾的 `RR73`/`73`）就再没有时隙可发。
+     */
+    _Atomic int64_t last_decoded_slot;
     _Atomic int64_t fed_samples;
     _Atomic int64_t last_slot;
 
@@ -339,6 +346,8 @@ static void decode_and_store(audio_engine_t* e)
 {
     ftx_decode_result_t results[DECODE_BATCH];
     int n = ftx_session_decode(e->session, results, DECODE_BATCH);
+    // 先记「哪个时隙解码完了」（空批也要记，Kotlin 靠它判断发射能否开始），再计数
+    atomic_store(&e->last_decoded_slot, atomic_load(&e->last_slot));
     atomic_fetch_add(&e->slots_decoded, 1);
     if (n <= 0)
         return;
@@ -504,6 +513,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeCreate(
     pthread_mutex_init(&e->out_mutex, NULL);
     atomic_store(&e->tx_active, 0);
     atomic_store(&e->out_gen, 1);
+    atomic_store(&e->last_decoded_slot, -1); // 还没解码过
 
     // PTT 默认值（随后由 Kotlin 下发覆盖）
     atomic_store(&e->ptt_delay_ms, 0);
@@ -1430,7 +1440,7 @@ JNIEXPORT jlongArray JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject thiz, jlong handle)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
-    jlong values[11] = { 0 };
+    jlong values[12] = { 0 };
     if (e != NULL)
     {
         values[0] = atomic_load(&e->running) ? 1 : 0;
@@ -1444,10 +1454,11 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeGetState(JNIEnv* env, jobject t
         values[8] = atomic_load(&e->dropped);
         values[9] = atomic_load(&e->slots_decoded);
         values[10] = atomic_load(&e->vox_level_db_x10);
+        values[11] = atomic_load(&e->last_decoded_slot);
     }
-    jlongArray result = (*env)->NewLongArray(env, 11);
+    jlongArray result = (*env)->NewLongArray(env, 12);
     if (result != NULL)
-        (*env)->SetLongArrayRegion(env, result, 0, 11, values);
+        (*env)->SetLongArrayRegion(env, result, 0, 12, values);
     return result;
 }
 

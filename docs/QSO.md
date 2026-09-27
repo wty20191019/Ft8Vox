@@ -167,6 +167,13 @@
 - 发射闸门（`txTick`）：只在我方周期、时隙起始窗口 `TX_START_WINDOW_MS = 1200L` 内、且该时隙尚未发射过时触发；
   `TxScheduler.minSendNowMs`（≥ `MIN_SEND_NOW_MS = 2500L`）为「立即发射」所需最小余量。
 - 前导对齐等 `AUTO_PARITY_LEAD_MARGIN_MS = 500L`。
+- **发射排定必须晚于「上一时隙的解码处理完」**（`txTick` 的 `lastDecodedSlotIndex` 闸门）：
+  native 的 FT8 解码窗口要到时隙末尾（14.88 s）才出结果，而前导提前量（`planTx.startAtMs`）
+  在时隙边界**之前** —— 若此刻就把本时隙的报文排定，发出去的其实是上一时隙的旧报文，
+  新报文（尤其收尾的 `RR73`/`73`）就被挤到下下个周期。正在等对方回复时（`awaitingPartnerReply()`）
+  一律等到该解码处理完再发，此时 `planTx` 走「就地发射」：前导仍完整，数据起点后移
+  ≈ 前导 + 解码延迟（默认 ≈ +0.3 s DT）。收尾报文 / CQ / 手动一次性发送的文本不随后续
+  解码变化，不拦；解码停摆超过两个时隙也不拦（避免采集异常时把自己锁死）。
 - 发射音频由 native 分块写，`TX_WRITE_CHUNK_FRAMES = 4096`（约 85 ms @48 kHz，见 `app/src/main/cpp/audio_engine.c`）；
   `TX_WRITE_CHUNK_FRAMES` **在 C 源码中**，Kotlin 侧无同名常量。
 
@@ -359,7 +366,12 @@
 ### 4.7 落库与收口
 
 - `applyQsoProgress` 把状态机进度同步到 UI、写日志并收口第 2 层调度；QSO 结束时若还有最后一条 `RR73`/`73` 要发，
-  置 `pendingAutoFinish`，等它发完在 `txTick` 里收口（否则下一个动作会覆盖状态机、丢掉最后一条）。
+  置 `pendingAutoFinish`，等它**真正发出去**后在 `txTick` 里收口（否则下一个动作会覆盖状态机、丢掉最后一条）。
+  期间 `pollOnce` 也不让第 2 层启动新 QSO（`qso.txText != null` 时跳过 `runAutoProgram`）。
+- `QsoEngine.onTransmitted(sentText)` 只有在「刚发出去的就是当前应发报文」时才在 DONE/FAILED 下清空 `txText`：
+  上一时隙抢发出去的旧报文（如重复的 `R 报告`）发完不得清掉还没发出去的 `73`/`RR73`。
+  真机现象（2026-09-27 双机 logcat）：「对方给我 RR73，我不回 73，反而起 CQ」＝
+  ① `txTick` 用旧报文抢占了该时隙；② 旧报文发完时清空了收尾的 `73`；③ 第 2 层 `SendCq` 又覆盖了它。
 - `QsoLogEntry` → `QsoEntity`（Room 表 `qso`）立即写库：`theirCall`/`theirGrid`、`myCall`/`myGrid`（快照）、
   `utcMs`（完成）/`startUtcMs`（起始）、`band`/`freqHz`/`mode`、`reportSent`/`reportReceived`、`qslRcvd`/`lotwRcvd`、
   `comment`（`Distance: xxx km, Qso by Ft8Vox`）。

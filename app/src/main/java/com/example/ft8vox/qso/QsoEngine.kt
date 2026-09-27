@@ -191,13 +191,20 @@ class QsoEngine {
     }
 
     /**
-     * 通知状态机：本轮 [QsoProgress.txText] 已实际发射完毕。
+     * 通知状态机：某一轮报文已实际发射完毕。
      *
-     * 若 QSO 已结束（DONE/FAILED），清空 txText，避免无限重发。
+     * [sentText] 为**实际发出去**的那条报文文本。真机上存在这样的时序：本时隙的发射在前导
+     * 提前量到点时就被排定，而上一时隙的解码要等到时隙末尾才处理完；于是 ``qso.txText``
+     * 已经推进成收尾的 `73`/`RR73`，**真正在播的却还是旧报文**（如 `R-07`）。此时若照旧
+     * 在 DONE 下清空 `txText`，收尾报文就再也没有时隙可发 —— 真机现象是「对方给我 RR73
+     * 后我没有回 73，反而开始发 CQ」。
+     *
+     * 所以只有「刚发出去的这一条就是当前应发报文」才允许清空；发的是旧报文时**保留**，
+     * 由第 2 层在下一次我方时隙把它发出去（见 `SessionViewModel.txTick`）。
      */
-    fun onTransmitted() {
+    fun onTransmitted(sentText: String? = null) {
         if (state == QsoState.DONE || state == QsoState.FAILED) {
-            txText = null
+            if (sentText == null || txText == null || sentText == txText) txText = null
         }
         // Tx2 实际发出后快照，供 Tx3 的 R 报告复用（「每次重测最新」⇒ 重发 Tx2 会刷新）
         if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent

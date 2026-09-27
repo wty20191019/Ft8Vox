@@ -248,9 +248,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * QSO 已完成、但最后一条（RR73/73）还没发出去。
      *
-     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失。
+     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失；
+     * 期间 `pollOnce` 也不让第 2 层启动新 QSO（见那里的「收尾报文待发」分支）。
      */
     private var pendingAutoFinish = false
+
+    /**
+     * 最近一次**已处理**的解码所属时隙序号（native `lastDecodedSlot`；与 `planTx` 的
+     * `targetSlotIndex` 同一坐标系，-1=还没解码过）。见 [txTick] 的「先处理完上一时隙解码」。
+     */
+    private var lastDecodedSlotIndex = -1L
+
+    /**
+     * 最近一次处理解码批次的时间（UTC ms）。
+     *
+     * [txTick] 只在解码还在正常推进（最近两个时隙内）时才拦发射，避免采集/解码异常时
+     * 反而把自己锁死。
+     */
+    private var lastDecodeAtMs = 0L
 
     /**
      * 本段会话内已落库的呼号（会话内去重，见方案 §4.2）。
@@ -1217,6 +1232,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // 3) 每完成一个接收时隙，交给 QSO 状态机或自动程序
             if (s.slotsDecoded > lastSlotsDecoded) {
                 lastSlotsDecoded = s.slotsDecoded
+                // 记下「已处理到哪个时隙的解码」：txTick 靠它避免用上一时隙的旧报文抢发本时隙
+                lastDecodedSlotIndex = s.lastDecodedSlot
+                lastDecodeAtMs = s.utcNowMs
                 val st = _status.value
                 val batch = pendingDecodes.toList()
                 pendingDecodes = mutableListOf()
@@ -1275,8 +1293,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                 maybeGiveUpTarget(p, incoming, s.utcNowMs)
                             }
                         }
-                    } else if (st.txEnabled) {
+                    } else if (st.txEnabled && st.qso.txText == null) {
                         runAutoProgram(incoming, s.utcNowMs)
+                    } else if (st.txEnabled) {
+                        // 「QSO 已结束、收尾报文（RR73/73）还没真正发出去」：本时隙不启动新 QSO，
+                        // 否则 startCq/应答会 reset 引擎并把 qso.txText 覆盖成 CQ，这条收尾报文
+                        // 就永远发不出去了（真机现象：对方给我 RR73，我没回 73）。
+                        Log.i(TAG_QSO, "收尾报文待发 ${st.qso.txText}：本时隙不启动新 QSO")
                     }
                 }
             }
@@ -1296,8 +1319,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 把状态机进度同步到 UI 状态、写入日志，并收口第 2 层调度。
      *
      * QSO 结束时（成功/作废）：
-     * - 还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它发完在 [txTick] 里收口；
-     *   否则第 2 层下一个动作（如 `startCq`）会覆盖状态机，最后一条就丢了。
+     * - 还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它**真正发出去**后在 [txTick]
+     *   里收口；期间第 2 层既不会 `onQsoFinished`，`pollOnce` 也不会启动新 QSO —— 否则
+     *   `startCq` 会 reset 引擎把这条收尾报文覆盖掉（真机现象：收到 RR73 不回 73）。
      * - 没有收尾报文 → 立刻通知第 2 层（[AutoScheduler.onQsoFinished]）决定下一步。
      * - 发送总开关关闭时不通知第 2 层（自动程序已停）。
      *
@@ -1537,6 +1561,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun workedForAutoProgram(): WorkedIndex =
         WorkedIndex(calls = workedCallsOnBand(_status.value.band))
 
+    /**
+     * 当前 QSO 是否在「等对方的回复」。
+     *
+     * 已发 CQ 等回应者（`awaitingResponders`）不算：那条 CQ 文本不随后续解码变化。
+     * 见 [txTick]：这种状态下本时隙的报文随时可能被上一时隙的解码改写，不能提前抢发。
+     */
+    private fun awaitingPartnerReply(): Boolean {
+        val q = _status.value.qso
+        return q.active && !q.awaitingResponders
+    }
+
     /** 把频率钳制到当前解码频段内。 */
     private fun clampFreq(hz: Int): Int {
         val d = latestSettings.decode
@@ -1561,18 +1596,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             } else {
-                qsoEngine.onTransmitted()
+                // 实际发出去的文本：本时隙发射可能在前导提前量到点时就用旧报文排定了，
+                // 而上一时隙的解码（可能把 qso 推进到收尾的 73/RR73）随后才处理 ——
+                // 把真实文本交给引擎，它就不会把还没发出去的收尾报文误清掉。
+                val sentText = _status.value.lastTxText
+                qsoEngine.onTransmitted(sentText)
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
-                if (finished) {
-                    // 最后一条（RR73/73）已发完：只解除「目标时隙固定」，
+                // 收尾报文（RR73/73）**还没真正发出去** → 保留武装与周期，等下一个我方时隙。
+                val finalPending = finished && p.txText != null
+                if (finished && !finalPending) {
+                    // 最后一条已发完 / 本就没有收尾报文：只解除「目标时隙固定」，
                     // **保留当前发射周期**——下一段 QSO 沿用同一周期。
                     // 若在这里把周期清掉，下一段会按当前时间重锁，导致偶/奇来回跳时隙。
                     pinnedTxParity = null
                 }
-                _status.update { it.copy(qso = p, txArmed = if (finished) false else it.txArmed) }
-                // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
-                if (finished && pendingAutoFinish) {
+                _status.update {
+                    it.copy(qso = p, txArmed = if (finished && !finalPending) false else it.txArmed)
+                }
+                if (finalPending) {
+                    Log.i(TAG_QSO, "收尾报文未发完：${p.txText}，保持发射、暂不启动新 QSO")
+                } else if (finished && pendingAutoFinish) {
+                    // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
                     pendingAutoFinish = false
                     runAutoAction(scheduler.onQsoFinished(AudioEngine.utcNowMs()))
                 }
@@ -1604,6 +1649,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
 
         if (plan.targetSlotIndex == lastTxSlotIndex) return
+
+        // 「正在等对方回复」时，**不能**用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于
+        // 上一时隙的解码（如 `WAIT_RR73` 收到 RR73 → 要发 73）。真机时序是：解码要等时隙末尾
+        // 才出结果，比前导提前量（`plan.startAtMs`）晚 —— 抢发就会把重复的旧报文发出去，
+        // 而新报文（尤其收尾的 73）被挤到下下个周期，看起来就是「对方给我 RR73 我没回 73」。
+        //
+        // 等到该解码处理完再发：此时 `planTx` 走「就地发射」路径，前导仍然完整，只是数据起点
+        // 后移几十毫秒（对端 DT 偏移很小）。收尾报文 / CQ / 手动一次性发送的文本不会被后续解码
+        // 改写，不拦；解码停摆（超过两个时隙没推进）时也不拦，免得把自己锁死。
+        if (awaitingPartnerReply() &&
+            lastDecodedSlotIndex < plan.targetSlotIndex - 1 &&
+            now - lastDecodeAtMs <= slotMs * 2
+        ) {
+            return
+        }
+
         if (now < plan.startAtMs) return
 
         // 已晚于计划起点：用缩水的前导补偿，补偿不够则放弃本时隙

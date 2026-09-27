@@ -75,6 +75,36 @@ class QsoEngineTest {
         assertEquals(-12, log.reportReceived)
     }
 
+    /**
+     * 真机回归（2026-09-27）：**收到对方 `RR73` 后必须还能回 `73`**。
+     *
+     * 真机时序：本时隙的发射在前导提前量到点时就用「已知的旧报文」排定了，而上一时隙的
+     * 解码（把状态推进到收尾 `73`）随后才处理。于是「刚发完的」是旧报文，`onTransmitted`
+     * 若照旧在 DONE 下清空 `txText`，这条 `73` 就永远发不出去 —— 真机现象：对方给我
+     * RR73，我不回 73，下一个时隙反而起 CQ。
+     */
+    @Test
+    fun keepsFinalTextWhenStaleMessageWasTransmitted() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        q.onTransmitted("GJ0KYZ F4FSY JN25") // 网格已发出
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertEquals("GJ0KYZ F4FSY R-07", s1.txText)
+        q.onTransmitted("GJ0KYZ F4FSY R-07") // R 报告已发出
+
+        // 对方 RR73 到手（本时隙实际在播的仍是上一时隙抢发的 R-07）
+        val s2b = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
+        assertEquals(QsoState.DONE, s2b.state)
+        assertEquals("GJ0KYZ F4FSY 73", s2b.txText)
+        assertNotNull(q.consumeCompleted())
+
+        q.onTransmitted("GJ0KYZ F4FSY R-07") // 旧报文发完：不得清掉收尾报文
+        assertEquals("收尾报文不能被旧报文的「发完」清掉", "GJ0KYZ F4FSY 73", q.progress().txText)
+
+        q.onTransmitted("GJ0KYZ F4FSY 73") // 73 真正发出后才清空，不再重发
+        assertNull(q.progress().txText)
+    }
+
     @Test
     fun cqPhaseWaitsForSchedulerInsteadOfPickingFirst() {
         val q = engine()

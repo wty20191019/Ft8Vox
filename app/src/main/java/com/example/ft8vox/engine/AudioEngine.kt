@@ -30,6 +30,13 @@ data class AudioState(
     val utcNowMs: Long,
     val droppedSamples: Long,
     val slotsDecoded: Long,
+    /**
+     * 最近一次**完成解码**的时隙序号（`(utc - slotOffset) / slotMs`；-1=还没解码过）。
+     *
+     * 与 `planTx` 的 `targetSlotIndex` 同一坐标系；用于「上一时隙的解码必须已处理完，
+     * 才能排定本时隙的发射」（见 `SessionViewModel.txTick`）。
+     */
+    val lastDecodedSlot: Long,
     /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用，不参与任何判定。 */
     val voxLevelDb: Float,
 ) {
@@ -250,6 +257,7 @@ object AudioEngine {
             utcNowMs = v[7],
             droppedSamples = v[8],
             slotsDecoded = v[9],
+            lastDecodedSlot = if (v.size > 11) v[11] else -1L,
             voxLevelDb = v[10] / 10f,
         )
     }
