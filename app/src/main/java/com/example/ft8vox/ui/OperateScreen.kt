@@ -60,7 +60,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.SessionService
 import com.example.ft8vox.data.settings.AppSettings
-import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
@@ -420,13 +419,6 @@ fun OperateScreen(
     }
 }
 
-/** 水位图高度档位 → 屏高比例（docs/UI.md §2.3：约 0.30）。 */
-fun WaterfallHeight.screenFraction(): Float = when (this) {
-    WaterfallHeight.COMPACT -> 0.24f
-    WaterfallHeight.NORMAL -> 0.30f
-    WaterfallHeight.TALL -> 0.38f
-}
-
 /**
  * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + TX 读数。
  */
@@ -439,7 +431,7 @@ private fun WaterfallBox(
     onLongPress: (Int) -> Unit,
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val wfHeight: Dp = (screenHeight * settings.waterfallHeight.screenFraction()).coerceAtLeast(150.dp)
+    val wfHeight: Dp = (screenHeight * settings.waterfallHeight.fraction).coerceAtLeast(150.dp)
 
     Box(
         modifier = Modifier

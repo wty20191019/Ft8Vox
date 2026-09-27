@@ -8,31 +8,56 @@ import org.junit.Test
 class DecodeSettingsTest {
 
     @Test
-    fun presetFastIsCheaperThanStandard() {
-        val standard = DecodeSettings()
-        val fast = standard.applyPreset(DecodePreset.FAST)
-        assertTrue(fast.timeOsr < standard.timeOsr || fast.freqOsr < standard.freqOsr)
-        assertTrue(fast.ldpcIterations < standard.ldpcIterations)
-        assertTrue(fast.maxCandidates < standard.maxCandidates)
-        assertTrue(fast.minScore >= standard.minScore)
+    fun fastPresetIsExactlyTheDefaultSettings() {
+        // 「快」＝构造函数默认值：两处不许漂移；用户点名的三项就是 迭代 10 / 候选 80 / 单时隙上限 50
+        val applied = DecodeSettings(ldpcIterations = 40, maxCandidates = 200, maxDecoded = 90)
+            .applyPreset(DecodePreset.FAST)
+        assertEquals(DecodeSettings(), applied)
+        assertEquals(10, applied.ldpcIterations)
+        assertEquals(80, applied.maxCandidates)
+        assertEquals(50, applied.maxDecoded)
     }
 
     @Test
-    fun presetDeepIsHeavierThanStandard() {
-        val standard = DecodeSettings()
-        val deep = standard.applyPreset(DecodePreset.DEEP)
-        assertTrue(deep.timeOsr >= standard.timeOsr)
-        assertTrue(deep.freqOsr >= standard.freqOsr)
-        assertTrue(deep.ldpcIterations > standard.ldpcIterations)
-        assertTrue(deep.maxCandidates > standard.maxCandidates)
-        assertTrue(deep.maxDecoded > standard.maxDecoded)
-        assertTrue(deep.minScore <= standard.minScore)
+    fun defaultSettingsIsTheFastPreset() {
+        val s = AppSettings()
+        assertEquals(DecodePreset.FAST, s.decodePreset)
+        assertEquals(DecodeSettings(), s.decode)
+    }
+
+    @Test
+    fun decodePresetIsDerivedFromValues() {
+        // 手改任一项 → 自定义；只改频率范围（不随预设变化）→ 仍是「快」
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(minScore = 9)).decodePreset,
+        )
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(maxDecoded = 90)).decodePreset,
+        )
+        assertEquals(
+            DecodePreset.FAST,
+            AppSettings(decode = DecodeSettings(fMinHz = 300, fMaxHz = 2700)).decodePreset,
+        )
+    }
+
+    @Test
+    fun waterfallHeightsAreScreenPercentagesWithCompactDefault() {
+        // 默认 = 原来的「紧凑」＝ 24% 屏高
+        assertEquals(WaterfallHeight.PCT24, AppSettings().waterfallHeight)
+        assertEquals(0.24f, WaterfallHeight.PCT24.fraction, 0.0001f)
+        assertEquals(listOf("15%", "24%", "45%"), WaterfallHeight.entries.map { it.label })
+        assertEquals(
+            listOf(0.15f, 0.24f, 0.45f),
+            WaterfallHeight.entries.map { it.fraction },
+        )
     }
 
     @Test
     fun presetsDoNotTouchFrequencyRange() {
         val base = DecodeSettings(fMinHz = 300, fMaxHz = 2700)
-        for (p in listOf(DecodePreset.FAST, DecodePreset.STANDARD, DecodePreset.DEEP)) {
+        for (p in DecodePreset.entries) {
             val applied = base.applyPreset(p)
             assertEquals(300, applied.fMinHz)
             assertEquals(2700, applied.fMaxHz)

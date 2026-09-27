@@ -299,19 +299,17 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "预设一键改下面 6 项（时间/频率 OSR、最低得分、LDPC 迭代、候选上限、" +
-                    "单时隙上限）；频率范围不随预设变化。单项手改后显示「自定义」。" +
-                    "OSR 与频率范围需重开接收生效，其余即时生效。",
+                subtitle = "预设「快」＝下面的默认值（迭代 10 / 候选 80 / 单时隙上限 50）。" +
+                    "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
+                    "「快」按钮可一键恢复这套默认值。时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
-                    add(DecodePreset.STANDARD)
-                    add(DecodePreset.DEEP)
                     if (app.decodePreset == DecodePreset.CUSTOM) add(DecodePreset.CUSTOM)
                 },
                 selected = app.decodePreset,
                 onSelect = { p ->
                     if (p != DecodePreset.CUSTOM) {
-                        settings.update { s -> s.copy(decode = s.decode.applyPreset(p), decodePreset = p) }
+                        settings.update { s -> s.copy(decode = s.decode.applyPreset(p)) }
                     }
                 },
                 label = { it.label },
@@ -534,7 +532,8 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "瀑布高度",
-                subtitle = "改动回到操作页立即生效（占用解码列表的可视高度）",
+                subtitle = "按屏高百分比：15% / 24%（默认）/ 45%，改动回到操作页立即生效" +
+                    "（占用解码列表的可视高度；实际高度下限 150dp，很矮的屏幕上 15% 会被抬到 150dp）",
                 options = WaterfallHeight.entries,
                 selected = app.waterfallHeight,
                 onSelect = { v -> settings.update { it.copy(waterfallHeight = v) } },
@@ -548,7 +547,7 @@ fun SettingsScreen(
                 onClick = {
                     settings.update {
                         it.copy(
-                            waterfallHeight = WaterfallHeight.NORMAL,
+                            waterfallHeight = WaterfallHeight.PCT24,
                             fontSize = FontSize.MEDIUM,
                         )
                     }
@@ -1026,11 +1025,9 @@ private fun VoxLevelRow(status: ReceiverStatus) {
     }
 }
 
-/** 改一项高级解码参数：自动钳制并标记为「自定义」预设。 */
+/** 改一项高级解码参数：自动钳制（预设显示由 `AppSettings.decodePreset` 反推，无需手工标记）。 */
 private fun SettingsViewModel.updateDecode(transform: (DecodeSettings) -> DecodeSettings) {
-    update { s ->
-        s.copy(decode = transform(s.decode).clamped(), decodePreset = DecodePreset.CUSTOM)
-    }
+    update { s -> s.copy(decode = transform(s.decode).clamped()) }
 }
 
 @Composable

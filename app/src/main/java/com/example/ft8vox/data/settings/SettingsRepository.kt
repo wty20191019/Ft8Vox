@@ -126,7 +126,7 @@ private object Keys {
     val fontSize = stringPreferencesKey("font_size")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
-    val decodePreset = stringPreferencesKey("decode_preset")
+    // 解码预设不再持久化：改由 `AppSettings.decodePreset` 从解码参数反推（旧 `decode_preset` 键不再读写）
     val decodeTimeOsr = intPreferencesKey("decode_time_osr")
     val decodeFreqOsr = intPreferencesKey("decode_freq_osr")
     val decodeMinScore = intPreferencesKey("decode_min_score")
@@ -236,7 +236,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         fontSize = enumOr(Keys.fontSize, defaults.fontSize),
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
-        decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
         decode = DecodeSettings(
             timeOsr = this[Keys.decodeTimeOsr] ?: defaults.decode.timeOsr,
             freqOsr = this[Keys.decodeFreqOsr] ?: defaults.decode.freqOsr,
@@ -296,7 +295,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.fontSize] = fontSize.name
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
-    prefs[Keys.decodePreset] = decodePreset.name
     prefs[Keys.decodeTimeOsr] = decode.timeOsr
     prefs[Keys.decodeFreqOsr] = decode.freqOsr
     prefs[Keys.decodeMinScore] = decode.minScore

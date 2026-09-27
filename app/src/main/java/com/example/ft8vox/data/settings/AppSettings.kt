@@ -39,18 +39,30 @@ enum class FontSize(val label: String, val scale: Float) {
     LARGE("大", 1.15f),
 }
 
-/** 瀑布高度档位。 */
-enum class WaterfallHeight(val label: String, val heightDp: Int) {
-    COMPACT("紧凑", 120),
-    NORMAL("标准", 180),
-    TALL("高", 260),
+/**
+ * 瀑布高度档位（**按屏高百分比**）。
+ *
+ * 实际高度 = 屏高 × [fraction]，最小 150dp（很矮的屏幕上 15% 会被 150dp 下限抬起）。
+ * 默认 [PCT24] = 24%，即原来「紧凑」档的外观（操作页 `WaterfallView` 的高度）。
+ *
+ * 枚举名刻意用 `PCT15/PCT24/PCT45`（**不用 SHORT/TALL 之类的语义名**）：档位按百分比就是
+ * 本源，且旧版本在 DataStore 里留下的 `waterfall_height` 值（`COMPACT`/`NORMAL`/`TALL`/`SHORT`…）
+ * 一律认不出 → 回落默认档，不会被旧名字意外「复活」成别的高度。
+ */
+enum class WaterfallHeight(val label: String, val fraction: Float) {
+    PCT15("15%", 0.15f),
+    PCT24("24%", 0.24f),
+    PCT45("45%", 0.45f),
 }
 
-/** 解码预设档位。[CUSTOM] 表示用户手动改过高级参数，不再是任何预设。 */
+/**
+ * 解码预设档位。
+ *
+ * **只有一个真预设 [FAST]（默认）**：原「标准 / 深」两档已删除 —— 想要更全的解码时
+ * 逐项手改下面 6 个高级参数（改后会自动显示 [CUSTOM]）。
+ */
 enum class DecodePreset(val label: String) {
     FAST("快"),
-    STANDARD("标准"),
-    DEEP("深"),
     CUSTOM("自定义"),
 }
 
@@ -77,35 +89,43 @@ fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAI
 /**
  * 解码参数（对应 native 的可调项）。
  *
+ * **构造函数的默认值就是「快」预设**（`DecodePreset.FAST`，由单测锁定，两处不许漂移）：
+ * 迭代 10 / 候选 80 / 单时隙上限 50。想更全就逐项调大（会显示「自定义」）。
+ *
  * - [timeOsr]/[freqOsr]/[fMinHz]/[fMaxHz] 属于 `monitor_config_t`，改动需**重建引擎**；
  * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded] 每次解码读取，**热生效**。
  */
 data class DecodeSettings(
-    val timeOsr: Int = 2,
-    val freqOsr: Int = 2,
-    val minScore: Int = 10,
-    val ldpcIterations: Int = 25,
-    val maxCandidates: Int = 140,
+    val timeOsr: Int = 1,
+    val freqOsr: Int = 1,
+    val minScore: Int = 12,
+    val ldpcIterations: Int = 10,
+    val maxCandidates: Int = 80,
     val maxDecoded: Int = 50,
     val fMinHz: Int = 200,
     val fMaxHz: Int = 3000,
 ) {
     /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {
-        DecodePreset.FAST -> copy(
+        // 「快」＝构造函数默认值（改这里必须同步改上面的默认值，单测会卡住漂移）
+        DecodePreset.FAST -> DecodeSettings(
             timeOsr = 1, freqOsr = 1, minScore = 12,
-            ldpcIterations = 10, maxCandidates = 80, maxDecoded = 30,
-        )
-        DecodePreset.STANDARD -> copy(
-            timeOsr = 2, freqOsr = 2, minScore = 10,
-            ldpcIterations = 25, maxCandidates = 140, maxDecoded = 50,
-        )
-        DecodePreset.DEEP -> copy(
-            timeOsr = 4, freqOsr = 4, minScore = 8,
-            ldpcIterations = 50, maxCandidates = 250, maxDecoded = 80,
+            ldpcIterations = 10, maxCandidates = 80, maxDecoded = 50,
+            fMinHz = fMinHz, fMaxHz = fMaxHz,
         )
         DecodePreset.CUSTOM -> this
     }
+
+    /**
+     * 除**频率范围**（[fMinHz]/[fMaxHz] 不随预设变化）外，其余各项是否与 [other] 相同。
+     *
+     * 用于反推「当前处于哪个预设」（[AppSettings.decodePreset]）——只有这几项由预设决定，
+     * 因此只改频率范围不会被判成「自定义」。
+     */
+    fun samePresetValues(other: DecodeSettings): Boolean =
+        timeOsr == other.timeOsr && freqOsr == other.freqOsr && minScore == other.minScore &&
+            ldpcIterations == other.ldpcIterations && maxCandidates == other.maxCandidates &&
+            maxDecoded == other.maxDecoded
 
     /**
      * 把各字段钳制到允许范围。
@@ -267,13 +287,21 @@ data class AppSettings(
     val fontSize: FontSize = FontSize.MEDIUM,
 
     // ---- 界面/音频 ----
-    val waterfallHeight: WaterfallHeight = WaterfallHeight.NORMAL,
+    val waterfallHeight: WaterfallHeight = WaterfallHeight.PCT24,
     val sampleRate: SampleRatePref = SampleRatePref.AUTO,
 
     // ---- 解码参数 ----
-    val decodePreset: DecodePreset = DecodePreset.STANDARD,
     val decode: DecodeSettings = DecodeSettings(),
 ) {
+    /**
+     * 当前解码预设：**由 [decode] 反推**（不再单独持久化，避免与新默认值漂移）。
+     *
+     * 只有 [DecodePreset.FAST] 一个真预设（＝[DecodeSettings] 的默认值，即「快」）；
+     * 6 项高级参数被手改过就是 [DecodePreset.CUSTOM]；只改频率范围不算手改（频率范围不随预设变化）。
+     */
+    val decodePreset: DecodePreset
+        get() = if (decode.samePresetValues(DecodeSettings())) DecodePreset.FAST else DecodePreset.CUSTOM
+
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
