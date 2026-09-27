@@ -170,10 +170,12 @@
 - **发射排定必须晚于「上一时隙的解码处理完」**（`txTick` 的 `lastDecodedSlotIndex` 闸门）：
   native 的 FT8 解码窗口要到时隙末尾（14.88 s）才出结果，而前导提前量（`planTx.startAtMs`）
   在时隙边界**之前** —— 若此刻就把本时隙的报文排定，发出去的其实是上一时隙的旧报文，
-  新报文（尤其收尾的 `RR73`/`73`）就被挤到下下个周期。正在等对方回复时（`awaitingPartnerReply()`）
-  一律等到该解码处理完再发，此时 `planTx` 走「就地发射」：前导仍完整，数据起点后移
-  ≈ 前导 + 解码延迟（默认 ≈ +0.3 s DT）。收尾报文 / CQ / 手动一次性发送的文本不随后续
-  解码变化，不拦；解码停摆超过两个时隙也不拦（避免采集异常时把自己锁死）。
+  新报文就被挤到下下个周期（真机两例：「对方给我 RR73 我没回 73」、「别人呼叫我，我却在发 CQ」）。
+  **QSO 进行中**（`txTextAwaitsDecode()`，含「已发 CQ、等回应者」）一律等到该解码处理完再发，
+  此时 `planTx` 走「就地发射」：前导仍完整，数据起点后移 ≈ 前导 + 解码延迟（默认 ≈ +0.3 s DT）；
+  解码若改判了报文，`startCqInternal`/`answerInternal`/`startAutoTarget` 会把 `lastTxSlotIndex`
+  复位，同一时隙仍发得出去。收尾报文 / 手动一次性发送的文本不随后续解码变化，不拦；
+  解码停摆超过两个时隙也不拦（避免采集异常时把自己锁死）。
 - 发射音频由 native 分块写，`TX_WRITE_CHUNK_FRAMES = 4096`（约 85 ms @48 kHz，见 `app/src/main/cpp/audio_engine.c`）；
   `TX_WRITE_CHUNK_FRAMES` **在 C 源码中**，Kotlin 侧无同名常量。
 

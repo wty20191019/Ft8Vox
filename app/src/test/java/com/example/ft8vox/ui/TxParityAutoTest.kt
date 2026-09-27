@@ -1,7 +1,9 @@
 package com.example.ft8vox.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** 自动发射周期选择（按手机 UTC 时间取下一个来得及的时隙）的 JVM 单测。 */
@@ -190,8 +192,51 @@ class TxParityAutoTest {
         assertEquals(minute + 2 * slot, plan.targetStartMs)
     }
 
-    // ---- 回归：QSO 完成后不得「跳时隙」 ----
+    // ---- 回归：发射排定必须晚于「上一时隙的解码处理完」（抢发会把新报文挤掉） ----
 
+    @Test
+    fun waitsForPreviousSlotDecodeBeforePlanning() {
+        // 目标时隙（偶）边界前 250 ms —— 正是前导提前量该启动的时刻
+        val now = minute + 2 * slot - 250L
+        val plan = planTx(now, slot, txParity = 0, preambleMs = 250L)
+        assertEquals(minute / slot + 2, plan.targetSlotIndex)
+        // 上一时隙（targetSlotIndex - 1）的解码还没处理到 → 必须停下来等
+        assertTrue(
+            txShouldWaitForDecode(
+                targetSlotIndex = plan.targetSlotIndex,
+                lastDecodedSlotIndex = plan.targetSlotIndex - 2,
+                nowMs = now,
+                lastDecodeAtMs = now - 3_000L,
+                slotMs = slot,
+            ),
+        )
+        // 该解码已到手 → 放行（随后 planTx 走「就地发射」，报文仍落在目标时隙）
+        assertFalse(
+            txShouldWaitForDecode(
+                targetSlotIndex = plan.targetSlotIndex,
+                lastDecodedSlotIndex = plan.targetSlotIndex - 1,
+                nowMs = now,
+                lastDecodeAtMs = now - 300L,
+                slotMs = slot,
+            ),
+        )
+    }
+
+    @Test
+    fun stopsWaitingWhenDecodeStalls() {
+        // 解码停摆超过两个时隙：不再拦 —— 宁可发旧报文，也不能一条都不发
+        assertFalse(
+            txShouldWaitForDecode(
+                targetSlotIndex = 12L,
+                lastDecodedSlotIndex = 3L,
+                nowMs = 12 * slot,
+                lastDecodeAtMs = 12 * slot - 2 * slot - 1L,
+                slotMs = slot,
+            ),
+        )
+    }
+
+    // ---- 回归：QSO 完成后不得「跳时隙」 ----
     @Test
     fun keepsLockedParityAfterQsoCompletes() {
         // 时隙 10（偶）刚开头：按时间重锁会算出「下一个」是奇

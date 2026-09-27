@@ -1562,15 +1562,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         WorkedIndex(calls = workedCallsOnBand(_status.value.band))
 
     /**
-     * 当前 QSO 是否在「等对方的回复」。
+     * 当前待发报文是否要「等刚结束那个时隙的解码」才能定下来。
      *
-     * 已发 CQ 等回应者（`awaitingResponders`）不算：那条 CQ 文本不随后续解码变化。
-     * 见 [txTick]：这种状态下本时隙的报文随时可能被上一时隙的解码改写，不能提前抢发。
+     * 只要 QSO 状态机还在进行中（`active`），本时隙发什么就要等这一批解码：
+     * - **等对方回复**：解码可能推进/收尾（如 `WAIT_RR73` 收到 RR73 → 要发 73）；
+     * - **已发 CQ、等回应者**：解码里可能有人应答或定向呼叫我，此时应**应答**而不是再发一遍 CQ
+     *   （真机现象：对端在 `1` 时隙呼叫我，我在 `0` 时隙仍发 CQ，隔一个周期才应答）。
+     *
+     * 反之，收尾报文（DONE 下的 RR73/73）与手动一次性发送的文本不随后续解码变化，不拦。
+     * 见 [txTick]：拦的只是「提前抢发」，解码到手后照发。
      */
-    private fun awaitingPartnerReply(): Boolean {
-        val q = _status.value.qso
-        return q.active && !q.awaitingResponders
-    }
+    private fun txTextAwaitsDecode(): Boolean = _status.value.qso.active
 
     /** 把频率钳制到当前解码频段内。 */
     private fun clampFreq(hz: Int): Int {
@@ -1650,17 +1652,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         if (plan.targetSlotIndex == lastTxSlotIndex) return
 
-        // 「正在等对方回复」时，**不能**用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于
-        // 上一时隙的解码（如 `WAIT_RR73` 收到 RR73 → 要发 73）。真机时序是：解码要等时隙末尾
-        // 才出结果，比前导提前量（`plan.startAtMs`）晚 —— 抢发就会把重复的旧报文发出去，
-        // 而新报文（尤其收尾的 73）被挤到下下个周期，看起来就是「对方给我 RR73 我没回 73」。
+        // **QSO 进行中**时，不能用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于上一时隙
+        // 的解码 —— ① 等对方回复时可能推进/收尾（`WAIT_RR73` 收到 RR73 → 要发 73）；
+        // ② 已发 CQ 等回应者时可能有人呼叫我（应改判为应答，而不是再发一遍 CQ）。
+        // 真机时序是：解码要等时隙末尾才出结果，比前导提前量（`plan.startAtMs`）晚；抢发会让
+        // 旧报文占据该时隙（阻塞写要播十几秒，期间无法改发），新报文被挤到下下个周期——
+        // 现象就是「对方给我 RR73 我没回 73」与「别人呼叫我，我却还在发 CQ」。
         //
         // 等到该解码处理完再发：此时 `planTx` 走「就地发射」路径，前导仍然完整，只是数据起点
-        // 后移几十毫秒（对端 DT 偏移很小）。收尾报文 / CQ / 手动一次性发送的文本不会被后续解码
-        // 改写，不拦；解码停摆（超过两个时隙没推进）时也不拦，免得把自己锁死。
-        if (awaitingPartnerReply() &&
-            lastDecodedSlotIndex < plan.targetSlotIndex - 1 &&
-            now - lastDecodeAtMs <= slotMs * 2
+        // 后移几十毫秒（对端 DT 偏移很小）；若解码改判了报文，`startCqInternal`/`answerInternal`/
+        // `startAutoTarget` 会把 `lastTxSlotIndex` 复位，同一时隙仍能发出去。
+        // 收尾报文 / 手动一次性发送的文本不随后续解码变化，不拦；解码停摆（超过两个时隙没推进）
+        // 时也不拦，免得把自己锁死。
+        if (txTextAwaitsDecode() &&
+            txShouldWaitForDecode(
+                targetSlotIndex = plan.targetSlotIndex,
+                lastDecodedSlotIndex = lastDecodedSlotIndex,
+                nowMs = now,
+                lastDecodeAtMs = lastDecodeAtMs,
+                slotMs = slotMs,
+            )
         ) {
             return
         }
@@ -1948,6 +1959,28 @@ internal fun planTx(
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
 internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
+
+/**
+ * 「发射排定」是否要停下来等上一时隙的解码（`txTick` 的闸门；纯函数便于单测）。
+ *
+ * QSO 进行中时，本时隙该发什么取决于**上一时隙**（[targetSlotIndex] − 1）的解码：它可能把
+ * 状态推进/收尾（`WAIT_RR73` 收到 RR73 → 要发 73），也可能带来「有人呼叫我」而该改判为应答
+ * （而不是再发一遍 CQ）。native 的 FT8 解码要到时隙末尾（14.88 s）才出结果，比前导提前量
+ * （`planTx.startAtMs`）晚，所以必须等：抢发出去的会是上一时隙的旧报文，而且该时隙已被占用
+ * （阻塞写要播十几秒，期间无法改发），新报文只能再等一个周期 —— 真机现象就是「对方给我 RR73
+ * 我没回 73」与「别人呼叫我，我却还在发 CQ」。
+ *
+ * [lastDecodeAtMs] 是健康判据：解码停摆（超过两个时隙没推进）时**不再拦**，避免采集/解码异常
+ * 时把自己锁死（宁可发旧报文，也不能一条都不发）。
+ */
+internal fun txShouldWaitForDecode(
+    targetSlotIndex: Long,
+    lastDecodedSlotIndex: Long,
+    nowMs: Long,
+    lastDecodeAtMs: Long,
+    slotMs: Long,
+): Boolean =
+    lastDecodedSlotIndex < targetSlotIndex - 1 && nowMs - lastDecodeAtMs <= slotMs * 2
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
