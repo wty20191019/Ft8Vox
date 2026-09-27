@@ -454,6 +454,7 @@ private fun WaterfallBox(
             onMoveTxFreq = onMoveTxFreq,
             modifier = Modifier.fillMaxSize(),
             txing = status.txing,
+            occupiedHz = status.protocol.occupiedHz,
             onLongPress = onLongPress,
         )
 
