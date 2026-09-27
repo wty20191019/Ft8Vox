@@ -158,8 +158,7 @@
 
 | 报文 | 类型 | 是否入选 |
 | --- | --- | --- |
-| 对方的 `CQ` | `CQ` | 仅当 `autoFollowCq` 开 **且** 未通联（`workedCall` 硬过滤）；**不套用显示筛选** |
-| `<我> <对方> <网格>` | `CALL` | **一律入选** |
+| 对方的 `CQ` | `CQ` | 仅当 `autoFollowCq` 开 **且** 未通联（`workedCall` 硬过滤）；**不套用显示筛选**。（照 FT8CN「自动关注 CQ」＝把 CQ 推送到可呼叫集合） || `<我> <对方> <网格>` | `CALL` | **一律入选** |
 | `<我> <对方> <报告>` | `REPORT` | **一律入选** |
 | `<我> <对方> R<报告>` | `ROGER` | **一律入选** |
 | `RR73` / `73` / `RRR`（`DecodeFilter.is73`） | — | 不作为新 QSO 起点 |
@@ -181,7 +180,7 @@
 | --- | --- | --- | --- |
 | 1 | 优先回应「我的当前目标」 | 由第 1 层 `QsoEngine.onDecoded` 完成（非当前目标的定向报文不驱动引擎） | 【现有】 |
 | 2 | **任何人呼叫我，一定应答** | 有进行中 QSO 且**目标本批沉默**时，`AutoScheduler.directedTakeover` 挑「其他定向台」并换台 | 【改造】 |
-| 3 | S&P：自动应答未通联的 CQ 台 | `nextAction`：`autoFollowCq && autoCallFollow` 且有无重复通联 CQ → `AnswerCq`，否则 `SendCq` | 【现有】 |
+| 3 | S&P：自动应答未通联的 CQ 台 | `nextAction`：`autoCallFollow` 且候选非空 → `AnswerCq`，否则 `SendCq`（候选已由 `autoFollowCq` 在 `collect` 里把关） | 【现有】 |
 
 **循环 2 的触发条件**（新增）：
 
@@ -256,8 +255,12 @@
 | --- | --- | --- | --- |
 | 发射监管 | `autoSupervisionMinutes` | 10 | `0,5,15,…,95` 分钟 |
 | 无回应限制 | `autoNoReplyLimit` | 0 | `0..30`；0＝不换台 |
-| 自动关注 CQ | `autoFollowCq` | true | 把听到的 CQ 台纳入候选 |
-| 自动呼叫关注的呼号 | `autoCallFollow` | true | 自动应答未通联的 CQ 台 |
+| 自动关注 CQ | `autoFollowCq` | true | 把解码到的 CQ 台**纳入候选**（照 FT8CN＝推送到呼叫列表）；关掉后不会自动呼叫任何 CQ 台 |
+| 自动呼叫关注的呼号 | `autoCallFollow` | true | 是否**真的去呼叫**候选里的 CQ 台（总闸）；关掉后只回应定向呼叫 + 自己发 CQ |
+
+> **没有「关注呼号名单」**：FT8CN 有一份 `followCallsigns` 表（手动关注、持久保存、App 内不能删，
+> 名单里的台不受 `autoFollowCQ` 限制）。本机不做，故两个开关是**串联**关系：都开＝自动应答未通联 CQ 台；
+> 任一关＝不自动呼叫 CQ。
 
 旧持久化键静默保留（不做迁移、不删数据）。
 
@@ -376,6 +379,7 @@
 | `RR73` 兜底 | `checkTargetCallMe` 等三重兜底 | **结构上不可达**（不滞留 RR73） | 等价防死，代码更少 |
 | 选台 | 无优先级，按解码先后 | **CQ 修饰符**同级 tie-break | 叠加加分，不影响应答 |
 | 深度解码 | 不驱动自动（有闸门） | 不驱动（`deep` 恒 false，占位） | 同口径 |
+| 关注呼号名单 | `followCallsigns` 表（手动 / 地图 / Web 后台，持久保存） | **无此名单** | 简化；两个 CQ 开关因此成为串联关系 |
 | 2 s 时窗闸门 | 有（`MainViewModel:318`） | **无**，逐条处理 | 整批闸门会丢对方回复 |
 
 ---

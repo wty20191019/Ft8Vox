@@ -23,9 +23,14 @@ data class AutoProgramSettings(
     val supervisionMinutes: Int = 10,
     /** 无回应次数上限：`0`＝忽略（默认，FT8CN `noReplyLimit`）；超出后第 2 层换台 / 回 CQ。 */
     val noReplyLimit: Int = 0,
-    /** 自动关注 CQ：把听到的 CQ 台纳入候选（默认开，FT8CN `autoFollowCQ`）。 */
+    /** 自动关注 CQ：把解码到的 CQ 台纳入自动候选（默认开，FT8CN `autoFollowCQ`）。 */
     val autoFollowCq: Boolean = true,
-    /** 自动呼叫关注的呼号：自动应答未通联的 CQ 台（默认开，FT8CN `autoCallFollow`）。 */
+    /**
+     * 自动呼叫关注的呼号：是否真的去呼叫候选里的 CQ 台（默认开，FT8CN `autoCallFollow`）。
+     *
+     * 注意：FT8CN 还有一份「关注呼号名单」（`followCallsigns` 表），名单里的台即使
+     * `autoFollowCQ` 关掉也会被呼叫；**本机没有这份名单**，故两个开关是**串联**关系。
+     */
     val autoCallFollow: Boolean = true,
 )
 
@@ -126,7 +131,8 @@ object AutoProgramSelector {
             val kind: AutoTargetKind
             val report: Int?
             if (p.isCq) {
-                // CQ 台：只有「自动关注 CQ」打开才纳入候选；已通联的 CQ 台一律跳过（硬编码）
+                // CQ 台：「自动关注 CQ」打开才纳入候选（照 FT8CN＝把 CQ 推送到可呼叫集合）；
+                // 已通联的 CQ 台一律跳过（硬编码；FT8CN 的「关注呼号名单」本机没有）
                 if (!program.autoFollowCq) continue
                 if (workedCall) continue
                 kind = AutoTargetKind.CQ
@@ -417,12 +423,19 @@ class AutoScheduler {
     }
 
     /**
-     * 两个开关都开时「优先应答未通联的 CQ 台」（S&P）；否则发 CQ。
+     * 「优先应答未通联的 CQ 台」（S&P）；否则发 CQ。
      *
-     * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3（`autoCallFollow && autoFollowCQ`）。
+     * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3。FT8CN 的条件是
+     * `autoCallFollow && (autoFollowCQ || 该台在关注呼号名单里)`；本机**没有**关注呼号名单
+     * （FT8CN `followCallsigns` 表），故只剩两个开关**串联**生效、各管一段：
+     * - [AutoProgramSettings.autoFollowCq]：CQ 台是否**纳入候选**（照 FT8CN「自动关注 CQ」＝把 CQ
+     *   推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关）。
+     * - [AutoProgramSettings.autoCallFollow]：是否**真的去呼叫**（FT8CN `:714`，关掉则一条 CQ 都不叫）。
+     *
+     * 因此本机「自动关注 CQ」关掉后不会自动呼叫任何 CQ 台（FT8CN 还有「关注名单」这条例外，本机没有）。
      */
     private fun nextAction(cqs: List<AutoTarget>): AutoAction =
-        if (settings.autoFollowCq && settings.autoCallFollow && cqs.isNotEmpty()) {
+        if (settings.autoCallFollow && cqs.isNotEmpty()) {
             AutoAction.AnswerCq(AutoProgramSelector.rank(cqs, myGrid).first())
         } else {
             AutoAction.SendCq

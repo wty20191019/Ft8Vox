@@ -156,7 +156,7 @@ newOrder == 5                                             // ① 收到 73
 2. 保留「报文驱动收敛兜底」（§1.8 第 2 条）。
 3. 报告值改为「每次重测最新 / R 复用 Tx2」（§1.7）。
 4. `deep`/`weak` 双通道仅预留字段，当前行为等价现状。
-5. 无手动「关注呼号列表」UI：`autoFollowCq` + `autoCallFollow` 两个开关等价 FT8CN 的关注列表语义。
+5. 无手动「关注呼号名单」UI：FT8CN 的 `followCallsigns` 表（手动关注、持久、Web 后台删除，名单里的台不受 `autoFollowCQ` 限制）**不做**；本机只有 `autoFollowCq` / `autoCallFollow` 两个开关，二者**串联**（都开才自动呼叫 CQ 台），属「无名单子集」。
 6. **无任何发射确认框**：删除 `AutoEnableConfirmDialog`，总开关直接生效（FT8CN 的 `activated` 也是直接生效）。
 
 ---
@@ -200,8 +200,11 @@ newOrder == 5                                             // ① 收到 73
 | --- | --- | --- | --- |
 | 发射监管 | 不监管 / 5 / 15 / … / 95 分钟 | 10 | FT8CN `launchSupervision` |
 | 无回应次数 | 0–30（0=忽略） | 0 | FT8CN `noReplyLimit` |
-| 自动关注 CQ | 开关 | 开 | FT8CN `autoFollowCQ` |
-| 自动呼叫关注的呼号 | 开关 | 开 | FT8CN `autoCallFollow` |
+| 自动关注 CQ | 开关 | 开 | FT8CN `autoFollowCQ`（把 CQ 台纳入候选，非「写入关注名单」） |
+| 自动呼叫关注的呼号 | 开关 | 开 | FT8CN `autoCallFollow`（是否自动呼叫；总闸） |
+
+> FT8CN 还有一份「关注呼号名单」（`followCallsigns`），名单里的台不受 `autoFollowCQ` 限制；**本机不做**，
+> 故两个开关是串联关系（都开＝自动呼叫未通联 CQ 台；任一关＝不自动呼叫 CQ）。
 
 - **删除**：工作模式单选、解码时机、允许重复通联、排序依据、重发机制、保护限制（无有效 QSO / 发射总时长）。
 - **删除** `AutoMode` 概念：自动程序常开，**开关就是「发送总开关」`txEnabled`**。
@@ -221,7 +224,7 @@ data class AutoProgramSettings(
     val noReplyLimit: Int = 0,
     /** 自动关注 CQ（把 CQ 台纳入候选，FT8CN autoFollowCQ）。 */
     val autoFollowCq: Boolean = true,
-    /** 自动呼叫关注的呼号（自动应答候选中未通联的 CQ 台，FT8CN autoCallFollow）。 */
+    /** 自动呼叫关注的呼号（是否真的去呼叫候选里的 CQ 台，FT8CN autoCallFollow）。 */
     val autoCallFollow: Boolean = true,
 )
 ```
@@ -237,7 +240,7 @@ data class AutoProgramSettings(
 3. 候选收集（见 3.3）
 4. 定向候选非空？ → HandleDirected(rank 最优)          // 一律应答，最高优先，不受任何开关/筛选/已通联影响
 5. 无进行中 QSO 时：
-     autoFollowCq && autoCallFollow && 有未通联 CQ 候选？ → AnswerCq(最优)
+     autoCallFollow && 有未通联 CQ 候选？ → AnswerCq(最优)   // 候选已按 autoFollowCq 把关
      否则 → SendCq
 ```
 
@@ -249,7 +252,7 @@ data class AutoProgramSettings(
 - `collect`：
   - 逐条解析；跳过自己；跳过 `ignoredCalls`；
   - **定向报文（to=我）**：一律入选（CALL / REPORT / ROGER；73/RR73 不作为新 QSO 起点）；**不受显示筛选、不受已通联、不受开关影响**；
-  - **CQ 台**：仅当 `autoFollowCq == true` 才入选；**已通联的 CQ 台一律跳过**（硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；不再套用 `DecodeFilter.matches`。
+  - **CQ 台**：仅当 `autoFollowCq == true` 才入选（对应 FT8CN「自动关注 CQ」＝推送到可呼叫集合；**不是**写入关注名单）；**已通联的 CQ 台一律跳过**（硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；不再套用 `DecodeFilter.matches`。
   - 记录 `deep`（§1.6）与 `cqModifier`。
 - `rank`（无 `sortBy`）：排序键降序 = `(CQ 修饰符优先级, 解码顺序)`：
   1. `DX`（最高）；
@@ -263,7 +266,7 @@ data class AutoProgramSettings(
 ```text
 成功 → SendCq（FT8CN resetToCQ）
 无回应超限（giveUpTarget）：
-    autoFollowCq && autoCallFollow && 有未通联 CQ 候选 → AnswerCq(最优)   // 换台
+    autoCallFollow && 有未通联 CQ 候选 → AnswerCq(最优)   // 换台；候选已按 autoFollowCq 把关
     否则 → SendCq
 ```
 
@@ -399,7 +402,7 @@ FT8CN `QSLRecord` 字段对照：
 
 | 风险 | 说明 | 缓解 |
 | --- | --- | --- |
-| **默认两开关都开 ⇒ 行为偏 S&P** | 照 FT8CN 默认（`autoFollowCQ`/`autoCallFollow` 均开）时，程序会**优先应答听到的未通联 CQ**，而不是一直主叫 | 已在 §3.2/3.3 明确；真机 T1/T4 验证观感；如不接受，只需把默认改成一个开关关 |
+| **默认两开关都开 ⇒ 行为偏 S&P** | 照 FT8CN 默认（`autoFollowCQ`/`autoCallFollow` 均开）时，程序会**优先应答听到的未通联 CQ**，而不是一直主叫 | 已在 §3.2/3.3 明确；真机 T1/T4 验证观感；如不接受，只需关掉「自动呼叫关注的呼号」 |
 | 宽松 `contains` 匹配误判 | `to` 含我方短呼号即算呼叫我，理论上可能误匹配 | 落库保存报文原文；T2 验证 |
 | 移除 AutoMode ⇒ 总开关=自动开关 | 开总开关即启动自动发射，且**无确认框**，误触即发 | 总开关默认关且不持久化（每次启动需手动开）；顶栏 `TX：n` 常显状态；真机注意误触 |
 | Room 迁移 | 新增两列需版本号 +1 | 写 `Migration`，允许 NULL |
@@ -504,7 +507,7 @@ FT8CN `QSLRecord` 字段对照：
 
 ### 期 5（文档）
 
-`README`（计数已同步 309）/ `How2use`（§11 单档、§12 解码菜单、§13 日志起止时间）/ `FT8CN_QSO_PLAN` §10.5 已同步；
+`README`（计数已同步 310）/ `How2use`（§11 单档、§12 解码菜单、§13 日志起止时间）/ `FT8CN_QSO_PLAN` §10.5 已同步；
 `REGRESSION.md` 已加 **T 组**（期 2 新口径真机回归清单）与 **U 组**（解码菜单 / 日志起止时间），
 并把 E 组标注为过期、A 组与「模拟器可预演」段落改到新口径。剩余：`new_ui.md`、`NEW-UI-PLAN.md`、
 `UI-DESIGN.md` 等**历史设计稿**中的旧档位 / 确认框描述（不影响使用，可择机统一标注）。
@@ -519,7 +522,12 @@ FT8CN `QSLRecord` 字段对照：
   - `QsoEngine` / `QsoProgress` 新增 `advanced`（本次 `onDecoded` 是否推进）；
   - `AutoScheduler.directedTakeover(...)` 挑「非当前目标」的定向候选；
   - `SessionViewModel.pollOnce` 在 `!advanced` 且仍 active 时先换台、未命中才走无回应判定。
-- 新增单测 6 例（`AutoProgramTest` 4 + `QsoEngineTest` 2），全库 **309 例 / 32 suite**。
+- 新增单测 6 例（`AutoProgramTest` 4 + `QsoEngineTest` 2），全库 **310 例 / 32 suite**。
+- **语义修正（不加关注名单、不加 UI）**：核对 FT8CN 源码后发现此前口径有误——`autoFollowCQ`
+  实为「把解码到的 CQ **推送到呼叫列表**」（不写入关注名单），`autoCallFollow` 才是「是否自动呼叫 CQ」；
+  FT8CN 另有一份 `followCallsigns` 关注名单（本机不做）。据此：`nextAction` 改为只由
+  `autoCallFollow` 把关（`collect` 已按 `autoFollowCq` 过滤，**行为等价**、职责清晰），
+  `AutoProgramDialog` 文案、`FT8CN-QSO.md` §7/§12、`NEW_QSO_.md`、`How2use.md` §11 全部更正。
 
 ---
 

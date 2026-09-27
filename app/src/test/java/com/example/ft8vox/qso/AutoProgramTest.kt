@@ -216,6 +216,17 @@ class AutoProgramTest {
     }
 
     @Test
+    fun autoFollowCqOffMeansSendCq() {
+        // 「自动关注 CQ」关 ⇒ CQ 台不进候选 ⇒ 不自动呼叫 CQ
+        //（本机没有 FT8CN 的「关注呼号名单」这条可绕开开关的例外）
+        val s = scheduler(program.copy(autoFollowCq = false))
+        assertEquals(
+            AutoAction.SendCq,
+            s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
+        )
+    }
+
+    @Test
     fun directedMessageWinsAndIsQueued() {
         val s = scheduler()
         val action = s.onDecoded(

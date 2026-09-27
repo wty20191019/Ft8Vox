@@ -74,7 +74,7 @@ fun AutoProgramPanel(
     ) {
         Text(
             "打开「发送总开关」即启用自动程序（无确认框）：定向报文一律应答；" +
-                "其余情况按下面两个开关决定「应答未通联的 CQ」还是「自己发 CQ」。",
+                "CQ 台由下面两个开关决定「是否纳入候选」与「是否自动呼叫」。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -109,20 +109,22 @@ fun AutoProgramPanel(
 
         AutoOptionRow(
             title = "自动关注 CQ",
-            subtitle = "把听到的 CQ 台纳入候选（关闭后只应答定向呼叫）",
+            subtitle = "把解码到的 CQ 台纳入自动候选（照 FT8CN「自动关注 CQ」＝推送到呼叫列表）；" +
+                "关掉后本机不再自动呼叫任何 CQ 台",
             checked = program.autoFollowCq,
             onChange = { v -> onOption { it.copy(autoFollowCq = v) } },
         )
         AutoOptionRow(
             title = "自动呼叫关注的呼号",
-            subtitle = "自动应答候选里未通联的 CQ 台（关闭后只自己发 CQ）",
+            subtitle = "是否真的去呼叫候选里的 CQ 台；关掉后只回应定向呼叫、自己发 CQ",
             checked = program.autoCallFollow,
             onChange = { v -> onOption { it.copy(autoCallFollow = v) } },
         )
 
         Text(
-            "两个开关都开时优先 S&amp;P 应答未通联的 CQ 台；都关或没有候选时自己发 CQ。" +
-                "已通联的 CQ 台不再主动呼叫；对方直接呼叫我方时一定应答。",
+            "两个开关是串联关系：都开＝自动应答未通联的 CQ 台；任一关＝不自动呼叫 CQ，" +
+                "但仍然自己发 CQ、且对方直接呼叫我方时一定应答。已通联的 CQ 台不再主动呼叫。" +
+                "本机没有 FT8CN 的「关注呼号名单」（只呼叫指定呼号），暂不支持。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp),

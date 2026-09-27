@@ -341,9 +341,15 @@ if (ft8TransmitSignal.isActivated() && sequential != getNowSequential()) return;
 → 加入 transmitMessages，并标记 isQSL_Callsign = checkQSLCallsign(from)
 ```
 
-- `autoFollowCQ`（默认 true，`GeneralVariables.java:205`）：自动收纳所有 CQ 进列表。
-- `autoCallFollow`（默认 true，`:206`）：自动去呼叫列表里的 CQ。
-- `callsignInFollow()`（`:327`）：是否在关注列表（`followCallsign`，`:211`）。
+- `autoFollowCQ`（默认 true，`GeneralVariables.java:205`）：**自动关注 CQ**——把解码到的 CQ 推送到
+  「呼叫」列表；**不写入**关注呼号表（帮助文件 `auto_follow_help.txt` 明确说明）。
+- `autoCallFollow`（默认 true，`:206`）：**自动呼叫关注的呼号**——是否自动去呼叫 CQ。它是总闸
+  （`:714` 关掉即直接返回）；开启时，`autoFollowCQ` 也开 ⇒ **任何**未通联 CQ 台都可呼叫，
+  `autoFollowCQ` 关 ⇒ **只**呼叫关注名单里的 CQ 台（`FT8TransmitSignal.java:733-737`）。
+- `callsignInFollow()`（`:327`）：是否在**关注呼号名单**（`followCallsigns` 表，`DatabaseOpr.java:142`）。
+  名单是**用户手动**加的（`CallingListFragment` / `MyCallingFragment` / 地图 `GridTrackerMainActivity`），
+  **永久保存**，且**只能在局域网 Web 后台删除**（`LogHttpServer.java:444`）或清缓存时清空；
+  名单里的台不受 `autoFollowCQ` 限制，一定进列表、并在 `autoCallFollow` 开时被自动呼叫。
 - `checkQSLCallsign()`（`:273`）：是否在**本波段**已通联（`QSL_Callsign_list`）；`checkQSLCallsign_OtherBand()`（`:283`）为其它波段。
 
 ---
@@ -452,7 +458,8 @@ if (ft8TransmitSignal.isActivated() && sequential != getNowSequential()) return;
 | 发射确认框 | 无 | 删 `AutoEnableConfirmDialog`；`txEnabled` 即唯一闸门 | 照搬 |
 | 复合呼号匹配 | 目标带 `/` 时 `contains`（单向） | **双向**（任一方带 `/` 即 `contains`） | 超集/加固 |
 | 选台排序 | 无 DX 分级 | `AutoProgramSelector.rank`：DX > 我所在区域 > 其它修饰符 > 无（稳定保序） | 超集（自定） |
-| 关注列表 UI | 有 `followCallsign` 手加列表 | 无独立 UI；两开关等价 | 超集（简化） |
+| 关注呼号名单 | `followCallsigns` 表：手动（呼叫列表/地图）关注、持久保存、App 内不能删；名单里的台不受 `autoFollowCQ` 限制 | **无此名单**（不做） | 缺失（有意不做） |
+| 两个 CQ 开关 | `autoFollowCQ`＝把 CQ 推送到呼叫列表；`autoCallFollow`＝是否自动呼叫（总闸），配合关注名单 | `autoFollowCq` 把关 CQ 候选、`autoCallFollow` 把关是否呼叫；**没有名单** ⇒ 实际只有「都开才叫 CQ」 | 照搬（无名单子集） |
 | RR73 三重兜底 | ③④⑤ | 引擎结构上 RR73 不滞留，兜底不可达；以「收敛兜底 + 逐条过滤」代替 | 有意偏离（等价防死） |
 
 **FT8CN 有意没有、Ft8Vox 也不引入的东西**：Hound/Fox、逐条精确 DXCC 分级、多档 AutoSeq、完成确认卡。
