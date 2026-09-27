@@ -62,7 +62,6 @@ import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.AutoMode
 import com.example.ft8vox.ui.theme.BarCq
 import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
@@ -75,7 +74,7 @@ import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
- * 设置页（安卓 Preference 风格，new_ui.md §6）。
+ * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
  *
  * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
@@ -99,8 +98,6 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
-    // 待确认的「启用自动程序」模式（「0 手动模式」→ 1/2 时的防误发确认）
-    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -414,14 +411,13 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                onSetMode = { m -> requestAutoMode(m, sessionStatus, session) { confirmAutoMode = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
                 // 设置页本身可滚动：面板完全展开、跟随整页滚动，不再套一层内部滚动
                 nestedScroll = false,
             )
             PrefNote(
-                "第 1 层（QSO 引擎）按「重发机制」对同一目标重发；" +
-                    "第 2 层（自动程序）负责选台、排队、主叫/混合模式切换与保护限制。",
+                "自动程序没有独立开关：打开「发送总开关」即自动发射。" +
+                    "第 1 层（QSO 引擎）跑六步报文序列；第 2 层负责选台、应答与发射监管。",
             )
             PrefDivider()
             PrefAction(
@@ -640,18 +636,6 @@ fun SettingsScreen(
             },
         )
     }
-
-    confirmAutoMode?.let { m ->
-        AutoEnableConfirmDialog(
-            mode = m,
-            status = sessionStatus,
-            onConfirm = {
-                confirmAutoMode = null
-                session.setAutoMode(m)
-            },
-            onDismiss = { confirmAutoMode = null },
-        )
-    }
 }
 
 /** 设置分组：标题 + 圆角卡片。 */
@@ -763,7 +747,7 @@ private fun PrefNote(text: String) {
 /**
  * 开关行。
  *
- * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（new_ui.md §3.3）。
+ * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/UI.md §3.1）。
  */
 @Composable
 private fun PrefSwitch(
@@ -799,7 +783,7 @@ private fun ColorDot(color: Color) {
 }
 
 /**
- * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（new_ui.md §3.3）。
+ * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（docs/UI.md §3.1）。
  */
 @Composable
 private fun HighlightLegend() {

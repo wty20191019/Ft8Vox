@@ -27,6 +27,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -71,7 +74,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import java.util.Locale
 
 /**
- * 操作页（new_ui.md §3）：水位图 → 筛选条 → 解码列表 → 发射控制。
+ * 操作页（docs/UI.md §2.3）：水位图 → 筛选条 → 解码列表 → 发射控制。
  *
  * 顶栏（波段/模式/UTC）与底部状态条由 [MainShell] 统一提供，本页不再重复。
  */
@@ -81,7 +84,7 @@ fun OperateScreen(
     settings: AppSettings,
     onOpenSettings: () -> Unit,
     onOpenMap: (String?) -> Unit,
-    onOpenLog: () -> Unit,
+    onOpenLog: (String?) -> Unit,
     onOpenAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -158,7 +161,10 @@ fun OperateScreen(
         tags = settings.filterTags,
         query = settings.callFilter,
         ignoredCalls = settings.ignoredCalls,
+        followedCalls = settings.followCalls,
     )
+    // 「关注呼号列表」面板开关（筛选条最右 ⭐，与最左的垃圾桶对称）
+    var followListOpen by rememberSaveable { mutableStateOf(false) }
     val counts = remember(messages, worked, status.myCall, settings.ignoredCalls) {
         DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
     }
@@ -259,6 +265,9 @@ fun OperateScreen(
             onClear = { viewModel.clearMessages() },
             onToggleSearch = { queryOpen = !queryOpen },
             onToggle = { viewModel.setFilterTags(filter.toggle(it).tags) },
+            followCount = settings.followCalls.size,
+            followOpen = followListOpen,
+            onToggleFollowList = { followListOpen = !followListOpen },
         )
         if (queryOpen) {
             var query by remember { mutableStateOf(settings.callFilter) }
@@ -276,12 +285,25 @@ fun OperateScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 3.dp))
 
-        // ---- §3.3 解码列表 ----
+        // ---- §3.3 解码列表 / 「关注呼号列表」 ----
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            if (rows.isEmpty()) {
+            if (followListOpen) {
+                FollowListPanel(
+                    follows = settings.followCalls,
+                    messages = messages,
+                    myGrid = status.myGrid,
+                    autoFollowed = settings.autoFollowOrder.toSet(),
+                    onCall = { call, grid, df ->
+                        targetCall = call
+                        request { viewModel.answer(call, grid, df) }
+                    },
+                    onUnfollow = { viewModel.unfollowCall(it) },
+                    onClose = { followListOpen = false },
+                )
+            } else if (rows.isEmpty()) {
                 Text(
                     decodeEmptyHint(status, messages.size, filter.isEmptySelection),
                     style = MaterialTheme.typography.bodySmall,
@@ -313,19 +335,31 @@ fun OperateScreen(
                                 detailFor = row
                             },
                             onDoubleClick = { onOpenMap(from) },
-                            onSwipeTarget = {
+                            onCall = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
                                     viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
+                                    // 左滑 / 菜单「呼叫」＝「设为目标并呼叫」（docs/UI.md §3.1）：与详情面板「呼叫」同一条路径，
                                     // 直接开始（闸门只有「发送总开关」），本时隙来得及就本时隙发
                                     request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                                 }
                             },
+                            onReply = {
+                                // 菜单「回复」：按报文类型给出正确回复（CQ→应答 / 网格→报告 / 报告→R / R→RR73）
+                                if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                                    targetCall = from
+                                    viewModel.selectTargetFreq(row.msg.df)
+                                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
+                                    request { viewModel.replyTo(row.msg) }
+                                }
+                            },
+                            onOpenLog = { onOpenLog(from) },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
+                            followed = from != null && from in settings.followCalls,
+                            onToggleFollow = { from?.let { viewModel.toggleFollow(it) } },
                             workedStyle = settings.workedStyle,
                             endMarkMyCall = settings.endMarkMyCall,
                             endMarkActive = settings.endMarkActive,
@@ -382,14 +416,14 @@ fun OperateScreen(
             },
             onOpenLog = {
                 detailFor = null
-                onOpenLog()
+                onOpenLog(row.parsed.from)
             },
             onDismiss = { detailFor = null },
         )
     }
 }
 
-/** 水位图高度档位 → 屏高比例（new_ui.md §3.1：约 0.30）。 */
+/** 水位图高度档位 → 屏高比例（docs/UI.md §2.3：约 0.30）。 */
 fun WaterfallHeight.screenFraction(): Float = when (this) {
     WaterfallHeight.COMPACT -> 0.24f
     WaterfallHeight.NORMAL -> 0.30f
@@ -474,7 +508,7 @@ private fun FrequencyAxis(fMinHz: Float?, maxHz: Float?) {
     }
 }
 
-/** 筛选 Chip 行（横向滚动）：最左侧「清除解码信息」，其余 Chip 全部互斥、多选，附角标计数。 */
+/** 筛选条：最左 🗑「清除解码信息」＋ 中间可多选 Chip ＋ 最右 🔍（呼号过滤）/ ⭐（关注呼号列表，与 🗑 对称）。 */
 @Composable
 private fun FilterChipRow(
     filter: DecodeFilterState,
@@ -484,6 +518,10 @@ private fun FilterChipRow(
     onClear: () -> Unit,
     onToggleSearch: () -> Unit,
     onToggle: (DecodeFilterTag) -> Unit,
+    /** 关注的呼号数量（角标）与「关注呼号列表」面板开关。 */
+    followCount: Int,
+    followOpen: Boolean,
+    onToggleFollowList: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -523,6 +561,19 @@ private fun FilterChipRow(
                     Icons.Filled.Search,
                     contentDescription = "呼号过滤",
                     tint = if (queryOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // 最右：关注呼号列表（与最左的垃圾桶对称）
+        BadgedBox(
+            badge = { if (followCount > 0) Badge { Text("$followCount") } },
+        ) {
+            IconButton(onClick = onToggleFollowList) {
+                Icon(
+                    Icons.Filled.Star,
+                    contentDescription = "关注呼号列表",
+                    tint = if (followOpen) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

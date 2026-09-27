@@ -2,20 +2,19 @@
 
 在 Android 上原生运行 FT8 / FT4 数字通信的开源应用。
 
-> **状态（2026-09-26）**：阶段 0–7 与「新 UI」U1–U9 已完成，功能可用（接收 / 发射 / 自动程序 / 日志 / 地图 / 设置）；
+> **状态（2026-09-27）**：阶段 0–9 与「新 UI」U1–U9 已完成，功能可用（接收 / 发射 / 自动程序 / 日志 / 地图 / 设置）；
 > **后台保活（前台服务）已实装**（切后台 / 息屏继续接收，SAF 选择器不再中断）；
 > 真机实测已修掉输出声卡挂起（`f5215b5`）、两台机器互回信号报告死循环（`fbac634`）与顶栏「发射中」文案不符（`ee5cb6c`）；
-> 剩余阶段 8（开源就绪与首个 MVP 发布）与阶段 9 的稳定性收尾，以及真机全流程回归。
-> **第一次使用请看 [docs/How2use.md](docs/How2use.md)（用户手册）**。
-> 路线图见 [docs/ROADMAP.md](docs/ROADMAP.md)，新 UI 计划与取舍见 [docs/NEW-UI-PLAN.md](docs/NEW-UI-PLAN.md)，
-> 真机验收清单见 [docs/REGRESSION.md](docs/REGRESSION.md)。
+> 剩余阶段 8（开源就绪与首个 MVP 发布）与真机全流程回归。
+> **第一次使用请看 [docs/How2use.md](docs/How2use.md)（用户手册，含构建与贡献说明）**。
+> 自动程序设计见 [docs/QSO.md](docs/QSO.md)，UI 设计 / 路线图 / JNI 契约 / 回归清单见 [docs/UI.md](docs/UI.md)。
 
 ## 简介
 
 Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 
 - **接收**：采集电台音频并实时解码，展示瀑布图与解码报文列表（SNR / DT / DF / 报文 / 实体 / 距离）；
-- **发射**：手动（CQ / 应答 / 报告 / R 报告 / RR73 + 宏 + 发送队列）或**自动程序**（模式即开关：0 手动 / 1 主叫 / 2 混合，三层架构按解码结果自动选台并走完整段 QSO）；
+- **发射**：手动（CQ / 应答 / 报告 / R 报告 / RR73 + 宏 + 发送队列）或**自动程序**（照 FT8CN 单档：**「发送总开关」即自动程序开关**；定向呼叫我方的报文一定应答，两个开关控制 S&P，发射监管到点自动停）；
 - **日志**：通联记录自动落库（含 `Distance: xxx km, QSO by Ft8Vox` 备注），ADIF **合并**导入 / 导出；
 - **地图**：网格、CQ 分区、解码台站的距离与方位。
 
@@ -40,21 +39,21 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | FT8 / FT4 解码引擎（native） | ✅ 已完成 | `monitor.c` 多声道解码，协议可切换；解码深度 快/标准/深 + 高级参数热更新 |
-| 接收 SNR / DT / DF | ✅ 已完成 | SNR 口径**照搬 JTDX**（`10·log10(excess) − 26.5 + 窗口修正`），见 `docs/JNI-CONTRACT.md` §4 |
+| 接收 SNR / DT / DF | ✅ 已完成 | SNR 口径**照搬 JTDX**（`10·log10(excess) − 26.5 + 窗口修正`），见 `docs/UI.md` §5.4 |
 | 发射波形生成 + VOX 键控 / PTT 时序 | ✅ 已完成 | native 生成 FT8/FT4 波形；前导静音 + 前导单音键控 VOX，PTT 延迟 / 看门狗可调；**无 CAT，无法感知键控状态**（VOX 状态指示与三项设置已于 2026-09-26 删除） |
 | 时隙偏移（整时隙校准） | ✅ 已完成（待真机验收） | −2.5s–+2.5s，解码窗口与发射起点一起平移；把解码卡片的「时间差 DT」原样填进去即可校准两端 |
 | 实时音频采集 / 播放（AAudio） | ✅ 已完成 | 输入/输出设备可选（系统默认或 USB 声卡），采样率偏好，输入增益热生效；输出流走**非 MMAP** 路径 + 坏流自愈（真机「发几次测试音后再也发不出去」修复） |
 | 瀑布图 / 频率轴 | ✅ 已完成 | Compose Canvas 自绘；频率轴固定铺满，亮度自适应拉伸（不做捏合缩放） |
 | 解码报文列表 | ✅ 已完成 | 两行卡片 + 色条高亮 + 行尾标记；左滑设为目标 / 右滑删除 / 长按忽略 / 双击地图；筛选 Chip；**自动翻到最新**；筛选栏最左**一键清除** |
 | QSO 发射工作流 | ✅ 已完成 | 手动发送 + 目标时隙自动对应（双方相反周期） |
-| 自动程序（三层架构，取代 Call 1st） | ✅ 已完成（待真机验收） | **模式即开关**：0 手动 / 1 主叫 / 2 混合；第 2 层 `AutoScheduler` 负责选台 / 排队 / 主叫⇄应答切换，第 1 层 `QsoEngine` 负责重发机制，第 3 层用户手动接管；含保护限制（无有效 QSO / 发射总时长超限自动停） |
+| 自动程序（照 FT8CN 单档，取代 Call 1st） | ✅ 已完成（待真机验收） | **没有档位**：打开「发送总开关」即自动发射（无确认框）。第 2 层 `AutoScheduler` 负责选台（定向一律应答 / 已通联 CQ 台不选 / CQ 修饰符优先级）与换台，第 1 层 `QsoEngine` 跑六步报文序列；安全阀＝**发射监管**（到点关总开关）+ **无回应次数**（超限换台/回 CQ） |
 | DXCC / CQ / ITU 区域与前缀识别 | ✅ 已完成 | 内置前缀表；「新 DXCC / 新 ITU / 新 CQ 区域 / 新网格 / 新前缀 / 新呼号」高亮可分别开关 |
 | 通联日志（Room） | ✅ 已完成 | 筛选/统计/波段柱图、单条删除二次确认、备注自动追加距离 |
 | ADIF 导入 / 导出 | ✅ 已完成 | 导入为**合并**（确认 `Y` 具粘性、非空优先、时间容差 ±60s） |
 | 地图页 | ✅ 已完成 | **离线 Web Mercator 卫星底图**（单张 z5，8192×8192，按可见区域流式解码 + ×0.7 暗化）+ 大圆距离/方位 + CQ 分区；**不做**在线瓦片 |
 | 设置页（8 组，30+ 项） | ✅ 已完成 | DataStore 持久化；主题暗/亮、字体三档、瀑布高度即时生效 |
 | 前台服务（后台持续接收） | ✅ 已完成（待真机验收） | `microphone` 类型前台服务 + 常驻通知（含「停止接收」动作）；切后台 / 息屏继续接收，SAF 选择器不再中断；**接收中按返回键退到后台**（弹提示），未接收时正常退出 |
-| CI（GitHub Actions） | ⏸ 已停用 | 工作流改名为 `.github/workflows/android.yml.disabled`，只做本地构建与测试（见 `docs/BUILD.md` §5） |
+| CI（GitHub Actions） | ⏸ 已停用 | 工作流改名为 `.github/workflows/android.yml.disabled`，只做本地构建与测试（见 `docs/How2use.md` §19.5） |
 
 **明确不做**：CAT 电台控制、Hound / Fox、FST4、接收频率自动窄带过滤、在线地图瓦片（离线栅格卫星底图已实装）、逐条呼号的精确 DXCC、日志上传（CloudLog / LoTW / eQSL）与局域网后台（后三项曾为占位，已连同代码与文档一并删除）。
 
@@ -73,13 +72,13 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 
 ## 构建与运行
 
-完整环境要求见 [docs/BUILD.md](docs/BUILD.md)。常用命令：
+完整环境要求见 [docs/How2use.md](docs/How2use.md) 第 19 节「构建与开发」。常用命令：
 
 ```bash
 # 构建 Debug APK（任一平台）
 ./gradlew :app:assembleDebug            # Windows: .\gradlew.bat :app:assembleDebug
 
-# 构建 + 跑 JVM 单测（当前 284 例 / 31 suite 全绿）
+# 构建 + 跑 JVM 单测（当前 319 例 / 33 suite 全绿）
 ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
 ```
 
@@ -87,7 +86,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 - 设备端测试（可选，需连接设备/模拟器）：`./gradlew :app:connectedDebugAndroidTest`
   （含 `Ft8DecodeTest` / `Ft8EncodeTest` / `VoxTxNativeTest` / `AudioRoutingTest` 等）
 - 单测只覆盖纯逻辑（时隙、报文解析/组装、QSO 状态机、自动程序、ADIF、网格与地图、筛选与高亮等）；
-  **触发音频、VOX 键控、真实通联**必须在真机 + 电台上验证，清单见 [docs/REGRESSION.md](docs/REGRESSION.md)。
+  **触发音频、VOX 键控、真实通联**必须在真机 + 电台上验证，清单见 [docs/UI.md](docs/UI.md) 第 6 节「回归验收清单」。
 - **CI 暂不配置**：出包与测试均本地执行。
 
 ## 目录结构
@@ -106,23 +105,16 @@ app/src/main/
 │   └── ui/                                 # Compose 页面与组件（四页 + 顶栏/状态条 + theme/）
 ├── cpp/                                    # native：jni_bridge.c、audio_engine.c、ftx_session.c + ft8_lib
 └── res/                                    # 资源
-docs/                                       # 路线图、用户手册、构建、JNI 契约、UI 设计、回归清单
+docs/                                       # 用户手册、QSO 设计、UI/路线图/JNI/回归
 ```
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/How2use.md](docs/How2use.md) | **用户手册（How2use）**：装机 / 接线 / 首次设置 / 通联 / 自动程序 / 日志 / 地图 / 全部设置项 / 排错 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 阶段路线图、技术决策（D1–D10）、架构与阶段 0–10 |
-| [docs/BUILD.md](docs/BUILD.md) | 工具链版本、构建命令、CI 停用说明 |
-| [docs/JNI-CONTRACT.md](docs/JNI-CONTRACT.md) | Kotlin ↔ native 接口契约、SNR 口径、采集预设 |
-| [docs/new_ui.md](docs/new_ui.md) | 新 UI 设计（配色、字号、顶栏/底栏、四页布局） |
-| [docs/NEW-UI-PLAN.md](docs/NEW-UI-PLAN.md) | U1–U9 实施计划与补记（含每条决策的取舍与后果） |
-| [docs/NEW_QSO_.md](docs/NEW_QSO_.md) | 自动程序（第 2 层）设计依据：三层架构、流程 / 重试 / 时隙规则、§五菜单 |
-| [docs/REGRESSION.md](docs/REGRESSION.md) | 真机/模拟器回归清单（A–S 组）与结果记录 |
-| [docs/UI-DESIGN.md](docs/UI-DESIGN.md) | 阶段 7 版 UI 设计（已被 `new_ui.md` 取代，保留存档） |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 贡献指南（分支、提交信息、代码规范） |
+| [docs/How2use.md](docs/How2use.md) | **用户手册**：装机 / 接线 / 首次设置 / 通联 / 自动程序 / 日志 / 地图 / 全部设置项 / 排错 / **构建与开发（工具链、命令、原生库、CI、贡献）** |
+| [docs/QSO.md](docs/QSO.md) | **QSO 自动系统设计**（对标 FT8CN）：六步序列与状态机、FT8CN 机制要点、本机实现、设置项与参数、与 FT8CN 对照表、有意偏离清单、明确不做 |
+| [docs/UI.md](docs/UI.md) | **UI 设计 + 路线图 + JNI 契约 + 回归验收清单**：配色/字号/外壳、页面与组件、交互约定、阶段 0–10 与决策、Kotlin ↔ native 契约、真机回归 A–U 组 |
 
 ## 许可证
 

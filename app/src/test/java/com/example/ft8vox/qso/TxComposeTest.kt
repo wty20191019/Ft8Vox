@@ -29,14 +29,18 @@ class TxComposeTest {
     }
 
     @Test
-    fun composesReplyExchangeAndClosings() {
+    fun composesSixStepsInOrder() {
         assertEquals(
             "JA1ABC K1ABC FN42",
-            TxCompose.compose(TxMessageKind.REPLY, "ja1abc", "K1ABC", "FN42"),
+            TxCompose.compose(TxMessageKind.GRID, "ja1abc", "K1ABC", "FN42"),
         )
         assertEquals(
             "JA1ABC K1ABC -12",
-            TxCompose.compose(TxMessageKind.EXCHANGE, "JA1ABC", "K1ABC", "FN42", -12),
+            TxCompose.compose(TxMessageKind.REPORT, "JA1ABC", "K1ABC", "FN42", -12),
+        )
+        assertEquals(
+            "JA1ABC K1ABC R-12",
+            TxCompose.compose(TxMessageKind.ROGER, "JA1ABC", "K1ABC", "FN42", -12),
         )
         assertEquals(
             "JA1ABC K1ABC RR73",
@@ -46,12 +50,16 @@ class TxComposeTest {
             "JA1ABC K1ABC 73",
             TxCompose.compose(TxMessageKind.SEVENTY_THREE, "JA1ABC", "K1ABC", "FN42"),
         )
+        // 六步 order 与 QsoEngine 的 Step.order 对齐
+        assertEquals(1, TxMessageKind.GRID.order)
+        assertEquals(6, TxMessageKind.CQ.order)
     }
 
     @Test
     fun directedKindsNeedTarget() {
-        assertNull(TxCompose.compose(TxMessageKind.REPLY, null, "K1ABC", "FN42"))
-        assertNull(TxCompose.compose(TxMessageKind.EXCHANGE, "", "K1ABC", "FN42"))
+        assertNull(TxCompose.compose(TxMessageKind.GRID, null, "K1ABC", "FN42"))
+        assertNull(TxCompose.compose(TxMessageKind.REPORT, "", "K1ABC", "FN42"))
+        assertNull(TxCompose.compose(TxMessageKind.ROGER, null, "K1ABC", "FN42"))
         assertNull(TxCompose.compose(TxMessageKind.RR73, null, "K1ABC", "FN42"))
     }
 
@@ -60,9 +68,9 @@ class TxComposeTest {
     @Test
     fun classifiesMessageKinds() {
         assertEquals(TxMessageKind.CQ, TxCompose.kindOf("CQ K1ABC FN42", "K1ABC"))
-        assertEquals(TxMessageKind.REPLY, TxCompose.kindOf("JA1ABC K1ABC FN42", "K1ABC"))
-        assertEquals(TxMessageKind.EXCHANGE, TxCompose.kindOf("JA1ABC K1ABC -12", "K1ABC"))
-        assertEquals(TxMessageKind.EXCHANGE, TxCompose.kindOf("K1ABC JA1ABC R-12", "K1ABC"))
+        assertEquals(TxMessageKind.GRID, TxCompose.kindOf("JA1ABC K1ABC FN42", "K1ABC"))
+        assertEquals(TxMessageKind.REPORT, TxCompose.kindOf("JA1ABC K1ABC -12", "K1ABC"))
+        assertEquals(TxMessageKind.ROGER, TxCompose.kindOf("K1ABC JA1ABC R-12", "K1ABC"))
         assertEquals(TxMessageKind.RR73, TxCompose.kindOf("JA1ABC K1ABC RR73", "K1ABC"))
         assertEquals(TxMessageKind.SEVENTY_THREE, TxCompose.kindOf("JA1ABC K1ABC 73", "K1ABC"))
         assertEquals(TxMessageKind.CUSTOM, TxCompose.kindOf("HELLO WORLD DE K1ABC", "K1ABC"))
@@ -151,7 +159,7 @@ class TxComposeTest {
 
     @Test
     fun queueLabelFormat() {
-        assertEquals("1:JA1ABC/回复", TxQueue.label(0, "JA1ABC K1ABC FN42", "K1ABC"))
+        assertEquals("1:JA1ABC/网格", TxQueue.label(0, "JA1ABC K1ABC FN42", "K1ABC"))
         assertEquals("2:K1ABC/CQ", TxQueue.label(1, "CQ K1ABC FN42", "K1ABC"))
     }
 

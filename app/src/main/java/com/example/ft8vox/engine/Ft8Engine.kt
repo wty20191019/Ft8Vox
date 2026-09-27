@@ -30,7 +30,7 @@ data class Ft8Config(
  * FT8 / FT4 引擎的 Kotlin 入口。
  *
  * 负责加载 native 库 libft8.so，并向上层暴露解码、编码等接口。
- * 接口契约见 docs/JNI-CONTRACT.md。
+ * 接口契约见 docs/UI.md §5。
  *
  * 注意：类名与包名决定 native 函数符号（Java_<包>_<类>_<方法>），
  * 重命名此类或包时必须同步修改 app/src/main/cpp/jni_bridge.c。

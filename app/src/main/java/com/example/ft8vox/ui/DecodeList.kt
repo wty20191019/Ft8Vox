@@ -78,7 +78,7 @@ data class DecodeRow(
     val style: DecodeStyle,
 )
 
-/** 高亮类别 → 左侧色条颜色（new_ui.md §3.3）。 */
+/** 高亮类别 → 左侧色条颜色（docs/UI.md §3.1）。 */
 fun barColor(role: HighlightRole): Color = when (role) {
     HighlightRole.TX -> BarTx
     HighlightRole.TO_ME -> BarToMe
@@ -91,14 +91,18 @@ fun barColor(role: HighlightRole): Color = when (role) {
     HighlightRole.NORMAL -> BarNewDecode
 }
 
-private val SwipeCallGreen = Color(0xFF2E7D32)
-private val SwipeDeleteGray = Color(0xFF455A64)
+internal val SwipeCallGreen = Color(0xFF2E7D32)
+internal val SwipeDeleteGray = Color(0xFF455A64)
 
 /**
- * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
+ * 解码卡片（docs/UI.md §3.1）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
- * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条。
+ * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条
+ * （「关注」筛选视图里右滑＝取消关注该呼号）。
+ *
+ * 长按菜单（方案 §4 期 4）：呼叫（＝左滑）/ 回复（按报文类型自动决定发什么）/ 查看日志 /
+ * 复制消息 / 关注（切换）/ 忽略；**不提供手动 73**（收尾由状态机与自动程序负责）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -107,10 +111,15 @@ fun DecodeCard(
     myCall: String,
     onClick: () -> Unit,
     onDoubleClick: () -> Unit,
-    onSwipeTarget: () -> Unit,
+    onCall: () -> Unit,
+    onReply: () -> Unit,
+    onOpenLog: () -> Unit,
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
+    /** 发信人是否已在关注名单里（决定长按菜单显示「关注」还是「取消关注」）。 */
+    followed: Boolean = false,
+    onToggleFollow: () -> Unit = {},
     modifier: Modifier = Modifier,
     workedStyle: WorkedStyle = WorkedStyle.STRIKE,
     endMarkMyCall: Boolean = true,
@@ -184,7 +193,7 @@ fun DecodeCard(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onSwipeTarget()
+                                        onCall()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
@@ -302,6 +311,31 @@ fun DecodeCard(
 
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
+                text = { Text("呼叫 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onCall()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("回复 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onReply()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("查看日志") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onOpenLog()
+                },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
                 text = { Text("复制消息") },
                 onClick = {
                     menuOpen = false
@@ -309,12 +343,16 @@ fun DecodeCard(
                 },
             )
             DropdownMenuItem(
-                text = { Text("加宏（U3）") },
-                enabled = false,
-                onClick = {},
+                text = { Text(if (followed) "取消关注 $callText" else "关注 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onToggleFollow()
+                },
             )
             DropdownMenuItem(
                 text = { Text("忽略 $callText") },
+                enabled = from != null,
                 onClick = {
                     menuOpen = false
                     onIgnore()
@@ -364,7 +402,7 @@ fun annotatedMessage(text: String, myCall: String): AnnotatedString {
 }
 
 /**
- * 解码详情半屏（new_ui.md §3.3）：距离、方位、网格、强度、快捷按钮。
+ * 解码详情半屏（docs/UI.md §3.1）：距离、方位、网格、强度、快捷按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

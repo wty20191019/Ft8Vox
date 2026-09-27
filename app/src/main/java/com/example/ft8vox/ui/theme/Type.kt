@@ -7,7 +7,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * new_ui.md §0 字体规范：
+ * docs/UI.md §1 字体规范：
  * 呼号 16sp 粗体、消息 13sp、辅助信息 11sp。
  *
  * 现有界面主要引用 titleSmall / bodySmall / labelSmall / labelMedium，

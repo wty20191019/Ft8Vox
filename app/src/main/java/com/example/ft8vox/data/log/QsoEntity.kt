@@ -1,5 +1,6 @@
 package com.example.ft8vox.data.log
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -28,8 +29,15 @@ data class QsoEntity(
     val myCall: String = "",
     /** 我方网格（记录时的快照）。 */
     val myGrid: String? = null,
-    /** 通联完成时间（UTC 毫秒）。 */
+    /** 通联完成时间（UTC 毫秒），即 ADIF 的 `QSO_DATE_OFF` / `TIME_OFF`。 */
     val utcMs: Long,
+    /**
+     * 通联起始时间（UTC 毫秒），即 ADIF 的 `QSO_DATE` / `TIME_ON`（照 FT8CN 的 `startTime`）。
+     *
+     * `0` 表示未知（手动新增 / 早期记录）：导出时回退为 [utcMs]。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val startUtcMs: Long = 0,
     /** 波段名，如 "20m"。 */
     val band: String = "",
     /** 频率（Hz），用于 ADIF 的 FREQ 字段。 */

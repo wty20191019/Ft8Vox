@@ -66,7 +66,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 
-/** new_ui.md §1：秒级 UTC 时钟（对齐到整秒刷新）。 */
+/** docs/UI.md §2.1：秒级 UTC 时钟（对齐到整秒刷新）。 */
 @Composable
 fun rememberUtcNowMs(): Long {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -89,7 +89,7 @@ fun timeSyncWarning(latestDt: Float?): String? =
     if (latestDt != null && abs(latestDt) >= 1.5f) "时间不同步" else null
 
 /**
- * new_ui.md §1 顶部 AppBar（56dp）。
+ * docs/UI.md §2.1 顶部 AppBar（56dp）。
  *
  * 左：菜单（波段 / 模式 / 设置）；中：UTC 时钟 + `刻度 MHz · 模式`；右：RX/TX 圆点 + 音频速览。
  */
@@ -168,7 +168,7 @@ fun Ft8VoxTopBar(
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("自动程序　${status.autoProgram.mode.shortLabel}") },
+                        text = { Text("自动程序　${if (status.txEnabled) "运行中" else "待命"}") },
                         onClick = {
                             menuOpen = false
                             onAutoProgram()
@@ -413,7 +413,7 @@ fun TxRxDot(txing: Boolean, running: Boolean, modifier: Modifier = Modifier) {
 }
 
 /**
- * new_ui.md §7 底部常驻状态条。
+ * docs/UI.md §1.3 底部常驻状态条。
  *
  * 内容过多时横向滚动，避免窄屏被裁切。
  */

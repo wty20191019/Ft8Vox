@@ -3,7 +3,7 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 
 /**
- * 解码列表的筛选项（new_ui.md §3.2）。
+ * 解码列表的筛选项（docs/UI.md §3.3）。
  *
  * [ALL] 为互斥项：选中它表示不再过滤；选中其余任意项会自动取消 [ALL]，其余项之间为**多选并集**。
  */
@@ -16,7 +16,7 @@ enum class DecodeFilterTag(val label: String) {
     WORKED("已通联"),
 }
 
-/** 解码列表的显示过滤条件（不丢弃解码结果，仅影响展示与 Call 1st 挑台）。 */
+/** 解码列表的显示过滤条件 ＋ 两份**呼号名单**（[ignoredCalls] / [followedCalls]）。不丢弃解码结果，仅影响展示与自动挑台。 */
 data class DecodeFilterState(
     /** 已选中的筛选项；空集表示「一个都没开」，列表显示空态提示。 */
     val tags: Set<DecodeFilterTag> = setOf(DecodeFilterTag.ALL),
@@ -24,6 +24,14 @@ data class DecodeFilterState(
     val query: String = "",
     /** 被用户忽略的呼号（右滑忽略 / 长按菜单忽略），一律不显示。 */
     val ignoredCalls: Set<String> = emptySet(),
+    /**
+     * 关注的呼号（**长按「关注 / 取消关注」**，或「自动收录 CQ 台」自动加入）。
+     *
+     * **不参与显示过滤**，只作为自动程序的输入：在 [com.example.ft8vox.qso.AutoProgramSelector.collect]
+     * 里它们是 `autoAddCqToFollow` 的例外（照 FT8CN，关掉开关仍会呼叫其 CQ）。操作页的「关注呼号列表」
+     * 面板也直接读它。
+     */
+    val followedCalls: Set<String> = emptySet(),
 ) {
     /** 是否一个筛选项都没开（用于空态提示）。 */
     val isEmptySelection: Boolean get() = tags.isEmpty()

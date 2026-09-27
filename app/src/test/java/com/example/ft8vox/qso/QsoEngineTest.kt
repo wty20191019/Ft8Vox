@@ -20,7 +20,7 @@ class QsoEngineTest {
         slotUtcMs = slotUtcMs,
     )
 
-    private fun engine(): QsoEngine = QsoEngine(maxRetries = 6).apply {
+    private fun engine(): QsoEngine = QsoEngine().apply {
         configure("F4FSY", "JN25")
     }
 
@@ -83,7 +83,7 @@ class QsoEngineTest {
         // CQ 阶段由第 2 层收集/排序回应者：状态机不自行认人，也不计重试
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(0, s.retries)
+        assertEquals(0, s.noReplyCount)
         assertEquals("CQ F4FSY JN25", s.txText)
     }
 
@@ -91,40 +91,45 @@ class QsoEngineTest {
     fun ignoresMessagesNotAddressedToMe() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
+        q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC W9XYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(1, s.retries)
+        assertEquals(1, s.noReplyCount)
     }
 
     @Test
     fun ignoresOwnTransmission() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
+        q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC F4FSY JN25")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(1, s.retries)
+        assertEquals(1, s.noReplyCount)
     }
 
     @Test
-    fun givesUpAfterMaxRetries() {
+    fun silentSlotsCountNoReplyPerBatch() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
-        var last = q.progress()
-        repeat(7) { last = q.onDecoded(emptyList()) }
-        assertEquals(QsoState.FAILED, last.state)
-        assertNull(last.txText)
-        assertFalse(last.active)
+        // FT8CN 口径：空批也按批次累计无回应（不要求先发射）
+        repeat(5) { q.onDecoded(emptyList()) }
+        assertEquals(5, q.progress().noReplyCount)
     }
 
     @Test
-    fun neverGivesUpWhenRetryMechanismDisabled() {
+    fun neverFailsWithoutReply() {
         val q = engine()
-        q.configure("F4FSY", "JN25", maxRetries = 3, giveUp = false)
         q.startResponderQso("GJ0KYZ", "IO90")
         var last = q.progress()
-        repeat(20) { last = q.onDecoded(emptyList()) }
+        repeat(20) {
+            q.onTransmitted() // 每次都实际重发一次
+            last = q.onDecoded(emptyList())
+        }
+        // 引擎不再因重试耗尽而放弃（放弃由第 2 层按 noReplyLimit 决定）
         assertEquals(QsoState.WAIT_REPLY, last.state)
         assertTrue(last.active)
+        assertEquals(20, last.noReplyCount)
+        assertNotNull(last.txText)
     }
 
     @Test
@@ -188,8 +193,8 @@ class QsoEngineTest {
     fun bothAnsweringConvergeWithoutRepeatingReports() {
         // 两端都自动运行、同时应答对方（真机 bug 的最小复现）：交替时隙交换报文，
         // 应在几步内双方都完成并各记一条日志，且空中不出现「重复的 R 报告」。
-        val a = QsoEngine(maxRetries = 6).apply { configure("A1AAA", "JN25") }
-        val b = QsoEngine(maxRetries = 6).apply { configure("B2BBB", "IO90") }
+        val a = QsoEngine().apply { configure("A1AAA", "JN25") }
+        val b = QsoEngine().apply { configure("B2BBB", "IO90") }
         a.startResponderQso("B2BBB", "IO90")
         b.startResponderQso("A1AAA", "JN25")
         var aText = a.progress().txText
@@ -292,5 +297,165 @@ class QsoEngineTest {
 
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
         assertEquals(QsoState.DONE, s.state)
+    }
+
+    // ---- 死循环复现与收敛（真机 bug：-08 / R-10 每 30 s 交替） ----
+
+    @Test
+    fun alreadySentRRecoversWhenPartnerKeepsSendingReport() {
+        // 我已回过 R（WAIT_RR73），对方却还在发纯报告（说明对方没收到我的 R）。
+        // 旧逻辑：纯报告不匹配任何转移 → 一直重发 R 直到重试耗尽 → 第 2 层重启 → 死循环。
+        // 新逻辑：直接回 RR73 收尾（两颗报告其实已互换），打破死循环。
+        val q = engine()
+        val s0 = q.respondToReport("GJ0KYZ", theirReport = -8, snr = -7)
+        assertEquals(QsoState.WAIT_RR73, s0.state)
+        assertEquals("GJ0KYZ F4FSY R-07", s0.txText)
+
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 30_000L)))
+        assertEquals(QsoState.DONE, s1.state)
+        assertEquals("GJ0KYZ F4FSY RR73", s1.txText)
+
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-7, log!!.reportSent)
+        assertEquals(-8, log.reportReceived)
+        assertEquals(30_000L, log.utcMs)
+    }
+
+    @Test
+    fun recordsStartTimeFromQsoBegin() {
+        val q = engine()
+        // 起始时间来自 start* 传入的 UTC；完成时间取报文时隙
+        q.startResponderQso("GJ0KYZ", "IO90", utcMs = 1_000L)
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 31_000L)))
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9, slotUtcMs = 46_000L)))
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(1_000L, log!!.startUtcMs)
+        assertEquals(46_000L, log.utcMs)
+    }
+
+    @Test
+    fun fallsBackToEndTimeWhenStartUnknown() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90") // 不给起始时间
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 31_000L)))
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9, slotUtcMs = 46_000L)))
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(log!!.utcMs, log.startUtcMs)
+    }
+
+    @Test
+    fun asymmetricCollisionConvergesWithoutDeadlock() {
+        // 真机截图场景的最小复现：A 已回过 R（等 RR73），B 仍在发纯报告（等 R），
+        // 且 A 的 R 一直没被 B 收到。双方必须在有限步内各自完成并只记一条日志。
+        val a = QsoEngine().apply { configure("A1AAA", "JN25") }
+        val b = QsoEngine().apply { configure("B2BBB", "IO90") }
+        a.respondToReport("B2BBB", theirReport = -8, snr = -10) // A → B2BBB A1AAA R-10
+        b.startCallerQso("A1AAA", "IO90", snr = -8)             // B → A1AAA B2BBB -08
+
+        val air = mutableListOf<String>()
+        // 只让 B → A 的报文成功送达（模拟 A 的 R 一直丢），A 也把自己的收尾发出去
+        var rounds = 0
+        while (rounds < 8 && (a.progress().active || b.progress().active)) {
+            rounds++
+            b.progress().txText?.let { t ->
+                air += t
+                a.onDecoded(listOf(decoded(t, snr = -10)))
+                b.onTransmitted()
+            }
+            a.progress().txText?.let { t ->
+                air += t
+                b.onDecoded(listOf(decoded(t, snr = -10)))
+                a.onTransmitted()
+            }
+        }
+        assertEquals(QsoState.DONE, a.progress().state)
+        assertEquals(QsoState.DONE, b.progress().state)
+        assertNotNull("A 应记一条通联", a.consumeCompleted())
+        assertNotNull("B 应记一条通联", b.consumeCompleted())
+        assertEquals("空中不应出现重复报文：$air", air.size, air.distinct().size)
+    }
+
+    @Test
+    fun staleGridAfterReportIsIgnoredButReportRefreshes() {
+        // 我已发出报告（等 R）后，对方又（重复/滞后地）发来网格：不应退回「发报告」阶段；
+        // 但报告值按「每次重测最新」刷新为本次解码的 SNR（默认 -10）。
+        val q = engine()
+        q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
+        assertEquals(QsoState.WAIT_REPORT, s.state)
+        assertEquals("GJ0KYZ F4FSY -10", s.txText)
+    }
+
+    // ---- 六步指令序列（FT8CN functionOrder） ----
+
+    @Test
+    fun exposesSixStepOrder() {
+        val q = engine()
+        assertEquals(0, q.progress().order)                             // 空闲
+        assertEquals(6, q.startCq().order)                              // 6=CQ
+        q.stop()
+        assertEquals(1, q.startResponderQso("GJ0KYZ", "IO90").order)    // 1=网格
+        q.stop()
+        assertEquals(2, q.startCallerQso("GJ0KYZ", "IO90", -11).order)  // 2=报告
+        q.stop()
+        assertEquals(3, q.respondToReport("GJ0KYZ", -12, -7).order)     // 3=R报告
+        q.stop()
+        assertEquals(4, q.respondToRoger("GJ0KYZ", -12, -7).order)      // 4=RR73（随即完成）
+    }
+
+    @Test
+    fun noReplyCountAccumulatesPerDecodeBatchAndResetsOnReply() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 连续三个批次都无法推进 → 批次计数 +3（FT8CN 口径，不要求先发射）
+        repeat(3) { q.onDecoded(emptyList()) }
+        assertEquals(3, q.progress().noReplyCount)
+        // 收到有效回复 → 清零
+        q.onTransmitted()
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertEquals(0, s.noReplyCount)
+        assertEquals(QsoState.WAIT_RR73, s.state)
+    }
+
+    @Test
+    fun reportRefreshesToLatestSnrButRReusesTransmittedTx2Value() {
+        val q = engine()
+        val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertEquals("GJ0KYZ F4FSY -11", s0.txText)
+        // 未推进时用最新 SNR 刷新（-18）
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -18)))
+        assertEquals("GJ0KYZ F4FSY -18", s1.txText)
+        // 实际发出 Tx2（快照 -18）
+        q.onTransmitted()
+        // 对方 R 报告（本批 SNR -9）：回 RR73 完成，落库 reportSent 用 Tx2 的 -18（不是 -9）
+        val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
+        assertEquals(QsoState.DONE, s2.state)
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-18, log!!.reportSent)
+        assertEquals(-5, log.reportReceived)
+    }
+
+    @Test
+    fun advancedFlagTrueOnlyWhenTargetReplies() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 空批 / 别人呼叫我方 → 未推进
+        assertFalse(q.onDecoded(emptyList()).advanced)
+        assertFalse(q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))).advanced)
+        // 目标有效回复 → 推进，且无回应计数清零
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertTrue(s.advanced)
+        assertEquals(0, s.noReplyCount)
+    }
+
+    @Test
+    fun advancedFlagTrueOnCompletion() {
+        val q = engine()
+        q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertTrue(q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))).advanced)
     }
 }

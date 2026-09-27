@@ -93,7 +93,7 @@ private const val DRAWER_FLING_VELOCITY = 800f
 private const val DRAWER_SETTLE_MS = 400L
 
 /**
- * 发射控制抽屉（new_ui.md §3.4）。
+ * 发射控制抽屉（docs/UI.md §2.3）。
  *
  * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；**按住条身向上拖动即跟手展开**
  * （条身上移、面板从条身下方露出来），松手后按位置 / 甩动速度自动吸附到展开或收起；
@@ -155,7 +155,7 @@ fun TxDrawer(
                 onStartCq()
                 false
             }
-            TxMessageKind.REPLY -> {
+            TxMessageKind.GRID -> {
                 val (grid, df) = targetInfo()
                 val to = MessageParser.parse(t).to
                 if (to != null) {
@@ -375,29 +375,34 @@ fun TxDrawer(
                     }
                 }
 
-                // 2) 消息类型（2 行大按钮）
-                Text("消息类型", style = MaterialTheme.typography.titleSmall)
+                // 2) 消息类型（FT8CN 六步：1网格 / 2报告 / 3R报告 / 4RR73 / 5 73 / 6CQ）
+                Text("消息类型（六步）", style = MaterialTheme.typography.titleSmall)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KindButton("CQ", Modifier.weight(1f)) {
-                        composeText = TxCompose.compose(TxMessageKind.CQ, target, status.myCall, status.myGrid) ?: ""
+                    KindButton("1 网格", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(TxMessageKind.GRID, target, status.myCall, status.myGrid) ?: ""
                     }
-                    KindButton("回复", Modifier.weight(1f), enabled = target != null) {
-                        composeText = TxCompose.compose(TxMessageKind.REPLY, target, status.myCall, status.myGrid) ?: ""
+                    KindButton("2 报告", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(
+                            TxMessageKind.REPORT, target, status.myCall, status.myGrid, report,
+                        ) ?: ""
+                    }
+                    KindButton("3 R报告", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(
+                            TxMessageKind.ROGER, target, status.myCall, status.myGrid, report,
+                        ) ?: ""
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KindButton("交换", Modifier.weight(1f), enabled = target != null) {
-                        composeText = TxCompose.compose(
-                            TxMessageKind.EXCHANGE, target, status.myCall, status.myGrid, report,
-                        ) ?: ""
-                    }
-                    KindButton("RR73", Modifier.weight(1f), enabled = target != null) {
+                    KindButton("4 RR73", Modifier.weight(1f), enabled = target != null) {
                         composeText = TxCompose.compose(TxMessageKind.RR73, target, status.myCall, status.myGrid) ?: ""
                     }
-                    KindButton("73", Modifier.weight(1f), enabled = target != null) {
+                    KindButton("5 73", Modifier.weight(1f), enabled = target != null) {
                         composeText = TxCompose.compose(
                             TxMessageKind.SEVENTY_THREE, target, status.myCall, status.myGrid,
                         ) ?: ""
+                    }
+                    KindButton("6 CQ", Modifier.weight(1f)) {
+                        composeText = TxCompose.compose(TxMessageKind.CQ, target, status.myCall, status.myGrid) ?: ""
                     }
                 }
 
@@ -527,10 +532,9 @@ fun TxDrawer(
                 Text(
                     when {
                         !status.txEnabled ->
-                            "发送总开关已关：只接收，不发射任何报文。打开后由「发送」按钮 / 解码卡片手势或自动程序决定发什么。"
-                        status.autoProgram.mode.enabled ->
-                            "发送总开关已开，自动程序已启用（${status.autoProgram.mode.shortLabel}）：" +
-                                "选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
+                            "发送总开关已关：只接收，不发射任何报文。打开后由自动程序或手动「发送」决定发什么。"
+                        status.qso.active || status.txArmed ->
+                            "发送总开关已开，自动程序运行中：选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
                         canSendNow -> "发送总开关已开；当前为我方周期且剩余时间够播完本条报文：点「发送」将立即发射"
                         else -> "发送总开关已开；非我方周期或剩余时间不足以播完本条报文：点「发送」将排到下一个我方发射周期"
                     },
@@ -576,25 +580,25 @@ fun TxDrawer(
                 ) {
                     Text("自动程序", style = MaterialTheme.typography.labelMedium)
                     Text(
-                        status.autoProgram.mode.shortLabel,
+                        if (status.txEnabled) "运行中" else "待命",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (status.autoProgram.mode.enabled) MaterialTheme.colorScheme.primary
+                        color = if (status.txEnabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = onOpenAutoProgram) { Text("设置…") }
                 }
-                if (status.autoProgram.mode.enabled) {
+                if (status.txEnabled) {
                     Text(
-                        "第 2 层：${status.autoPhaseLabel ?: "—"}" +
+                        status.autoPhaseLabel ?: "自动运行" +
                             if (status.autoQueueSize > 0) "｜队列 ${status.autoQueueSize} 台" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
-                    "没有独立的启用开关：模式「0 手动模式」＝关闭，1 主叫 / 2 混合 ＝开启。" +
-                        "切换模式会弹防误发确认；确认启用时若「发送总开关」为关会自动打开，" +
-                        "随后选台、排队与整段 QSO 的报文流程都交给自动程序。",
+                    "自动程序没有独立开关：打开「发送总开关」即自动发射（无确认框），关闭即停。" +
+                        "定向呼叫我方的报文一定应答；其余按「自动关注 CQ / 自动呼叫」两个开关与" +
+                        "「无回应次数」决定选台与换台。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

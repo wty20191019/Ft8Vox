@@ -42,9 +42,47 @@ data class ParsedMessage(
             else -> "TEXT"
         }
 
-    /** 该报文是否发给我（[myCall]）。 */
-    fun addressedTo(myCall: String): Boolean =
-        to != null && to.equals(myCall, ignoreCase = true)
+    /** 该报文是否发给我（[myCall]；宽松匹配，见 [CallMatch]）。 */
+    fun addressedTo(myCall: String): Boolean = CallMatch.isCallingMe(to, myCall)
+}
+
+/**
+ * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/QSO.md` §7）。
+ *
+ * FT8CN 判「是否呼叫我」用 `callsign.contains(短呼号)`，判「目标带 `/`」用 `contains`：
+ * `BG7ZJW/P` 与 `BG7ZJW` 互认，`F4FSY` 与 `F4FSY/P` 互认。这样复合呼号（便携/移动台）
+ * 不会因为后缀不同而漏应答。
+ */
+object CallMatch {
+
+    /** 取复合呼号里 `/` 分段**最长**的一段（FT8CN `getShortCallsign`）。 */
+    fun shortCall(call: String?): String {
+        val c = call?.trim()?.uppercase().orEmpty()
+        if (c.isEmpty()) return ""
+        if (!c.contains('/')) return c
+        return c.split('/').maxByOrNull { it.length }?.trim().orEmpty()
+    }
+
+    /** `to` 是否在呼叫我（宽松：`to` 含我方短呼号）。 */
+    fun isCallingMe(to: String?, myCall: String): Boolean {
+        val t = to?.trim()?.uppercase().orEmpty()
+        val me = shortCall(myCall)
+        return t.isNotEmpty() && me.isNotEmpty() && t.contains(me)
+    }
+
+    /**
+     * `from` 是否是目标台（FT8CN `checkCallsignIsCallTo` 的**对称放宽版**）：
+     * 任一方带 `/` 时用 `contains`，否则精确相等。
+     *
+     * FT8CN 只在**目标**带 `/` 时才用 `contains`；这里改成双向，避免「对方先以裸呼号
+     * 出现、后续改用 `/P` 后缀」时被判成陌生人而漏应答（硬要求：不能不答）。
+     */
+    fun isFrom(from: String?, target: String?): Boolean {
+        val f = from?.trim()?.uppercase().orEmpty()
+        val t = target?.trim()?.uppercase().orEmpty()
+        if (f.isEmpty() || t.isEmpty()) return false
+        return if (f.contains('/') || t.contains('/')) f.contains(t) || t.contains(f) else f == t
+    }
 }
 
 /** 报文解析器（纯 Kotlin，便于单测）。 */

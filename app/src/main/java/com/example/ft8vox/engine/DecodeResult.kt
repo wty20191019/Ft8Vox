@@ -19,7 +19,19 @@ data class DecodeResult(
     val score: Int,
     /** 所属时隙的 UTC 起点（毫秒）；离线解码时为 0。 */
     val slotUtcMs: Long,
-)
+) {
+    /**
+     * 深度（弱信号二次）解码标记，见《按 FT8CN QSO 逻辑改造方案》§1.6。
+     *
+     * FT8CN 的 `isDeep` / `isWeakSignal` 来自同一路「弱信号二次解码」：深度解码只用于显示，
+     * **不驱动自动程序、也不计无回应**。当前 native 只有单遍解码 ⇒ 恒为 `false`（**行为等价现状**），
+     * 这里保留为钩子，将来 native 引入二次解码后直接置真即可。
+     *
+     * 放在**类体**（而不是主构造器）是为了保持 native 的 JNI 构造签名
+     * `(Ljava/lang/String;IFIIJ)V` 不变。
+     */
+    val deep: Boolean = false
+}
 
 /** waterfall 静态信息（频率轴）。 */
 data class WaterfallInfo(

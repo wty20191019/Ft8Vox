@@ -20,6 +20,8 @@ object QsoMerge {
         theirGrid = pick(existing.theirGrid, incoming.theirGrid),
         myCall = pick(existing.myCall, incoming.myCall).orEmpty(),
         myGrid = pick(existing.myGrid, incoming.myGrid),
+        // 起始时间：已有则保留，否则取导入值（回填早期记录）
+        startUtcMs = if (existing.startUtcMs > 0) existing.startUtcMs else incoming.startUtcMs,
         band = pick(existing.band, incoming.band).orEmpty(),
         freqHz = if (existing.freqHz > 0) existing.freqHz else incoming.freqHz,
         reportSent = existing.reportSent ?: incoming.reportSent,

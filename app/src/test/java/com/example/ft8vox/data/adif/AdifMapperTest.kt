@@ -112,4 +112,60 @@ class AdifMapperTest {
         assertEquals(entity.reportReceived, back.reportReceived)
         assertEquals(entity.freqHz, back.freqHz)
     }
+
+    @Test
+    fun recordToEntityReadsStartAndEndTimes() {
+        val record = adifRecord(
+            "CALL" to "JA1ABC",
+            "QSO_DATE" to "20260924",
+            "TIME_ON" to "120315",
+            "QSO_DATE_OFF" to "20260924",
+            "TIME_OFF" to "120400",
+        )
+        val e = AdifMapper.toEntity(record, "", null)!!
+        assertEquals(QsoTime.parseUtc("20260924", "120315"), e.startUtcMs)
+        assertEquals(QsoTime.parseUtc("20260924", "120400"), e.utcMs)
+    }
+
+    @Test
+    fun recordWithoutTimeOffKeepsStartAsEnd() {
+        val record = adifRecord(
+            "CALL" to "JA1ABC",
+            "QSO_DATE" to "20260924",
+            "TIME_ON" to "120315",
+        )
+        val e = AdifMapper.toEntity(record, "", null)!!
+        assertEquals(e.utcMs, e.startUtcMs)
+    }
+
+    @Test
+    fun entityWithDistinctStartWritesTimeOff() {
+        val start = QsoTime.parseUtc("20260924", "120315")!!
+        val end = QsoTime.parseUtc("20260924", "120400")!!
+        val entity = QsoEntity(
+            theirCall = "JA1ABC",
+            utcMs = end,
+            startUtcMs = start,
+        )
+        val record = AdifMapper.toRecord(entity)
+        assertEquals("20260924", record.qsoDate)
+        assertEquals("120315", record.timeOn)
+        assertEquals("20260924", record.qsoDateOff)
+        assertEquals("120400", record.timeOff)
+        // 往返后起止时间不丢
+        val back = AdifMapper.toEntity(record, "", null)!!
+        assertEquals(start, back.startUtcMs)
+        assertEquals(end, back.utcMs)
+    }
+
+    @Test
+    fun entityWithoutStartExportsSameTimeOnAndNoOff() {
+        val end = QsoTime.parseUtc("20260924", "120315")!!
+        val entity = QsoEntity(theirCall = "JA1ABC", utcMs = end)
+        val record = AdifMapper.toRecord(entity)
+        assertEquals("120315", record.timeOn)
+        assertNull(record.timeOff)
+        assertEquals(end, AdifMapper.toEntity(record, "", null)!!.utcMs)
+        assertEquals(end, AdifMapper.toEntity(record, "", null)!!.startUtcMs)
+    }
 }

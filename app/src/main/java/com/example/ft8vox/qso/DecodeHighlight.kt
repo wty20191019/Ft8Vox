@@ -72,13 +72,27 @@ class WorkedIndex(
     fun hasWorkedItuZone(call: String?): Boolean =
         Dxcc.resolve(call)?.ituZone?.let { it in ituZones } ?: false
 
+    /**
+     * 增量并入一个呼号 / 网格，产出新索引（落库后立即生效，见方案 §4.4）。
+     *
+     * 只并入非空项；呼号按大写、网格按 4 字符方格归并（与构造口径一致）。
+     * 索引不可变，调用方用 `_worked.update { it.plus(call, grid) }` 替换。
+     */
+    fun plus(call: String?, grid: String?): WorkedIndex {
+        if (call.isNullOrBlank() && grid.isNullOrBlank()) return this
+        return WorkedIndex(
+            calls = calls + listOfNotNull(call),
+            grids = grids + listOfNotNull(grid),
+        )
+    }
+
     companion object {
         val EMPTY = WorkedIndex()
     }
 }
 
 /**
- * 解码行的最高优先级高亮类别（new_ui.md §3.3 色条）。
+ * 解码行的最高优先级高亮类别（docs/UI.md §3.1 色条）。
  *
  * 优先级（高→低）：正在发射 > 与我有关 > CQ > 已通联 > 重复 > 新网格 > 新 DXCC/ITU > 新呼号 > 新解码。
  */
@@ -141,7 +155,7 @@ data class DecodeStyle(
 }
 
 /**
- * 「高亮与提醒」开关（new_ui.md §6.4）。
+ * 「高亮与提醒」开关（docs/UI.md §2.6）。
  *
  * 关闭某类后，该类不再作为**最高优先级角色**（顺序回退到下一类）；
  * 对应的数据标记点也随之隐藏。默认全开，保持既有行为。

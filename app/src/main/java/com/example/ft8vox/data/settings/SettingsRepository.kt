@@ -15,6 +15,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DecodeFilterTag
+import com.example.ft8vox.qso.FollowRoster
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -60,23 +61,43 @@ private object Keys {
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val sameFreqTx = booleanPreferencesKey("same_freq_tx")
-    // 自动程序（文档 §五菜单）
+    // 自动程序（照 FT8CN 四项，见 docs/QSO.md §5.1）
+    val autoSupervisionMinutes = intPreferencesKey("auto_supervision_minutes")
+    val autoNoReplyLimit = intPreferencesKey("auto_no_reply_limit")
+    val autoFollowCq = booleanPreferencesKey("auto_follow_cq")
+    val autoCallFollow = booleanPreferencesKey("auto_call_follow")
+    //
+    // ---- 以下为**旧键（静默保留，便于回滚）**：不再读取、不再写入 ----
+    // 旧「自动程序」档位 / 排序 / 重发 / 保护限制字段。
+    @Suppress("unused")
     val autoMode = stringPreferencesKey("auto_mode")
+    @Suppress("unused")
     val autoDecodeTiming = stringPreferencesKey("auto_decode_timing")
+    @Suppress("unused")
     val autoAllowRepeat = booleanPreferencesKey("auto_allow_repeat")
+    @Suppress("unused")
     val autoSort = stringPreferencesKey("auto_sort")
+    @Suppress("unused")
     val autoReportPriority = booleanPreferencesKey("auto_report_priority")
+    @Suppress("unused")
     val autoGiveUpRetry = booleanPreferencesKey("auto_give_up_retry")
+    @Suppress("unused")
     val autoRetryLimit = intPreferencesKey("auto_retry_limit")
+    @Suppress("unused")
     val autoStopNoQso = booleanPreferencesKey("auto_stop_no_qso")
+    @Suppress("unused")
     val autoNoQsoMinutes = intPreferencesKey("auto_no_qso_minutes")
+    @Suppress("unused")
     val autoStopTxTotal = booleanPreferencesKey("auto_stop_tx_total")
+    @Suppress("unused")
     val autoTxTotalMinutes = intPreferencesKey("auto_tx_total_minutes")
     val cqOnly = booleanPreferencesKey("cq_only")
     val excludeWorked = booleanPreferencesKey("exclude_worked")
     val filterTags = stringSetPreferencesKey("filter_tags")
     val callFilter = stringPreferencesKey("call_filter")
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
+    val followCalls = stringSetPreferencesKey("follow_calls")
+    val autoFollowOrder = stringPreferencesKey("auto_follow_order")
     val txQueue = stringPreferencesKey("tx_queue")
     val macros = stringPreferencesKey("macros")
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
@@ -138,6 +159,16 @@ private fun splitLines(s: String?): List<String>? =
 
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
+    val followCalls = this[Keys.followCalls]
+        ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        ?.toSet()
+        ?: defaults.followCalls
+    // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
+    val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
+        .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        .distinct()
+        .filter { it in followCalls }
+        .take(FollowRoster.AUTO_MAX)
     return AppSettings(
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,
@@ -149,17 +180,12 @@ private fun Preferences.toAppSettings(): AppSettings {
         selectedFreqHz = this[Keys.selectedFreqHz] ?: defaults.selectedFreqHz,
         sameFreqTx = this[Keys.sameFreqTx] ?: defaults.sameFreqTx,
         auto = AutoProgramSettings(
-            mode = enumOr(Keys.autoMode, defaults.auto.mode),
-            decodeTiming = enumOr(Keys.autoDecodeTiming, defaults.auto.decodeTiming),
-            allowRepeat = this[Keys.autoAllowRepeat] ?: defaults.auto.allowRepeat,
-            sortBy = enumOr(Keys.autoSort, defaults.auto.sortBy),
-            reportPriority = this[Keys.autoReportPriority] ?: defaults.auto.reportPriority,
-            giveUpAfterRetry = this[Keys.autoGiveUpRetry] ?: defaults.auto.giveUpAfterRetry,
-            retryLimit = (this[Keys.autoRetryLimit] ?: defaults.auto.retryLimit).coerceIn(1, 20),
-            stopAfterNoQso = this[Keys.autoStopNoQso] ?: defaults.auto.stopAfterNoQso,
-            noQsoMinutes = (this[Keys.autoNoQsoMinutes] ?: defaults.auto.noQsoMinutes).coerceIn(1, 120),
-            stopAfterTxTotal = this[Keys.autoStopTxTotal] ?: defaults.auto.stopAfterTxTotal,
-            txTotalMinutes = (this[Keys.autoTxTotalMinutes] ?: defaults.auto.txTotalMinutes).coerceIn(1, 240),
+            supervisionMinutes = (this[Keys.autoSupervisionMinutes]
+                ?: defaults.auto.supervisionMinutes).coerceIn(0, 95),
+            noReplyLimit = (this[Keys.autoNoReplyLimit]
+                ?: defaults.auto.noReplyLimit).coerceIn(0, 30),
+            autoAddCqToFollow = this[Keys.autoFollowCq] ?: defaults.auto.autoAddCqToFollow,
+            autoCallFollow = this[Keys.autoCallFollow] ?: defaults.auto.autoCallFollow,
         ),
         filterTags = readFilterTags(this, defaults.filterTags),
         callFilter = this[Keys.callFilter] ?: defaults.callFilter,
@@ -167,6 +193,8 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
             ?.toSet()
             ?: defaults.ignoredCalls,
+        followCalls = followCalls,
+        autoFollowOrder = autoFollowOrder,
         txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
         macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
@@ -219,20 +247,15 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.protocolName] = protocolName
     prefs[Keys.selectedFreqHz] = selectedFreqHz
     prefs[Keys.sameFreqTx] = sameFreqTx
-    prefs[Keys.autoMode] = auto.mode.name
-    prefs[Keys.autoDecodeTiming] = auto.decodeTiming.name
-    prefs[Keys.autoAllowRepeat] = auto.allowRepeat
-    prefs[Keys.autoSort] = auto.sortBy.name
-    prefs[Keys.autoReportPriority] = auto.reportPriority
-    prefs[Keys.autoGiveUpRetry] = auto.giveUpAfterRetry
-    prefs[Keys.autoRetryLimit] = auto.retryLimit
-    prefs[Keys.autoStopNoQso] = auto.stopAfterNoQso
-    prefs[Keys.autoNoQsoMinutes] = auto.noQsoMinutes
-    prefs[Keys.autoStopTxTotal] = auto.stopAfterTxTotal
-    prefs[Keys.autoTxTotalMinutes] = auto.txTotalMinutes
+    prefs[Keys.autoSupervisionMinutes] = auto.supervisionMinutes
+    prefs[Keys.autoNoReplyLimit] = auto.noReplyLimit
+    prefs[Keys.autoFollowCq] = auto.autoAddCqToFollow
+    prefs[Keys.autoCallFollow] = auto.autoCallFollow
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
     prefs[Keys.ignoredCalls] = ignoredCalls
+    prefs[Keys.followCalls] = followCalls
+    prefs[Keys.autoFollowOrder] = autoFollowOrder.joinToString("\n")
     prefs[Keys.txQueue] = txQueue.joinToString("\n")
     prefs[Keys.macros] = macros.joinToString("\n")
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall

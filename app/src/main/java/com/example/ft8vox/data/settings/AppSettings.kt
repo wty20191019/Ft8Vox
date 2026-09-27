@@ -19,20 +19,20 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** 已通联呼号的呈现方式（new_ui §6.4）。 */
+/** 已通联呼号的呈现方式（docs/UI.md §2.6）。 */
 enum class WorkedStyle(val label: String) {
     STRIKE("删除线"),
     UNDERLINE("下划线"),
     HIDE("隐藏"),
 }
 
-/** 外观主题（new_ui §6.5）。 */
+/** 外观主题（docs/UI.md §2.6）。 */
 enum class ThemeMode(val label: String) {
     DARK("暗"),
     LIGHT("亮"),
 }
 
-/** 字体档位，作为 sp 的缩放系数（new_ui §6.5）。 */
+/** 字体档位，作为 sp 的缩放系数（docs/UI.md §2.6）。 */
 enum class FontSize(val label: String, val scale: Float) {
     SMALL("小", 0.9f),
     MEDIUM("中", 1f),
@@ -167,21 +167,35 @@ data class AppSettings(
     /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
 
-    // ---- 解码列表过滤（显示层，new_ui §3.2） ----
+    // ---- 解码列表过滤（显示层，docs/UI.md §3.3） ----
     /** 已选中的筛选项；空集表示「一个都没开」。 */
     val filterTags: Set<DecodeFilterTag> = setOf(DecodeFilterTag.ALL),
     /** 呼号/前缀过滤串（逗号分隔）。 */
     val callFilter: String = "",
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
+    /**
+     * 关注的呼号（长按菜单「关注 / 取消关注」手动加入，或「自动收录 CQ 台」自动加入）。
+     *
+     * - ⭐「关注呼号列表」显示这些台；
+     * - 照 FT8CN：`autoAddCqToFollow`（自动收录）关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
+     */
+    val followCalls: Set<String> = emptySet(),
 
-    // ---- 发射抽屉（new_ui §3.4） ----
+    /**
+     * [followCalls] 中**由「自动收录 CQ 台」自动加入**的那些呼号，**最近加入在前**；恒为 [followCalls] 子集。
+     *
+     * 只用于超出 `FollowRoster.AUTO_MAX` 时按「最早收录」淘汰。手动关注的呼号不在此列，永不被淘汰。
+     */
+    val autoFollowOrder: List<String> = emptyList(),
+
+    // ---- 发射抽屉（docs/UI.md §2.3） ----
     /** 发送队列（报文原文，有序）。 */
     val txQueue: List<String> = emptyList(),
     /** 宏模板（4×2）。 */
     val macros: List<String> = DEFAULT_MACROS,
 
-    // ---- 地图页（new_ui §4.4/§4.5） ----
+    // ---- 地图页（docs/UI.md §2.4） ----
     /** CQ 旗帜是否显示呼号。 */
     val mapCqFlagShowCall: Boolean = true,
     /** CQ 旗帜是否显示信号强度。 */
@@ -189,7 +203,7 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / PTT（new_ui §6.1） ----
+    // ---- 电台 / PTT（docs/UI.md §2.6） ----
     /** 发射前导音开关。 */
     val txLeadTone: Boolean = false,
     /** 前导音时长（ms，0–2000）。 */
@@ -206,13 +220,13 @@ data class AppSettings(
     /** 看门狗超时（ms，1000–60000）。 */
     val watchdogMs: Int = 10000,
 
-    // ---- 音频（new_ui §6.2） ----
+    // ---- 音频（docs/UI.md §2.6） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
     val inputDevice: String = "",
     /** 输入增益（dB，−12…+30；生效依赖 U7）。 */
     val inputGainDb: Int = 0,
 
-    // ---- FT8（new_ui §6.3） ----
+    // ---- FT8（docs/UI.md §2.6） ----
     /**
      * 时隙偏移（ms，−2500…+2500）：**整个时隙一起偏移**（解码窗口起点 + 发射起点）。
      *
@@ -221,7 +235,7 @@ data class AppSettings(
      */
     val slotOffsetMs: Int = 0,
 
-    // ---- 高亮与提醒（new_ui §6.4） ----
+    // ---- 高亮与提醒（docs/UI.md §2.6） ----
     /** 新 CQ 区域（按呼号前缀映射实体表）。 */
     val highlightNewCqZone: Boolean = true,
     /** 新 ITU 区域（按呼号前缀映射实体表）。 */
@@ -243,7 +257,7 @@ data class AppSettings(
     /** 末端蓝标记：当前 QSO 对手。 */
     val endMarkActive: Boolean = true,
 
-    // ---- 外观（new_ui §6.5） ----
+    // ---- 外观（docs/UI.md §2.6） ----
     val themeMode: ThemeMode = ThemeMode.DARK,
     val fontSize: FontSize = FontSize.MEDIUM,
 

@@ -110,4 +110,13 @@ class QsoMergeTest {
         assertEquals("Y", merged.lotwRcvd)
         assertNull(QsoMerge.merge(local(), local()).lotwRcvd)
     }
+
+    @Test
+    fun backfillsMissingStartTimeFromIncoming() {
+        val noStart = local() // startUtcMs 默认 0
+        val withStart = local().copy(startUtcMs = utcMs - 60_000L)
+        assertEquals(utcMs - 60_000L, QsoMerge.merge(noStart, withStart).startUtcMs)
+        // 已有起始时间则保留，不被导入值覆盖
+        assertEquals(utcMs - 60_000L, QsoMerge.merge(withStart, local()).startUtcMs)
+    }
 }

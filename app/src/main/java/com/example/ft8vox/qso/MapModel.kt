@@ -4,7 +4,7 @@ import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Maidenhead
 
 /**
- * 地图标记的三种状态（new_ui.md §4.2/§4.3）。
+ * 地图标记的三种状态（docs/UI.md §2.4）。
  *
  * 优先级：**确认 > 通联 > 解码**。蓝色由本会话解码派生（重启即清空）；
  * 黄色/红色来自日志（已通联 / 已确认）。
@@ -38,7 +38,7 @@ data class CallMarker(
     val fromPrefix: Boolean,
 )
 
-/** CQ 红旗（new_ui.md §4.4）。 */
+/** CQ 红旗（docs/UI.md §2.4）。 */
 data class CqFlag(
     val call: String,
     val lat: Double,
@@ -47,7 +47,7 @@ data class CqFlag(
     val utcMs: Long,
 )
 
-/** 信号连线（new_ui.md §4.5）：方向由 [fromCall] 指向 [toCall]。 */
+/** 信号连线（docs/UI.md §2.4）：方向由 [fromCall] 指向 [toCall]。 */
 data class SignalLink(
     val fromCall: String,
     val toCall: String?,
@@ -237,7 +237,7 @@ object MapModel {
         return out
     }
 
-    /** 连线内容（new_ui.md §4.5）：报告数字 / `RR73` / `73`；其余返回 null（移动方块）。 */
+    /** 连线内容（docs/UI.md §2.4）：报告数字 / `RR73` / `73`；其余返回 null（移动方块）。 */
     fun labelOf(p: ParsedMessage): String? = when {
         p.isRr73 -> "RR73"
         p.is73 -> "73"
