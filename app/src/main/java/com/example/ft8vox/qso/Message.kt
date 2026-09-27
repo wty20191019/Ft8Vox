@@ -47,7 +47,7 @@ data class ParsedMessage(
 }
 
 /**
- * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/FT8CN-QSO.md` §5）。
+ * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/QSO.md` §7）。
  *
  * FT8CN 判「是否呼叫我」用 `callsign.contains(短呼号)`，判「目标带 `/`」用 `contains`：
  * `BG7ZJW/P` 与 `BG7ZJW` 互认，`F4FSY` 与 `F4FSY/P` 互认。这样复合呼号（便携/移动台）

@@ -74,7 +74,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import java.util.Locale
 
 /**
- * 操作页（new_ui.md §3）：水位图 → 筛选条 → 解码列表 → 发射控制。
+ * 操作页（docs/UI.md §2.3）：水位图 → 筛选条 → 解码列表 → 发射控制。
  *
  * 顶栏（波段/模式/UTC）与底部状态条由 [MainShell] 统一提供，本页不再重复。
  */
@@ -340,7 +340,7 @@ fun OperateScreen(
                                     targetCall = from
                                     viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                                    // 左滑 / 菜单「呼叫」＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
+                                    // 左滑 / 菜单「呼叫」＝「设为目标并呼叫」（docs/UI.md §3.1）：与详情面板「呼叫」同一条路径，
                                     // 直接开始（闸门只有「发送总开关」），本时隙来得及就本时隙发
                                     request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                                 }
@@ -423,7 +423,7 @@ fun OperateScreen(
     }
 }
 
-/** 水位图高度档位 → 屏高比例（new_ui.md §3.1：约 0.30）。 */
+/** 水位图高度档位 → 屏高比例（docs/UI.md §2.3：约 0.30）。 */
 fun WaterfallHeight.screenFraction(): Float = when (this) {
     WaterfallHeight.COMPACT -> 0.24f
     WaterfallHeight.NORMAL -> 0.30f

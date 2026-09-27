@@ -61,7 +61,7 @@ private object Keys {
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val sameFreqTx = booleanPreferencesKey("same_freq_tx")
-    // 自动程序（照 FT8CN 四项，见 FT8CN_QSO_PLAN.md §3.1）
+    // 自动程序（照 FT8CN 四项，见 docs/QSO.md §5.1）
     val autoSupervisionMinutes = intPreferencesKey("auto_supervision_minutes")
     val autoNoReplyLimit = intPreferencesKey("auto_no_reply_limit")
     val autoFollowCq = booleanPreferencesKey("auto_follow_cq")

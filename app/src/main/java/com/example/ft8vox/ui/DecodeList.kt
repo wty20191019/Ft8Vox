@@ -78,7 +78,7 @@ data class DecodeRow(
     val style: DecodeStyle,
 )
 
-/** 高亮类别 → 左侧色条颜色（new_ui.md §3.3）。 */
+/** 高亮类别 → 左侧色条颜色（docs/UI.md §3.1）。 */
 fun barColor(role: HighlightRole): Color = when (role) {
     HighlightRole.TX -> BarTx
     HighlightRole.TO_ME -> BarToMe
@@ -95,7 +95,7 @@ internal val SwipeCallGreen = Color(0xFF2E7D32)
 internal val SwipeDeleteGray = Color(0xFF455A64)
 
 /**
- * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
+ * 解码卡片（docs/UI.md §3.1）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
  * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条
@@ -402,7 +402,7 @@ fun annotatedMessage(text: String, myCall: String): AnnotatedString {
 }
 
 /**
- * 解码详情半屏（new_ui.md §3.3）：距离、方位、网格、强度、快捷按钮。
+ * 解码详情半屏（docs/UI.md §3.1）：距离、方位、网格、强度、快捷按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

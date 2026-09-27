@@ -5,7 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 呼号宽松匹配（照 FT8CN，见 `docs/FT8CN-QSO.md` §5）的 JVM 单测。 */
+/** 呼号宽松匹配（照 FT8CN，见 `docs/QSO.md` §7）的 JVM 单测。 */
 class CallMatchTest {
 
     @Test

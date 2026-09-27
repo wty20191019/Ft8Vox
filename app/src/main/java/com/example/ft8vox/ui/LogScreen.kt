@@ -62,7 +62,7 @@ import com.example.ft8vox.ui.theme.VoxRxGreen
 import java.util.Locale
 
 /**
- * 日志页（new_ui.md §5）。
+ * 日志页（docs/UI.md §2.5）。
  *
  * 顶部搜索 + 波段 / 模式 / 日期筛选；表格化卡片列表（呼号 / 网格 / 时间 / RST / 模式）；
  * 长按卡片编辑或删除（**删除需二次确认**）；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；

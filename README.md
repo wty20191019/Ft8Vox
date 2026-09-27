@@ -2,13 +2,12 @@
 
 在 Android 上原生运行 FT8 / FT4 数字通信的开源应用。
 
-> **状态（2026-09-26）**：阶段 0–7 与「新 UI」U1–U9 已完成，功能可用（接收 / 发射 / 自动程序 / 日志 / 地图 / 设置）；
+> **状态（2026-09-27）**：阶段 0–9 与「新 UI」U1–U9 已完成，功能可用（接收 / 发射 / 自动程序 / 日志 / 地图 / 设置）；
 > **后台保活（前台服务）已实装**（切后台 / 息屏继续接收，SAF 选择器不再中断）；
 > 真机实测已修掉输出声卡挂起（`f5215b5`）、两台机器互回信号报告死循环（`fbac634`）与顶栏「发射中」文案不符（`ee5cb6c`）；
-> 剩余阶段 8（开源就绪与首个 MVP 发布）与阶段 9 的稳定性收尾，以及真机全流程回归。
-> **第一次使用请看 [docs/How2use.md](docs/How2use.md)（用户手册）**。
-> 路线图见 [docs/ROADMAP.md](docs/ROADMAP.md)，新 UI 计划与取舍见 [docs/NEW-UI-PLAN.md](docs/NEW-UI-PLAN.md)，
-> 真机验收清单见 [docs/REGRESSION.md](docs/REGRESSION.md)。
+> 剩余阶段 8（开源就绪与首个 MVP 发布）与真机全流程回归。
+> **第一次使用请看 [docs/How2use.md](docs/How2use.md)（用户手册，含构建与贡献说明）**。
+> 自动程序设计见 [docs/QSO.md](docs/QSO.md)，UI 设计 / 路线图 / JNI 契约 / 回归清单见 [docs/UI.md](docs/UI.md)。
 
 ## 简介
 
@@ -40,7 +39,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | FT8 / FT4 解码引擎（native） | ✅ 已完成 | `monitor.c` 多声道解码，协议可切换；解码深度 快/标准/深 + 高级参数热更新 |
-| 接收 SNR / DT / DF | ✅ 已完成 | SNR 口径**照搬 JTDX**（`10·log10(excess) − 26.5 + 窗口修正`），见 `docs/JNI-CONTRACT.md` §4 |
+| 接收 SNR / DT / DF | ✅ 已完成 | SNR 口径**照搬 JTDX**（`10·log10(excess) − 26.5 + 窗口修正`），见 `docs/UI.md` §5.4 |
 | 发射波形生成 + VOX 键控 / PTT 时序 | ✅ 已完成 | native 生成 FT8/FT4 波形；前导静音 + 前导单音键控 VOX，PTT 延迟 / 看门狗可调；**无 CAT，无法感知键控状态**（VOX 状态指示与三项设置已于 2026-09-26 删除） |
 | 时隙偏移（整时隙校准） | ✅ 已完成（待真机验收） | −2.5s–+2.5s，解码窗口与发射起点一起平移；把解码卡片的「时间差 DT」原样填进去即可校准两端 |
 | 实时音频采集 / 播放（AAudio） | ✅ 已完成 | 输入/输出设备可选（系统默认或 USB 声卡），采样率偏好，输入增益热生效；输出流走**非 MMAP** 路径 + 坏流自愈（真机「发几次测试音后再也发不出去」修复） |
@@ -54,7 +53,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 | 地图页 | ✅ 已完成 | **离线 Web Mercator 卫星底图**（单张 z5，8192×8192，按可见区域流式解码 + ×0.7 暗化）+ 大圆距离/方位 + CQ 分区；**不做**在线瓦片 |
 | 设置页（8 组，30+ 项） | ✅ 已完成 | DataStore 持久化；主题暗/亮、字体三档、瀑布高度即时生效 |
 | 前台服务（后台持续接收） | ✅ 已完成（待真机验收） | `microphone` 类型前台服务 + 常驻通知（含「停止接收」动作）；切后台 / 息屏继续接收，SAF 选择器不再中断；**接收中按返回键退到后台**（弹提示），未接收时正常退出 |
-| CI（GitHub Actions） | ⏸ 已停用 | 工作流改名为 `.github/workflows/android.yml.disabled`，只做本地构建与测试（见 `docs/BUILD.md` §5） |
+| CI（GitHub Actions） | ⏸ 已停用 | 工作流改名为 `.github/workflows/android.yml.disabled`，只做本地构建与测试（见 `docs/How2use.md` §19.5） |
 
 **明确不做**：CAT 电台控制、Hound / Fox、FST4、接收频率自动窄带过滤、在线地图瓦片（离线栅格卫星底图已实装）、逐条呼号的精确 DXCC、日志上传（CloudLog / LoTW / eQSL）与局域网后台（后三项曾为占位，已连同代码与文档一并删除）。
 
@@ -73,7 +72,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 
 ## 构建与运行
 
-完整环境要求见 [docs/BUILD.md](docs/BUILD.md)。常用命令：
+完整环境要求见 [docs/How2use.md](docs/How2use.md) 第 19 节「构建与开发」。常用命令：
 
 ```bash
 # 构建 Debug APK（任一平台）
@@ -87,7 +86,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 - 设备端测试（可选，需连接设备/模拟器）：`./gradlew :app:connectedDebugAndroidTest`
   （含 `Ft8DecodeTest` / `Ft8EncodeTest` / `VoxTxNativeTest` / `AudioRoutingTest` 等）
 - 单测只覆盖纯逻辑（时隙、报文解析/组装、QSO 状态机、自动程序、ADIF、网格与地图、筛选与高亮等）；
-  **触发音频、VOX 键控、真实通联**必须在真机 + 电台上验证，清单见 [docs/REGRESSION.md](docs/REGRESSION.md)。
+  **触发音频、VOX 键控、真实通联**必须在真机 + 电台上验证，清单见 [docs/UI.md](docs/UI.md) 第 6 节「回归验收清单」。
 - **CI 暂不配置**：出包与测试均本地执行。
 
 ## 目录结构
@@ -106,23 +105,16 @@ app/src/main/
 │   └── ui/                                 # Compose 页面与组件（四页 + 顶栏/状态条 + theme/）
 ├── cpp/                                    # native：jni_bridge.c、audio_engine.c、ftx_session.c + ft8_lib
 └── res/                                    # 资源
-docs/                                       # 路线图、用户手册、构建、JNI 契约、UI 设计、回归清单
+docs/                                       # 用户手册、QSO 设计、UI/路线图/JNI/回归
 ```
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/How2use.md](docs/How2use.md) | **用户手册（How2use）**：装机 / 接线 / 首次设置 / 通联 / 自动程序 / 日志 / 地图 / 全部设置项 / 排错 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 阶段路线图、技术决策（D1–D10）、架构与阶段 0–10 |
-| [docs/BUILD.md](docs/BUILD.md) | 工具链版本、构建命令、CI 停用说明 |
-| [docs/JNI-CONTRACT.md](docs/JNI-CONTRACT.md) | Kotlin ↔ native 接口契约、SNR 口径、采集预设 |
-| [docs/new_ui.md](docs/new_ui.md) | 新 UI 设计（配色、字号、顶栏/底栏、四页布局） |
-| [docs/NEW-UI-PLAN.md](docs/NEW-UI-PLAN.md) | U1–U9 实施计划与补记（含每条决策的取舍与后果） |
-| [docs/NEW_QSO_.md](docs/NEW_QSO_.md) | QSO 自动系统设计（**对标 FT8CN**）：六步序列、单档常开自动程序、两个安全阀、三循环、人工覆盖 |
-| [docs/REGRESSION.md](docs/REGRESSION.md) | 真机/模拟器回归清单（A–S 组）与结果记录 |
-| [docs/UI-DESIGN.md](docs/UI-DESIGN.md) | 阶段 7 版 UI 设计（已被 `new_ui.md` 取代，保留存档） |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 贡献指南（分支、提交信息、代码规范） |
+| [docs/How2use.md](docs/How2use.md) | **用户手册**：装机 / 接线 / 首次设置 / 通联 / 自动程序 / 日志 / 地图 / 全部设置项 / 排错 / **构建与开发（工具链、命令、原生库、CI、贡献）** |
+| [docs/QSO.md](docs/QSO.md) | **QSO 自动系统设计**（对标 FT8CN）：六步序列与状态机、FT8CN 机制要点、本机实现、设置项与参数、与 FT8CN 对照表、有意偏离清单、明确不做 |
+| [docs/UI.md](docs/UI.md) | **UI 设计 + 路线图 + JNI 契约 + 回归验收清单**：配色/字号/外壳、页面与组件、交互约定、阶段 0–10 与决策、Kotlin ↔ native 契约、真机回归 A–U 组 |
 
 ## 许可证
 

@@ -41,7 +41,7 @@ import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// ---- new_ui.md §4 配色 ----
+// ---- docs/UI.md §2.4 配色 ----
 private val Ocean = Color(0xFF0B0B12)
 private val World = Color(0xFF171C2B)
 private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
@@ -63,7 +63,7 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
 }
 
 /**
- * 离线深色地图（new_ui.md §4.1）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
+ * 离线深色地图（docs/UI.md §2.4）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
  * 按可见区域流式解码，乘 0.7 暗化），其上叠加网格标记、呼号、CQ 旗帜与信号连线，**无网格线图层**。
  *
  * 底图资产缺失/解码失败时退回原来的纯色世界矩形，保证地图页始终可用。
@@ -282,7 +282,7 @@ fun GridMap(
                 }
             }
 
-            // ---- CQ 红旗（new_ui.md §4.4） ----
+            // ---- CQ 红旗（docs/UI.md §2.4） ----
             val poleH = 12.dp.toPx()
             val flagW = 9.dp.toPx()
             val flagH = 6.dp.toPx()

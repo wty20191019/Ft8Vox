@@ -1,8 +1,8 @@
 # Ft8Vox 用户手册（How2use）
 
-> 适用版本：阶段 0–7 + 新 UI U1–U9（2026-09-26）
+> 适用版本：阶段 0–9 + 新 UI U1–U9（2026-09-27）
 > 面向对象：第一次使用 Ft8Vox、或在真机上做 FT8 / FT4 通联的操作者
-> 相关文档：[README](../README.md)（项目概览）、[ROADMAP](ROADMAP.md)（路线图）、[REGRESSION](REGRESSION.md)（验收清单）、[JNI-CONTRACT](JNI-CONTRACT.md)（技术契约）
+> 相关文档：[README](../README.md)（项目概览）、[QSO](QSO.md)（QSO 自动系统设计）、[UI](UI.md)（UI 设计 / 路线图 / JNI 契约 / 回归验收清单）
 
 ---
 
@@ -18,7 +18,7 @@
 8. [发射：发送总开关与发射抽屉](#8-发射发送总开关与发射抽屉)
 9. [手动完成一次通联（QSO）](#9-手动完成一次通联qso)
 10. [时隙、周期与时间校准](#10-时隙周期与时间校准)
-11. [自动程序（无人值守）](#11-自动程序无人值守)
+11. [自动程序（照 FT8CN 单档）](#11-自动程序照-ft8cn-单档)
 12. [地图页](#12-地图页)
 13. [日志页与 ADIF](#13-日志页与-adif)
 14. [设置页逐项说明](#14-设置页逐项说明)
@@ -26,6 +26,7 @@
 16. [常见问题与排错](#16-常见问题与排错)
 17. [已知限制](#17-已知限制)
 18. [合规与免责](#18-合规与免责)
+19. [构建与开发](#19-构建与开发)
 
 ---
 
@@ -536,4 +537,73 @@ Distance: 1234 km, Qso by Ft8Vox
 
 ---
 
-> 遇到本文未覆盖的问题：先看 [docs/REGRESSION.md](REGRESSION.md) 的已知限制与验收清单，或对照 [README](../README.md) 的构建与测试说明复现。
+> 遇到本文未覆盖的问题：先看 [docs/UI.md](UI.md) 的「已知限制」与「回归验收清单」，或对照 [README](../README.md) 的构建与测试说明复现。
+
+---
+
+## 19. 构建与开发
+
+> 面向开发者与需要自己出 APK 的人；普通用户可跳过（安装 `app/build/outputs/apk/debug/app-debug.apk` 即可）。
+
+### 19.1 工具链版本（固定、不降级）
+
+| 组件 | 版本 | 说明 |
+| --- | --- | --- |
+| Android Gradle Plugin (AGP) | 9.3.2 | 见 `gradle/libs.versions.toml` |
+| Gradle | 9.5.0 | 见 `gradle/wrapper/gradle-wrapper.properties`（含 SHA-256 校验） |
+| Kotlin | 2.2.10 | 见 `gradle/libs.versions.toml` |
+| Compose BOM | 2026.02.01 | 见 `gradle/libs.versions.toml` |
+| JDK | 25 | 见 `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`） |
+| compileSdk / targetSdk | 37 | Android SDK Platform `android-37.0` |
+| minSdk | 26 | AAudio 的最低要求 |
+| NDK | 28.2.13676358 | 在 `app/build.gradle.kts` 中 `ndkVersion` 固定 |
+| CMake | 3.22.1 | 见 `app/build.gradle.kts` 的 `externalNativeBuild` |
+| ABI | `arm64-v8a` / `armeabi-v7a` / `x86_64` | 真机 ARM + 模拟器 x86_64 |
+
+### 19.2 前置条件
+
+- 已安装 Android SDK，且在 `local.properties` 中配置 `sdk.dir`（该文件不入库）。
+- 已安装上表所列的 NDK 与 CMake（可通过 SDK Manager 安装）。
+- 可用 JDK 25（或允许 Gradle 通过 foojay 自动解析 toolchain）。
+
+### 19.3 常用命令
+
+```powershell
+# 构建 Debug APK + 跑 JVM 单测（当前 319 例 / 33 suite 全绿）
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest --console=plain
+
+# 只构建
+.\gradlew.bat :app:assembleDebug
+
+# 只跑单测
+.\gradlew.bat :app:testDebugUnitTest
+
+# 清理
+.\gradlew.bat clean
+```
+
+Linux / macOS 用 `./gradlew`。产物：`app/build/outputs/apk/debug/app-debug.apk`。
+
+### 19.4 原生库
+
+- 原生代码位于 `app/src/main/cpp/`，由 CMake 构建为共享库 `libft8.so`（DSP 复用 `ft8_lib` 的 `monitor.c` + kissfft）。
+- 上游 `app/src/main/cpp/ft8_lib/` 视为第三方，**尽量不修改**；定制逻辑放在 `jni_bridge.c` 与 `audio_engine.c` 及 Kotlin 层。
+- 编入 `jni_bridge.c`、`ft8_lib/common/`（monitor/wave）与 `ft8_lib/fft/`（kissfft）；**排除 `ft8_lib/common/audio.c`**（依赖 PortAudio，Android 无法编译）。
+
+### 19.5 CI
+
+**当前暂不启用**（2026-09-25 决定，先只在本地构建与跑测试）。
+
+- 工作流文件保留在 `.github/workflows/android.yml.disabled`；GitHub Actions **只读取 `.yml`/`.yaml`**，因此不会被触发。要重新启用，改回 `.github/workflows/android.yml` 即可。
+- 工作流内容：`ubuntu-latest` + JDK 25 + Android SDK + 上述 NDK/CMake，执行 `./gradlew assembleDebug test --no-daemon`。
+- 因此「与 CI 一致」目前等价于本地一条命令：`.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest --console=plain`。
+
+### 19.6 参与贡献
+
+- 分支：主分支 `main`；开发分支 `F_APP`。功能分支命名建议 `feat/<简述>`、`fix/<简述>`、`docs/<简述>`。
+- 提交信息用中文，采用「类型：简述」形式，一次提交尽量只做一件事，保持可回滚。
+- Kotlin 遵循 `kotlin.code.style=official`；变量 / 函数 / 类名用英文，**注释用中文**。
+- 新增依赖统一走版本目录 `gradle/libs.versions.toml`。
+- JNI 类 / 方法必须在 `app/src/main/keepRules/rules.keep` 中保留，避免 release 混淆后崩溃。
+- 提交前检查：`:app:assembleDebug` 与 `:app:testDebugUnitTest` 通过；不改动无关文件；不提交 `local.properties`、`.idea/`、构建产物。
+- 许可证：贡献的代码按 **GPL-3.0**（见 [`LICENSE`](../LICENSE)）授权，请勿引入与 GPL-3.0 不兼容的代码或依赖。

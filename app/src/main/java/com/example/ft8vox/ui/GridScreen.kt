@@ -75,7 +75,7 @@ private const val LINK_PHASE_FRAME_MS = 80L
 private const val LINK_PHASE_PERIOD_MS = 2200L
 
 /**
- * 地图页（new_ui.md §4）：全屏深色底图 + 蓝/黄/红标记 + 呼号标记 + CQ 红旗 + 信号连线。
+ * 地图页（docs/UI.md §2.4）：全屏深色底图 + 蓝/黄/红标记 + 呼号标记 + CQ 红旗 + 信号连线。
  *
  * - 蓝色 = 本会话解码（重启清空）；黄色 = 日志已通联；红色 = 日志已确认。
  * - 呼号无网格时用前缀归属地近似坐标（[com.example.ft8vox.qso.CallLocation]）。

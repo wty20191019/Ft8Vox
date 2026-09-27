@@ -3,7 +3,7 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 
 /**
- * 解码列表的筛选项（new_ui.md §3.2）。
+ * 解码列表的筛选项（docs/UI.md §3.3）。
  *
  * [ALL] 为互斥项：选中它表示不再过滤；选中其余任意项会自动取消 [ALL]，其余项之间为**多选并集**。
  */

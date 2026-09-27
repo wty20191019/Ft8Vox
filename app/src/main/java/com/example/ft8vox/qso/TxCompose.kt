@@ -3,9 +3,9 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 
 /**
- * 发射抽屉里的报文类型（new_ui.md §3.4）。
+ * 发射抽屉里的报文类型（docs/UI.md §2.3）。
  *
- * 即 FT8CN 的**六步指令序列**（见 `docs/FT8CN-QSO.md` §5）：1=网格 / 2=报告 / 3=R报告 /
+ * 即 FT8CN 的**六步指令序列**（见 `docs/QSO.md` §2.1）：1=网格 / 2=报告 / 3=R报告 /
  * 4=RR73 / 5=73 / 6=CQ。[order] 与 `QsoEngine` 的 `Step.order` 一致（[CUSTOM] 为 0）。
  */
 enum class TxMessageKind(val label: String, val order: Int) {
@@ -151,7 +151,7 @@ object TxQueue {
 }
 
 /**
- * 发射调度（new_ui.md §3.4 第 6 条）：
+ * 发射调度（docs/UI.md §2.3 第 6 条）：
  * 「本周期剩余时间够播完这一条报文就立即发，否则排下一周期」。
  *
  * 判据是**报文波形 + 前导必须能在本时隙内播完**：FT8 报文 12.64 s / 时隙 15 s、

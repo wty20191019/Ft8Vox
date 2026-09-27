@@ -64,7 +64,7 @@ data class QsoProgress(
      * 最近一次 [QsoEngine.onDecoded] 是否发生了推进（收到**当前对手**的有效回复）。
      *
      * 第 2 层据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
-     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/NEW_QSO_.md` §三）。
+     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/QSO.md` §3.1）。
      */
     val advanced: Boolean = false,
 ) {
@@ -124,7 +124,7 @@ class QsoEngine {
     /**
      * 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。
      *
-     * 取值即 FT8CN 的 `functionOrder`（见 `docs/FT8CN-QSO.md` §5 六步指令序列）：
+     * 取值即 FT8CN 的 `functionOrder`（见 `docs/QSO.md` §2.1 六步指令序列）：
      * 1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；[NONE] 为无步骤（order 0）。
      */
     private enum class Step(val order: Int) {
@@ -142,7 +142,7 @@ class QsoEngine {
     private var reportSent: Int? = null
     private var reportReceived: Int? = null
     /**
-     * Tx2 实际发出的报告快照：Tx3 的 `R<报告>` **复用**它（见 `FT8CN_QSO_PLAN.md` §1.7）。
+     * Tx2 实际发出的报告快照：Tx3 的 `R<报告>` **复用**它（见 `docs/QSO.md` §2.4）。
      */
     private var lastSentReport: Int? = null
     private var txText: String? = null

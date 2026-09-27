@@ -31,7 +31,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * 底部导航的四个页面（new_ui.md §2：操作 / 地图 / 日志 / 设置）。
+ * 底部导航的四个页面（docs/UI.md §2.2：操作 / 地图 / 日志 / 设置）。
  */
 enum class MainTab(val label: String) {
     OPERATE("操作"),
@@ -48,7 +48,7 @@ private fun MainTab.icon(): ImageVector = when (this) {
 }
 
 /**
- * 应用主壳（new_ui.md §0/§1/§2/§7）：固定顶栏 + 底部状态条 + 底部四页导航。
+ * 应用主壳（docs/UI.md §1.3、§2.1、§2.2）：固定顶栏 + 底部状态条 + 底部四页导航。
  *
  * 三个 ViewModel 都是 Activity 作用域，切换页面不会重建，因此接收与 QSO 流程不中断。
  */

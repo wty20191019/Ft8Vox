@@ -93,7 +93,7 @@ private const val DRAWER_FLING_VELOCITY = 800f
 private const val DRAWER_SETTLE_MS = 400L
 
 /**
- * 发射控制抽屉（new_ui.md §3.4）。
+ * 发射控制抽屉（docs/UI.md §2.3）。
  *
  * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；**按住条身向上拖动即跟手展开**
  * （条身上移、面板从条身下方露出来），松手后按位置 / 甩动速度自动吸附到展开或收起；

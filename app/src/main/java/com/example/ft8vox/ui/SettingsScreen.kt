@@ -74,7 +74,7 @@ import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
- * 设置页（安卓 Preference 风格，new_ui.md §6）。
+ * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
  *
  * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
@@ -747,7 +747,7 @@ private fun PrefNote(text: String) {
 /**
  * 开关行。
  *
- * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（new_ui.md §3.3）。
+ * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/UI.md §3.1）。
  */
 @Composable
 private fun PrefSwitch(
@@ -783,7 +783,7 @@ private fun ColorDot(color: Color) {
 }
 
 /**
- * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（new_ui.md §3.3）。
+ * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（docs/UI.md §3.1）。
  */
 @Composable
 private fun HighlightLegend() {

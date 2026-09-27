@@ -83,7 +83,7 @@ data class ReceiverStatus(
     val slotParity: Int = 0,
     val slotsDecoded: Long = 0,
     val droppedSamples: Long = 0,
-    /** 本会话累计解码条数（new_ui 底部状态条「总数」）。 */
+    /** 本会话累计解码条数（docs/UI.md 底部状态条「总数」）。 */
     val decodedTotal: Long = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
@@ -609,7 +609,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 它自己也**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定。
      * **自动程序没有独立开关**：打开总开关即启动自动发射（无任何确认框），
-     * 关闭总开关即让自动程序停发（见 FT8CN_QSO_PLAN.md §2.4 / §3.5）。
+     * 关闭总开关即让自动程序停发（见 docs/QSO.md §4.2）。
      *
      * - 开启：允许发射、清空自动程序队列并复位发射监管计时；总开关此前未锁定时按手机 UTC
      *   时间锁定「下一个来得及准备的时隙」。

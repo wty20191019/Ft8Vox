@@ -385,7 +385,7 @@ void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* 
 //      (rbw_db + 26.5)（freq_osr=2 时 = +0.77 dB，「快」/「深」预设各自不同），
 //      避免把窗函数差异算成信号。后续若按实测得到按 SNR 分段的经验曲线，也在此叠加。
 //
-// 已知代价（照搬原式的固有结果，harness 实测，见 docs/JNI-CONTRACT.md §4）：
+// 已知代价（照搬原式的固有结果，harness 实测，见 docs/UI.md §5.4）：
 //   JTDX 的分析窗是 **1 个符号 + 矩形加权**，8 个音调在窗内严格正交，其余音调 bin
 //   只含噪声。本项目瀑布窗是 **周期 Hann、窗长 = 1 符号周期 × freq_osr**（默认
 //   freq_osr=2，约 2 个符号），音调不再正交，其余音调 bin 会被**信号自身的泄漏**污染。
