@@ -420,7 +420,7 @@ fun OperateScreen(
 }
 
 /**
- * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ 参考电平文字 + TX 读数。
+ * 水位图区块：Canvas + 顶部浮条（增益 / 噪抑 / 带宽 / 暂停）+ TX 读数。
  */
 @Composable
 private fun WaterfallBox(
@@ -448,15 +448,6 @@ private fun WaterfallBox(
             txing = status.txing,
             occupiedHz = status.protocol.occupiedHz,
             onLongPress = onLongPress,
-        )
-
-        // 参考电平（右上）
-        Text(
-            "Ref -50~-10dB",
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = Color(0xCCFFFFFF),
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
         )
 
         // 发射频率读数（右下；红线＝发射频率，拖动红线即可调整）
