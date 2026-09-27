@@ -516,6 +516,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(ignoredCalls = emptySet()) }
     }
 
+    /** 关注一个呼号（筛选项「关注」只显示它；`autoFollowCq` 关时自动程序仍会呼叫它的 CQ）。 */
+    fun followCall(call: String) {
+        val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
+        persist { it.copy(followCalls = it.followCalls + c) }
+    }
+
+    /** 取消关注（「关注」筛选视图右滑 / 长按菜单都可调用）。 */
+    fun unfollowCall(call: String) {
+        val c = call.trim().uppercase()
+        persist { it.copy(followCalls = it.followCalls - c) }
+    }
+
+    /** 切换关注状态（长按菜单「关注 / 取消关注」）。 */
+    fun toggleFollow(call: String) {
+        val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
+        persist {
+            it.copy(
+                followCalls = if (c in it.followCalls) it.followCalls - c else it.followCalls + c,
+            )
+        }
+    }
+
     fun setCallFilter(value: String) {
         persist { it.copy(callFilter = value) }
     }
@@ -1429,6 +1451,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             tags = s.filterTags,
             query = s.callFilter,
             ignoredCalls = s.ignoredCalls,
+            followedCalls = s.followCalls,
         )
     }
 

@@ -98,10 +98,11 @@ private val SwipeDeleteGray = Color(0xFF455A64)
  * 解码卡片（new_ui.md §3.3）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
- * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条。
+ * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条
+ * （「关注」筛选视图里右滑＝取消关注该呼号）。
  *
  * 长按菜单（方案 §4 期 4）：呼叫（＝左滑）/ 回复（按报文类型自动决定发什么）/ 查看日志 /
- * 复制消息 / 忽略；**不提供手动 73**（收尾由状态机与自动程序负责）。
+ * 复制消息 / 关注（切换）/ 忽略；**不提供手动 73**（收尾由状态机与自动程序负责）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -116,6 +117,9 @@ fun DecodeCard(
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
+    /** 发信人是否已在关注名单里（决定长按菜单显示「关注」还是「取消关注」）。 */
+    followed: Boolean = false,
+    onToggleFollow: () -> Unit = {},
     modifier: Modifier = Modifier,
     workedStyle: WorkedStyle = WorkedStyle.STRIKE,
     endMarkMyCall: Boolean = true,
@@ -336,6 +340,14 @@ fun DecodeCard(
                 onClick = {
                     menuOpen = false
                     onCopy()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(if (followed) "取消关注 $callText" else "关注 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onToggleFollow()
                 },
             )
             DropdownMenuItem(

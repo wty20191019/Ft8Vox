@@ -158,9 +158,14 @@ fun OperateScreen(
         tags = settings.filterTags,
         query = settings.callFilter,
         ignoredCalls = settings.ignoredCalls,
+        followedCalls = settings.followCalls,
     )
-    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls) {
-        DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
+    // 「关注」筛选视图（只选中「关注」这一项）里右滑＝取消关注；其余视图右滑＝删除该条解码
+    val followView = settings.filterTags == setOf(DecodeFilterTag.FOLLOW)
+    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls, settings.followCalls) {
+        DecodeFilter.counts(
+            messages, worked, status.myCall, settings.ignoredCalls, settings.followCalls,
+        )
     }
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     val highlightPrefs = HighlightPrefs(
@@ -333,9 +338,15 @@ fun OperateScreen(
                                 }
                             },
                             onOpenLog = { onOpenLog(from) },
-                            onSwipeDelete = { viewModel.removeMessage(row.msg) },
+                            // 「关注」视图里右滑＝取消关注；其余视图右滑＝删除该条解码
+                            onSwipeDelete = {
+                                if (followView && from != null) viewModel.unfollowCall(from)
+                                else viewModel.removeMessage(row.msg)
+                            },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
+                            followed = from != null && from in settings.followCalls,
+                            onToggleFollow = { from?.let { viewModel.toggleFollow(it) } },
                             workedStyle = settings.workedStyle,
                             endMarkMyCall = settings.endMarkMyCall,
                             endMarkActive = settings.endMarkActive,

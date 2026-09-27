@@ -95,6 +95,7 @@ private object Keys {
     val filterTags = stringSetPreferencesKey("filter_tags")
     val callFilter = stringPreferencesKey("call_filter")
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
+    val followCalls = stringSetPreferencesKey("follow_calls")
     val txQueue = stringPreferencesKey("tx_queue")
     val macros = stringPreferencesKey("macros")
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
@@ -180,6 +181,10 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
             ?.toSet()
             ?: defaults.ignoredCalls,
+        followCalls = this[Keys.followCalls]
+            ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+            ?.toSet()
+            ?: defaults.followCalls,
         txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
         macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
@@ -239,6 +244,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
     prefs[Keys.ignoredCalls] = ignoredCalls
+    prefs[Keys.followCalls] = followCalls
     prefs[Keys.txQueue] = txQueue.joinToString("\n")
     prefs[Keys.macros] = macros.joinToString("\n")
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall

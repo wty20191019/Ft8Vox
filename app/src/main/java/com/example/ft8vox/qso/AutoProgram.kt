@@ -28,8 +28,8 @@ data class AutoProgramSettings(
     /**
      * 自动呼叫关注的呼号：是否真的去呼叫候选里的 CQ 台（默认开，FT8CN `autoCallFollow`）。
      *
-     * 注意：FT8CN 还有一份「关注呼号名单」（`followCallsigns` 表），名单里的台即使
-     * `autoFollowCQ` 关掉也会被呼叫；**本机没有这份名单**，故两个开关是**串联**关系。
+     * 它是**总闸**（FT8CN `:714`，关掉一条 CQ 都不叫）；开启时，[autoFollowCq] 也开 ⇒ 任何未通联
+     * CQ 台都可呼叫，[autoFollowCq] 关 ⇒ **只**呼叫「关注名单」（`AppSettings.followCalls`）里的 CQ 台。
      */
     val autoCallFollow: Boolean = true,
 )
@@ -100,8 +100,9 @@ sealed interface AutoAction {
  * 规则（照 FT8CN，见方案 §3.3）：
  * - **定向报文一律入选**（CALL/REPORT/ROGER），不受显示筛选、不受已通联、不受两个开关影响；
  *   只有显式「忽略该呼号」才会被挡住。
- * - **CQ 台**：仅当 [AutoProgramSettings.autoFollowCq] 为真才入选；**已通联的一律跳过**（硬编码，
- *   对应 FT8CN `checkQSLCallsign` 过滤）；**不再套用 `DecodeFilter.matches`**（显示筛选只影响显示）。
+ * - **CQ 台**：仅当 [AutoProgramSettings.autoFollowCq] 为真、**或**该台在 `filter.followedCalls`
+ *   （关注名单）里，才入选（照 FT8CN：`autoFollowCQ || callsignInFollow`）；**已通联的一律跳过**
+ *   （硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；**不再套用 `DecodeFilter.matches`**（显示筛选只影响显示）。
  * - 深度/弱信号解码（[DecodeResult.deep]）不驱动自动程序。
  */
 object AutoProgramSelector {
@@ -131,9 +132,10 @@ object AutoProgramSelector {
             val kind: AutoTargetKind
             val report: Int?
             if (p.isCq) {
-                // CQ 台：「自动关注 CQ」打开才纳入候选（照 FT8CN＝把 CQ 推送到可呼叫集合）；
-                // 已通联的 CQ 台一律跳过（硬编码；FT8CN 的「关注呼号名单」本机没有）
-                if (!program.autoFollowCq) continue
+                // CQ 台：默认「自动关注 CQ」打开才纳入候选；照 FT8CN，**关注名单里的台是例外**
+                //（开关关掉也照样纳入、会被自动呼叫）。已通联的 CQ 台一律跳过（硬编码）。
+                val followed = from in filter.followedCalls
+                if (!program.autoFollowCq && !followed) continue
                 if (workedCall) continue
                 kind = AutoTargetKind.CQ
                 report = null
@@ -425,14 +427,13 @@ class AutoScheduler {
     /**
      * 「优先应答未通联的 CQ 台」（S&P）；否则发 CQ。
      *
-     * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3。FT8CN 的条件是
-     * `autoCallFollow && (autoFollowCQ || 该台在关注呼号名单里)`；本机**没有**关注呼号名单
-     * （FT8CN `followCallsigns` 表），故只剩两个开关**串联**生效、各管一段：
+     * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3（条件
+     * `autoCallFollow && (autoFollowCQ || 该台在关注名单里)`）。本机两个开关**串联**生效：
      * - [AutoProgramSettings.autoFollowCq]：CQ 台是否**纳入候选**（照 FT8CN「自动关注 CQ」＝把 CQ
-     *   推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关）。
+     *   推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关，关注名单是它的例外）。
      * - [AutoProgramSettings.autoCallFollow]：是否**真的去呼叫**（FT8CN `:714`，关掉则一条 CQ 都不叫）。
      *
-     * 因此本机「自动关注 CQ」关掉后不会自动呼叫任何 CQ 台（FT8CN 还有「关注名单」这条例外，本机没有）。
+     * 因此「自动关注 CQ」关掉后，本机**只**自动呼叫关注名单里的 CQ 台（没有名单时就不叫 CQ）。
      */
     private fun nextAction(cqs: List<AutoTarget>): AutoAction =
         if (settings.autoCallFollow && cqs.isNotEmpty()) {

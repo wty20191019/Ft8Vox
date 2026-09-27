@@ -79,7 +79,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 # 构建 Debug APK（任一平台）
 ./gradlew :app:assembleDebug            # Windows: .\gradlew.bat :app:assembleDebug
 
-# 构建 + 跑 JVM 单测（当前 310 例 / 32 suite 全绿）
+# 构建 + 跑 JVM 单测（当前 314 例 / 32 suite 全绿）
 ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
 ```
 

@@ -92,6 +92,20 @@ class AutoProgramTest {
     }
 
     @Test
+    fun collectKeepsFollowedCqWhenSwitchOff() {
+        // 照 FT8CN：关掉「自动关注 CQ」，但该台在关注名单里 → 仍纳入候选
+        val list = AutoProgramSelector.collect(
+            listOf(decoded("CQ W1AW FN42"), decoded("CQ JA1ABC PM95")),
+            program.copy(autoFollowCq = false),
+            filter = DecodeFilterState(followedCalls = setOf("W1AW")),
+            myCall = "F4FSY",
+        )
+        assertEquals(1, list.size)
+        assertEquals("W1AW", list[0].call)
+        assertEquals(AutoTargetKind.CQ, list[0].kind)
+    }
+
+    @Test
     fun collectSkipsWorkedCqButAlwaysHandlesDirected() {
         val worked = WorkedIndex(calls = listOf("W1AW", "DL1ABC"))
         val list = AutoProgramSelector.collect(
@@ -217,13 +231,25 @@ class AutoProgramTest {
 
     @Test
     fun autoFollowCqOffMeansSendCq() {
-        // 「自动关注 CQ」关 ⇒ CQ 台不进候选 ⇒ 不自动呼叫 CQ
-        //（本机没有 FT8CN 的「关注呼号名单」这条可绕开开关的例外）
+        // 「自动关注 CQ」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
         val s = scheduler(program.copy(autoFollowCq = false))
         assertEquals(
             AutoAction.SendCq,
             s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
         )
+    }
+
+    @Test
+    fun followedCqIsExceptionToAutoFollowCqSwitch() {
+        // 照 FT8CN：关掉「自动关注 CQ」，但该台在关注名单里 → 仍自动呼叫
+        val s = scheduler(program.copy(autoFollowCq = false))
+        val action = s.onDecoded(
+            listOf(decoded("CQ W1AW FN42")),
+            filter = DecodeFilterState(followedCalls = setOf("W1AW")),
+            utcNowMs = 1_000L,
+        )
+        assertTrue(action is AutoAction.AnswerCq)
+        assertEquals("W1AW", (action as AutoAction.AnswerCq).target.call)
     }
 
     @Test

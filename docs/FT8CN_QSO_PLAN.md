@@ -156,7 +156,7 @@ newOrder == 5                                             // ① 收到 73
 2. 保留「报文驱动收敛兜底」（§1.8 第 2 条）。
 3. 报告值改为「每次重测最新 / R 复用 Tx2」（§1.7）。
 4. `deep`/`weak` 双通道仅预留字段，当前行为等价现状。
-5. 无手动「关注呼号名单」UI：FT8CN 的 `followCallsigns` 表（手动关注、持久、Web 后台删除，名单里的台不受 `autoFollowCQ` 限制）**不做**；本机只有 `autoFollowCq` / `autoCallFollow` 两个开关，二者**串联**（都开才自动呼叫 CQ 台），属「无名单子集」。
+5. 「关注呼号名单」用**最轻量**方案做：`AppSettings.followCalls`（设置里存 `Set<String>`，**不建 Room 表**），入口＝**解码列表长按「关注 / 取消关注」**；筛选项「关注」只看名单里的台；照 FT8CN，名单里的台**不受 `autoFollowCq` 限制**。与 FT8CN 的差别仅在于删除入口在 App 内（FT8CN 只能经局域网 Web 后台删）。
 6. **无任何发射确认框**：删除 `AutoEnableConfirmDialog`，总开关直接生效（FT8CN 的 `activated` 也是直接生效）。
 
 ---
@@ -203,8 +203,8 @@ newOrder == 5                                             // ① 收到 73
 | 自动关注 CQ | 开关 | 开 | FT8CN `autoFollowCQ`（把 CQ 台纳入候选，非「写入关注名单」） |
 | 自动呼叫关注的呼号 | 开关 | 开 | FT8CN `autoCallFollow`（是否自动呼叫；总闸） |
 
-> FT8CN 还有一份「关注呼号名单」（`followCallsigns`），名单里的台不受 `autoFollowCQ` 限制；**本机不做**，
-> 故两个开关是串联关系（都开＝自动呼叫未通联 CQ 台；任一关＝不自动呼叫 CQ）。
+> 「关注名单」不在本弹窗里管：入口是**解码列表长按「关注 / 取消关注」**，存 `AppSettings.followCalls`。
+> 照 FT8CN，名单里的台不受 `autoFollowCQ` 限制（关掉该开关仍会呼叫其 CQ）。
 
 - **删除**：工作模式单选、解码时机、允许重复通联、排序依据、重发机制、保护限制（无有效 QSO / 发射总时长）。
 - **删除** `AutoMode` 概念：自动程序常开，**开关就是「发送总开关」`txEnabled`**。
@@ -252,7 +252,7 @@ data class AutoProgramSettings(
 - `collect`：
   - 逐条解析；跳过自己；跳过 `ignoredCalls`；
   - **定向报文（to=我）**：一律入选（CALL / REPORT / ROGER；73/RR73 不作为新 QSO 起点）；**不受显示筛选、不受已通联、不受开关影响**；
-  - **CQ 台**：仅当 `autoFollowCq == true` 才入选（对应 FT8CN「自动关注 CQ」＝推送到可呼叫集合；**不是**写入关注名单）；**已通联的 CQ 台一律跳过**（硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；不再套用 `DecodeFilter.matches`。
+  - **CQ 台**：`autoFollowCq == true` **或**该台在关注名单（`filter.followedCalls`）里才入选（照 FT8CN `autoFollowCQ || callsignInFollow`；**不是**写入关注名单）；**已通联的 CQ 台一律跳过**（硬编码，对应 FT8CN `checkQSLCallsign` 过滤）；不再套用 `DecodeFilter.matches`。
   - 记录 `deep`（§1.6）与 `cqModifier`。
 - `rank`（无 `sortBy`）：排序键降序 = `(CQ 修饰符优先级, 解码顺序)`：
   1. `DX`（最高）；
@@ -355,7 +355,7 @@ FT8CN `QSLRecord` 字段对照：
 | --- | --- |
 | `qso/MessageParserTest` | 宽松呼号匹配：`BG7ZJW/P` ↔ `BG7ZJW`；`XXBG7ZJW` 的边界；目标带 `/` 的 `contains` |
 | `qso/QsoEngineTest`（重写） | 六步推进 1→2→3→4→5→完成；收 73 完成；发完 73 无回应完成；RR73 三重兜底 ③④⑤；收纯报告（ROGER 中）直接 RR73；报告每次重测 + R 复用；noReplyCount 批次累加 / 回复清零 |
-| `qso/AutoProgramTest`（重写） | 单档：定向一律应答（不受开关/筛选/已通联）；已通联 CQ 台不选；`autoFollowCq=false` 无 CQ 候选；两开关默认开；CQ 修饰符优先级；监管超时 Stop；超限换台 / 无台回 CQ |
+| `qso/AutoProgramTest`（重写） | 单档：定向一律应答（不受开关/筛选/已通联）；已通联 CQ 台不选；`autoFollowCq=false` 无 CQ 候选；**关注名单是 `autoFollowCq` 的例外**（关掉开关仍收集 / 仍 `AnswerCq`）；两开关默认开；CQ 修饰符优先级；监管超时 Stop；超限换台 / 无台回 CQ |
 | `qso/DecodeHighlightTest` | `WorkedIndex.plus` 增量更新 |
 | `qso/TxComposeTest` | 六步模板渲染；`kindOf` 六步映射 |
 | `ui/TxDisplayTextTest` / `TxParityAutoTest` | 序号语义变更后回归 |
@@ -528,6 +528,13 @@ FT8CN `QSLRecord` 字段对照：
   FT8CN 另有一份 `followCallsigns` 关注名单（本机不做）。据此：`nextAction` 改为只由
   `autoCallFollow` 把关（`collect` 已按 `autoFollowCq` 过滤，**行为等价**、职责清晰），
   `AutoProgramDialog` 文案、`FT8CN-QSO.md` §7/§12、`NEW_QSO_.md`、`How2use.md` §11 全部更正。
+- **补上「关注名单」**（上一条里「本机不做」的部分改为实现）：`AppSettings.followCalls: Set<String>`
+  + `SettingsRepository` 一个 `stringSetPreferencesKey("follow_calls")`；`DecodeFilterTag` 新增
+  `FOLLOW("关注")`（筛选项显示名单里那些**全部**解码，不限 CQ）；`DecodeFilterState.followedCalls`
+  同时供显示与选台（`collect` 的 CQ 分支＝`autoFollowCq || followed`）；入口＝解码长按
+  「关注 / 取消关注」（`DecodeCard` + `SessionViewModel.toggleFollow`）；只选「关注」的视图里**右滑＝取消关注**。
+  `AutoProgramDialog` / `How2use` §6.3·§7·§11 / `NEW_QSO_` §3.2·§3.4·§7·§十三 / `FT8CN-QSO` §12 同步。
+- 单测 +4（`DecodeFilterTest` 2 + `AutoProgramTest` 2），全库 **314 例 / 32 suite**。
 
 ---
 

@@ -174,6 +174,13 @@ data class AppSettings(
     val callFilter: String = "",
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
+    /**
+     * 关注的呼号（长按菜单「关注 / 取消关注」）。
+     *
+     * - 筛选项「关注」只显示这些台发出的解码；
+     * - 照 FT8CN：`autoFollowCq` 关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
+     */
+    val followCalls: Set<String> = emptySet(),
 
     // ---- 发射抽屉（new_ui §3.4） ----
     /** 发送队列（报文原文，有序）。 */

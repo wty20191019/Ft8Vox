@@ -14,6 +14,7 @@ enum class DecodeFilterTag(val label: String) {
     REPLY("回复"),
     SEVENTY_THREE("73"),
     WORKED("已通联"),
+    FOLLOW("关注"),
 }
 
 /** 解码列表的显示过滤条件（不丢弃解码结果，仅影响展示与 Call 1st 挑台）。 */
@@ -24,6 +25,12 @@ data class DecodeFilterState(
     val query: String = "",
     /** 被用户忽略的呼号（右滑忽略 / 长按菜单忽略），一律不显示。 */
     val ignoredCalls: Set<String> = emptySet(),
+    /**
+     * 关注的呼号（长按菜单「关注」）。供「关注」筛选项与自动程序共用：
+     * 筛选项只显示这些台发出的解码；[com.example.ft8vox.qso.AutoProgramSelector.collect] 里
+     * 它们是 `autoFollowCq` 的例外（照 FT8CN，关掉开关仍会呼叫其 CQ）。
+     */
+    val followedCalls: Set<String> = emptySet(),
 ) {
     /** 是否一个筛选项都没开（用于空态提示）。 */
     val isEmptySelection: Boolean get() = tags.isEmpty()
@@ -92,6 +99,8 @@ object DecodeFilter {
         if (DecodeFilterTag.REPLY in tags && isReply(parsed)) return true
         if (DecodeFilterTag.SEVENTY_THREE in tags && is73(parsed)) return true
         if (DecodeFilterTag.WORKED in tags && worked.hasWorkedCall(parsed.from)) return true
+        // 「关注」＝发信人在关注名单里的全部解码（照 FT8CN，不限 CQ）
+        if (DecodeFilterTag.FOLLOW in tags && from != null && from in filter.followedCalls) return true
         return false
     }
 
@@ -109,6 +118,7 @@ object DecodeFilter {
         worked: WorkedIndex = WorkedIndex.EMPTY,
         myCall: String = "",
         ignoredCalls: Set<String> = emptySet(),
+        followedCalls: Set<String> = emptySet(),
     ): Map<DecodeFilterTag, Int> {
         var all = 0
         var toMe = 0
@@ -116,6 +126,7 @@ object DecodeFilter {
         var reply = 0
         var s73 = 0
         var workedN = 0
+        var followN = 0
         for (m in messages) {
             val p = MessageParser.parse(m.text)
             val from = p.from?.trim()?.uppercase()
@@ -126,6 +137,7 @@ object DecodeFilter {
             if (isReply(p)) reply++
             if (is73(p)) s73++
             if (worked.hasWorkedCall(p.from)) workedN++
+            if (from != null && from in followedCalls) followN++
         }
         return mapOf(
             DecodeFilterTag.ALL to all,
@@ -134,6 +146,7 @@ object DecodeFilter {
             DecodeFilterTag.REPLY to reply,
             DecodeFilterTag.SEVENTY_THREE to s73,
             DecodeFilterTag.WORKED to workedN,
+            DecodeFilterTag.FOLLOW to followN,
         )
     }
 }
