@@ -155,7 +155,7 @@ fun TxDrawer(
                 onStartCq()
                 false
             }
-            TxMessageKind.REPLY -> {
+            TxMessageKind.GRID -> {
                 val (grid, df) = targetInfo()
                 val to = MessageParser.parse(t).to
                 if (to != null) {
@@ -375,29 +375,34 @@ fun TxDrawer(
                     }
                 }
 
-                // 2) 消息类型（2 行大按钮）
-                Text("消息类型", style = MaterialTheme.typography.titleSmall)
+                // 2) 消息类型（FT8CN 六步：1网格 / 2报告 / 3R报告 / 4RR73 / 5 73 / 6CQ）
+                Text("消息类型（六步）", style = MaterialTheme.typography.titleSmall)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KindButton("CQ", Modifier.weight(1f)) {
-                        composeText = TxCompose.compose(TxMessageKind.CQ, target, status.myCall, status.myGrid) ?: ""
+                    KindButton("1 网格", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(TxMessageKind.GRID, target, status.myCall, status.myGrid) ?: ""
                     }
-                    KindButton("回复", Modifier.weight(1f), enabled = target != null) {
-                        composeText = TxCompose.compose(TxMessageKind.REPLY, target, status.myCall, status.myGrid) ?: ""
+                    KindButton("2 报告", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(
+                            TxMessageKind.REPORT, target, status.myCall, status.myGrid, report,
+                        ) ?: ""
+                    }
+                    KindButton("3 R报告", Modifier.weight(1f), enabled = target != null) {
+                        composeText = TxCompose.compose(
+                            TxMessageKind.ROGER, target, status.myCall, status.myGrid, report,
+                        ) ?: ""
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KindButton("交换", Modifier.weight(1f), enabled = target != null) {
-                        composeText = TxCompose.compose(
-                            TxMessageKind.EXCHANGE, target, status.myCall, status.myGrid, report,
-                        ) ?: ""
-                    }
-                    KindButton("RR73", Modifier.weight(1f), enabled = target != null) {
+                    KindButton("4 RR73", Modifier.weight(1f), enabled = target != null) {
                         composeText = TxCompose.compose(TxMessageKind.RR73, target, status.myCall, status.myGrid) ?: ""
                     }
-                    KindButton("73", Modifier.weight(1f), enabled = target != null) {
+                    KindButton("5 73", Modifier.weight(1f), enabled = target != null) {
                         composeText = TxCompose.compose(
                             TxMessageKind.SEVENTY_THREE, target, status.myCall, status.myGrid,
                         ) ?: ""
+                    }
+                    KindButton("6 CQ", Modifier.weight(1f)) {
+                        composeText = TxCompose.compose(TxMessageKind.CQ, target, status.myCall, status.myGrid) ?: ""
                     }
                 }
 

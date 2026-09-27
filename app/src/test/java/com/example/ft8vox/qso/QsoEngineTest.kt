@@ -371,12 +371,63 @@ class QsoEngineTest {
     }
 
     @Test
-    fun staleGridAfterReportIsIgnored() {
-        // 我已发出报告（等 R）后，对方又（重复/滞后地）发来网格：不应退回「发报告」阶段
+    fun staleGridAfterReportIsIgnoredButReportRefreshes() {
+        // 我已发出报告（等 R）后，对方又（重复/滞后地）发来网格：不应退回「发报告」阶段；
+        // 但报告值按「每次重测最新」刷新为本次解码的 SNR（默认 -10）。
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
         assertEquals(QsoState.WAIT_REPORT, s.state)
-        assertEquals("GJ0KYZ F4FSY -11", s.txText)
+        assertEquals("GJ0KYZ F4FSY -10", s.txText)
+    }
+
+    // ---- 六步指令序列（FT8CN functionOrder） ----
+
+    @Test
+    fun exposesSixStepOrder() {
+        val q = engine()
+        assertEquals(0, q.progress().order)                             // 空闲
+        assertEquals(6, q.startCq().order)                              // 6=CQ
+        q.stop()
+        assertEquals(1, q.startResponderQso("GJ0KYZ", "IO90").order)    // 1=网格
+        q.stop()
+        assertEquals(2, q.startCallerQso("GJ0KYZ", "IO90", -11).order)  // 2=报告
+        q.stop()
+        assertEquals(3, q.respondToReport("GJ0KYZ", -12, -7).order)     // 3=R报告
+        q.stop()
+        assertEquals(4, q.respondToRoger("GJ0KYZ", -12, -7).order)      // 4=RR73（随即完成）
+    }
+
+    @Test
+    fun noReplyCountAccumulatesPerDecodeBatchAndResetsOnReply() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90")
+        // 连续三个批次都无法推进 → 批次计数 +3（FT8CN 口径，不要求先发射）
+        repeat(3) { q.onDecoded(emptyList()) }
+        assertEquals(3, q.progress().noReplyCount)
+        // 收到有效回复 → 清零
+        q.onTransmitted()
+        val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertEquals(0, s.noReplyCount)
+        assertEquals(QsoState.WAIT_RR73, s.state)
+    }
+
+    @Test
+    fun reportRefreshesToLatestSnrButRReusesTransmittedTx2Value() {
+        val q = engine()
+        val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertEquals("GJ0KYZ F4FSY -11", s0.txText)
+        // 未推进时用最新 SNR 刷新（-18）
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -18)))
+        assertEquals("GJ0KYZ F4FSY -18", s1.txText)
+        // 实际发出 Tx2（快照 -18）
+        q.onTransmitted()
+        // 对方 R 报告（本批 SNR -9）：回 RR73 完成，落库 reportSent 用 Tx2 的 -18（不是 -9）
+        val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
+        assertEquals(QsoState.DONE, s2.state)
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(-18, log!!.reportSent)
+        assertEquals(-5, log.reportReceived)
     }
 }

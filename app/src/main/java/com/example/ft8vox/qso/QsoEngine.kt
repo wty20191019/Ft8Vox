@@ -39,6 +39,15 @@ data class QsoProgress(
     val txText: String? = null,
     val retries: Int = 0,
     val maxRetries: Int = 3,
+    /** 六步指令序列的当前序号（1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；0=无）。 */
+    val order: Int = 0,
+    /**
+     * 无回应计数（FT8CN 口径：按**解码批次**累计，收到有效回复即清零）。
+     *
+     * 与 [retries]（按「实际重发次数」累计）不同，它对应 FT8CN 的 `noReplyLimit` 安全阀，
+     * 供第 2 层判断「超出后换台 / 回 CQ」。
+     */
+    val noReplyCount: Int = 0,
     /**
      * 是否处于「已发 CQ、等回应者」阶段（只由 [QsoEngine.startCq] 置位）。
      *
@@ -101,8 +110,15 @@ data class QsoProgress(
  */
 class QsoEngine(private var maxRetries: Int = 3) {
 
-    /** 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。 */
-    private enum class Step { NONE, CQ, GRID, REPORT, ROGER, RR73, SEVENTY3 }
+    /**
+     * 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。
+     *
+     * 取值即 FT8CN 的 `functionOrder`（见 `docs/FT8CN-QSO.md` §5 六步指令序列）：
+     * 1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；[NONE] 为无步骤（order 0）。
+     */
+    private enum class Step(val order: Int) {
+        NONE(0), GRID(1), REPORT(2), ROGER(3), RR73(4), SEVENTY3(5), CQ(6)
+    }
 
     private var myCall: String = ""
     private var myGrid: String = ""
@@ -114,8 +130,16 @@ class QsoEngine(private var maxRetries: Int = 3) {
     private var theirGrid: String? = null
     private var reportSent: Int? = null
     private var reportReceived: Int? = null
+    /**
+     * Tx2 实际发出的报告快照：Tx3 的 `R<报告>` **复用**它（见 `FT8CN_QSO_PLAN.md` §1.7）。
+     */
+    private var lastSentReport: Int? = null
     private var txText: String? = null
     private var retries = 0
+    /** 无回应计数（FT8CN 口径，按解码批次累计，收到回复清零）。 */
+    private var noReplyCount = 0
+    /** 无回应上限；0＝忽略（FT8CN `noReplyLimit`，由第 2 层配置）。 */
+    private var noReplyLimit = 0
     private var logEntry: QsoLogEntry? = null
 
     /** 通过重试耗尽而放弃（用于 [QsoState.FAILED]）。 */
@@ -139,11 +163,13 @@ class QsoEngine(private var maxRetries: Int = 3) {
         myGrid: String,
         maxRetries: Int = this.maxRetries,
         giveUp: Boolean = this.giveUp,
+        noReplyLimit: Int = this.noReplyLimit,
     ) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
         this.maxRetries = maxRetries.coerceIn(1, 50)
         this.giveUp = giveUp
+        this.noReplyLimit = noReplyLimit.coerceIn(0, 30)
     }
 
     fun progress(): QsoProgress = QsoProgress(
@@ -156,6 +182,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
         txText = txText,
         retries = retries,
         maxRetries = maxRetries,
+        order = step.order,
+        noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
     )
 
@@ -176,6 +204,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
         if (state == QsoState.DONE || state == QsoState.FAILED) {
             txText = null
         }
+        // Tx2 实际发出后快照，供 Tx3 的 R 报告复用（「每次重测最新」⇒ 重发 Tx2 会刷新）
+        if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent
         awaitingReplySinceTx = true
     }
 
@@ -302,13 +332,17 @@ class QsoEngine(private var maxRetries: Int = 3) {
         // 「已发 CQ、等回应者」阶段由第 2 层自动程序收集/排序回应者，状态机不自行认人
         if (awaitingResponders) return progress()
 
+        val them = theirCall
         var advanced = false
+        var latestTargetSnr: Int? = null
         for (m in messages) {
             val p = MessageParser.parse(m.text)
             val from = p.from ?: continue
             if (from.equals(myCall, ignoreCase = true)) continue // 忽略自己
+            // 记录当前对手的最新 SNR（供「每次重测最新」刷新 Tx2 的报告）
+            if (them != null && CallMatch.isFrom(from, them)) latestTargetSnr = m.snr
             if (!p.addressedTo(myCall)) continue // 只处理发给我的
-            if (theirCall != null && !from.equals(theirCall, ignoreCase = true)) continue // 只认当前对手
+            if (them != null && !CallMatch.isFrom(from, them)) continue // 只认当前对手
             if (applyMessage(p, m, utcMs)) {
                 advanced = true
                 break
@@ -317,22 +351,33 @@ class QsoEngine(private var maxRetries: Int = 3) {
 
         if (advanced) {
             retries = 0
+            noReplyCount = 0
             awaitingReplySinceTx = false
             // 非终态转移只改了 step，需要把对外 state 同步过来（终态分支里 finish 已同步，幂等）
             syncState()
-        } else if (awaitingReplySinceTx) {
-            // 上一轮发了报文、本批解码没能推进 → 计一次无效重发
-            awaitingReplySinceTx = false
-            retries++
-            // giveUp=false（关闭「重发机制」）时一直重发，不主动放弃
-            if (giveUp && retries > maxRetries) {
-                failed = true
-                step = Step.NONE
-                txText = null
-                theirCall = null
-                theirGrid = null
-                syncState()
+        } else {
+            // 「每次重测最新」：未推进时用当前对手的最新 SNR 刷新 Tx2 的报告（重发时生效），
+            // 已发出的 R 报告由 [lastSentReport] 冻结，不受此刷新影响。
+            if (step == Step.REPORT && latestTargetSnr != null) {
+                reportSent = reportFromSnr(latestTargetSnr)
+                render()
             }
+            // 无回应按解码批次累计（FT8CN 口径；含空批）
+            noReplyCount++
+            if (awaitingReplySinceTx) {
+                // 上一轮发了报文、本批解码没能推进 → 计一次无效重发
+                awaitingReplySinceTx = false
+                retries++
+                // giveUp=false（关闭「重发机制」）时一直重发，不主动放弃
+                if (giveUp && retries > maxRetries) {
+                    failed = true
+                    step = Step.NONE
+                    txText = null
+                    theirCall = null
+                    theirGrid = null
+                }
+            }
+            syncState()
         }
         return progress()
     }
@@ -350,7 +395,7 @@ class QsoEngine(private var maxRetries: Int = 3) {
         return when {
             // 1) 对方收尾（73）：我无需再发，直接完成
             p.is73 -> {
-                reportSent = reportSent ?: reportFromSnr(m.snr)
+                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
                 step = Step.SEVENTY3
                 txText = null
                 finish(utcMs, m.slotUtcMs)
@@ -359,7 +404,7 @@ class QsoEngine(private var maxRetries: Int = 3) {
 
             // 2) 对方 RR73：回 73 并完成
             p.isRr73 -> {
-                reportSent = reportSent ?: reportFromSnr(m.snr)
+                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
                 step = Step.SEVENTY3
                 render()
                 finish(utcMs, m.slotUtcMs)
@@ -369,7 +414,7 @@ class QsoEngine(private var maxRetries: Int = 3) {
             // 3) 对方 R 报告：已确认收到我的报告 → 回 RR73 并完成
             p.isRoger -> {
                 reportReceived = reportReceived ?: p.report
-                reportSent = reportSent ?: reportFromSnr(m.snr)
+                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
                 step = Step.RR73
                 render()
                 finish(utcMs, m.slotUtcMs)
@@ -382,13 +427,13 @@ class QsoEngine(private var maxRetries: Int = 3) {
                 if (step == Step.ROGER) {
                     // 4a) 我已经回过 R（对方没收到）→ 直接 RR73 收尾，打破死循环
                     reportReceived = reportReceived ?: p.report
-                    reportSent = reportSent ?: reportFromSnr(m.snr)
+                    reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
                     step = Step.RR73
                 } else {
                     // 4b) 对方是主叫（senior），我转为应答方 → 回我自己实测的 R 报告
                     role = QsoRole.RESPONDER
                     reportReceived = p.report
-                    reportSent = reportSent ?: reportFromSnr(m.snr)
+                    reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
                     step = Step.ROGER
                 }
                 render()
@@ -470,8 +515,10 @@ class QsoEngine(private var maxRetries: Int = 3) {
         theirGrid = null
         reportSent = null
         reportReceived = null
+        lastSentReport = null
         txText = null
         retries = 0
+        noReplyCount = 0
         logEntry = null
         failed = false
         awaitingReplySinceTx = false

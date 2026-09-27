@@ -2,14 +2,20 @@ package com.example.ft8vox.qso
 
 import com.example.ft8vox.engine.DecodeResult
 
-/** 发射抽屉里的报文类型（new_ui.md §3.4）。 */
-enum class TxMessageKind(val label: String) {
-    CQ("CQ"),
-    REPLY("回复"),
-    EXCHANGE("交换"),
-    RR73("RR73"),
-    SEVENTY_THREE("73"),
-    CUSTOM("自定义"),
+/**
+ * 发射抽屉里的报文类型（new_ui.md §3.4）。
+ *
+ * 即 FT8CN 的**六步指令序列**（见 `docs/FT8CN-QSO.md` §5）：1=网格 / 2=报告 / 3=R报告 /
+ * 4=RR73 / 5=73 / 6=CQ。[order] 与 `QsoEngine` 的 `Step.order` 一致（[CUSTOM] 为 0）。
+ */
+enum class TxMessageKind(val label: String, val order: Int) {
+    GRID("网格", 1),
+    REPORT("报告", 2),
+    ROGER("R报告", 3),
+    RR73("RR73", 4),
+    SEVENTY_THREE("73", 5),
+    CQ("CQ", 6),
+    CUSTOM("自定义", 0),
 }
 
 /**
@@ -35,9 +41,9 @@ object TxCompose {
         val them = target?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
         return when (kind) {
             TxMessageKind.CQ -> join("CQ", me, grid)
-            TxMessageKind.REPLY -> them?.let { join(it, me, grid) }
-            TxMessageKind.EXCHANGE ->
-                them?.let { join(it, me, MessageParser.formatReport(report)) }
+            TxMessageKind.GRID -> them?.let { join(it, me, grid) }
+            TxMessageKind.REPORT -> them?.let { join(it, me, MessageParser.formatReport(report)) }
+            TxMessageKind.ROGER -> them?.let { join(it, me, "R${MessageParser.formatReport(report)}") }
             TxMessageKind.RR73 -> them?.let { join(it, me, "RR73") }
             TxMessageKind.SEVENTY_THREE -> them?.let { join(it, me, "73") }
             TxMessageKind.CUSTOM -> null
@@ -53,10 +59,11 @@ object TxCompose {
             p.isCq -> TxMessageKind.CQ
             p.isRr73 -> TxMessageKind.RR73
             p.is73 -> TxMessageKind.SEVENTY_THREE
-            p.report != null || p.isRoger -> TxMessageKind.EXCHANGE
-            p.grid != null -> TxMessageKind.REPLY
+            p.isRoger -> TxMessageKind.ROGER
+            p.report != null -> TxMessageKind.REPORT
+            p.grid != null -> TxMessageKind.GRID
             p.isFreeText -> TxMessageKind.CUSTOM
-            p.from != null && p.addressedTo(myCall) -> TxMessageKind.REPLY
+            p.from != null && p.addressedTo(myCall) -> TxMessageKind.GRID
             else -> TxMessageKind.CUSTOM
         }
     }
