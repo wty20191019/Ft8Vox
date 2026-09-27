@@ -63,6 +63,9 @@ fun MainShell(
     // 从操作页双击解码行跳地图时，要定位的呼号（与序号配合，便于重复触发）
     var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
+    // 从解码菜单「查看日志」跳日志页时，要预填的搜索呼号（同样用序号触发）
+    var logFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
+    var logFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
@@ -129,7 +132,11 @@ fun MainShell(
                         mapFocusSeq += 1
                         tab = MainTab.MAP
                     },
-                    onOpenLog = { tab = MainTab.LOG },
+                    onOpenLog = { call ->
+                        logFocusCall = call
+                        logFocusSeq += 1
+                        tab = MainTab.LOG
+                    },
                     onOpenAutoProgram = { autoDialogOpen = true },
                 )
                 MainTab.MAP -> GridScreen(
@@ -146,6 +153,8 @@ fun MainShell(
                     myCall = appSettings.myCall,
                     myGrid = appSettings.myGrid.ifEmpty { null },
                     onOpenSettings = { tab = MainTab.SETTINGS },
+                    focusCall = logFocusCall,
+                    focusSeq = logFocusSeq,
                 )
                 MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
             }

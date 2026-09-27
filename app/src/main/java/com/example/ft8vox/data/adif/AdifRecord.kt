@@ -13,6 +13,8 @@ data class AdifRecord(val fields: Map<String, String>) {
     val call: String? get() = get("CALL")
     val qsoDate: String? get() = get("QSO_DATE")
     val timeOn: String? get() = get("TIME_ON")
+    val qsoDateOff: String? get() = get("QSO_DATE_OFF")
+    val timeOff: String? get() = get("TIME_OFF")
     val band: String? get() = get("BAND")
     val freq: String? get() = get("FREQ")
     val mode: String? get() = get("MODE")

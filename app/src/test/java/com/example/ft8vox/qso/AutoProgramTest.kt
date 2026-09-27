@@ -126,6 +126,27 @@ class AutoProgramTest {
         assertEquals("JA1ABC", list[1].call)
     }
 
+    // ---- 单条目标解析（解码菜单「呼叫 / 回复」） ----
+
+    @Test
+    fun toTargetClassifiesSingleMessage() {
+        assertEquals(AutoTargetKind.CQ, AutoProgramSelector.toTarget(decoded("CQ W1AW FN42"), "F4FSY")?.kind)
+        assertEquals("FN42", AutoProgramSelector.toTarget(decoded("CQ W1AW FN42"), "F4FSY")?.grid)
+        assertEquals(AutoTargetKind.CALL, AutoProgramSelector.toTarget(decoded("F4FSY W1AW FN42"), "F4FSY")?.kind)
+        val report = AutoProgramSelector.toTarget(decoded("F4FSY W1AW -12"), "F4FSY")
+        assertEquals(AutoTargetKind.REPORT, report?.kind)
+        assertEquals(-12, report?.report)
+        assertEquals(AutoTargetKind.ROGER, AutoProgramSelector.toTarget(decoded("F4FSY W1AW R-12"), "F4FSY")?.kind)
+    }
+
+    @Test
+    fun toTargetRejectsUnusableMessages() {
+        assertNull(AutoProgramSelector.toTarget(decoded("CQ F4FSY JN25"), "F4FSY")) // 自听
+        assertNull(AutoProgramSelector.toTarget(decoded("F4FSY W1AW RR73"), "F4FSY")) // 收尾
+        assertNull(AutoProgramSelector.toTarget(decoded("F4FSY W1AW 73"), "F4FSY"))
+        assertNull(AutoProgramSelector.toTarget(decoded("K1ABC W9XYZ IO90"), "F4FSY")) // 别人的 QSO
+    }
+
     // ---- CQ 修饰符优先级（方案 §3.3） ----
 
     @Test

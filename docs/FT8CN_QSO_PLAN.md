@@ -478,14 +478,36 @@ FT8CN `QSLRecord` 字段对照：
 3. **发射监管检查点**除了 `onDecoded`/`onQsoFinished`/`onTargetGaveUp`，还在 VM 每个接收批次统一检查一次（含进行中的 QSO 与仅自听批次），避免「对静默伙伴无限重试」时监管永不触发。
 4. **`DecodeResult.deep` 放类体**（不动主构造器），保证 native JNI 构造签名 `(Ljava/lang/String;IFIIJ)V` 不变。
 
-**仍未做（转后期）**：
+### 期 3（数据层）已完成
 
-- **解码列表菜单**（呼叫 / 回复 / 查看日志；不加手动 73）——期 4 剩余项，仅 UI，不影响自动逻辑。
-- **Room 日志字段补齐**（起止时间 / 波段 / 基频 + `Migration`）——期 3 数据层剩余项。
+| 文件 | 改动 |
+| --- | --- |
+| `data/log/QsoEntity.kt` | 新增 `startUtcMs`（通联起始时间＝ADIF `QSO_DATE`/`TIME_ON`，`@ColumnInfo(defaultValue = "0")`）；`utcMs` 语义明确为**完成时间**（＝`QSO_DATE_OFF`/`TIME_OFF`）。波段 `band` 与基频 `freqHz` 原本已有 |
+| `data/log/AppDatabase.kt` | `version = 2` + `MIGRATION_1_2`（`ALTER TABLE qso ADD COLUMN startUtcMs INTEGER NOT NULL DEFAULT 0`），`addMigrations(...)`；旧记录 `startUtcMs = 0` ⇒ 导出时回退为完成时间，**既有日志导出内容不变** |
+| `qso/QsoEngine.kt` | 记录本段 QSO **起始时间**（`start*` 新增可选 `utcMs` 参数 → `QsoLogEntry.startUtcMs`；取不到时回退为完成时间）；`respondToRoger` 起止相同 |
+| `data/adif/AdifRecord.kt` / `AdifMapper.kt` | 读写 `QSO_DATE_OFF`/`TIME_OFF`：导入 `TIME_ON`→`startUtcMs`、`TIME_OFF`（缺省回退 `TIME_ON`）→`utcMs`；导出仅在 `utcMs > startUtcMs` 时写 OFF，避免老记录往返变化 |
+| `data/log/QsoMerge.kt` | 合并时回填 `startUtcMs`（已有则保留） |
+| `ui/SessionViewModel.kt` | 落库带 `startUtcMs`；`start*` 调用传入 `AudioEngine.utcNowMs()` |
+| `ui/LogScreen.kt` | 手动新增 / 编辑保留 `startUtcMs` |
 
-### 期 3–5（待办）
+### 期 4（UI）已完成
 
-见 §7 分期表（期 3 的 VM 逻辑已随本轮完成，剩 Room 数据层）。
+| 文件 | 改动 |
+| --- | --- |
+| `qso/AutoProgram.kt` | 新增 `AutoProgramSelector.toTarget(msg, myCall)`：单条解码 → 目标分类（CQ / 定向网格 / 定向报告 / 定向 R；自听与 `73` 类返回 null），**不受**两开关 / 已通联 / 显示筛选影响 |
+| `ui/SessionViewModel.kt` | 新增 `replyTo(row)`：把一行解码按报文类型交给第 1 层（CQ→应答；网格→报告；报告→R 报告；R→RR73 收尾），人工操作只复位发射监管 |
+| `ui/DecodeList.kt` | 长按菜单补齐 **呼叫 / 回复 / 查看日志**（＋复制消息 / 忽略；删除无用的「加宏（U3）」占位）；**不加手动 73**。左滑与菜单「呼叫」统一走 `onCall` |
+| `ui/OperateScreen.kt` | 接线三项菜单；`onOpenLog` 改为携带呼号 |
+| `ui/MainShell.kt` / `ui/LogScreen.kt` | 「查看日志」跳日志页并**预填搜索呼号**（`focusCall` + `focusSeq` 触发） |
+
+**验证**：`:app:testDebugUnitTest` **303 例 / 32 suite 全绿**；`:app:assembleDebug` **BUILD SUCCESSFUL**。
+
+### 期 5（文档）
+
+`README`（计数已同步 303）/ `How2use`（§11 单档、§12 解码菜单、§13 日志起止时间）/ `FT8CN_QSO_PLAN` §10.5 已同步；
+`REGRESSION.md` 已加 **T 组**（期 2 新口径真机回归清单）与 **U 组**（解码菜单 / 日志起止时间），
+并把 E 组标注为过期、A 组与「模拟器可预演」段落改到新口径。剩余：`new_ui.md`、`NEW-UI-PLAN.md`、
+`UI-DESIGN.md` 等**历史设计稿**中的旧档位 / 确认框描述（不影响使用，可择机统一标注）。
 
 ---
 

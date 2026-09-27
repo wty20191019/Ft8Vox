@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,10 +76,20 @@ fun LogScreen(
     myGrid: String?,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 跳转来源指定的呼号（解码菜单「查看日志」）；配合 [focusSeq] 触发一次搜索预填。 */
+    focusCall: String? = null,
+    focusSeq: Int = 0,
 ) {
     val entries by log.filtered.collectAsState()
     val stats by log.stats.collectAsState()
     val filter by log.filter.collectAsState()
+
+    // 解码菜单「查看日志」：进入本页时把搜索框预填为该呼号（其余筛选条件保持不变）
+    LaunchedEffect(focusSeq) {
+        if (focusSeq > 0 && !focusCall.isNullOrBlank()) {
+            log.setFilter(log.filter.value.copy(query = focusCall.trim()))
+        }
+    }
 
     var editing by remember { mutableStateOf<QsoEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -789,6 +800,7 @@ private fun QsoEditDialog(
                             myCall = entity?.myCall?.takeIf { it.isNotEmpty() } ?: myCall,
                             myGrid = entity?.myGrid ?: myGrid,
                             utcMs = utcMs,
+                            startUtcMs = entity?.startUtcMs ?: utcMs,
                             band = band,
                             freqHz = if (existingFreq > 0) existingFreq else BandPlan.dialHz(band),
                             mode = mode,

@@ -18,7 +18,9 @@ object AdifMapper {
      */
     fun toEntity(record: AdifRecord, fallbackMyCall: String, fallbackMyGrid: String?): QsoEntity? {
         val call = record.call?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: return null
-        val utcMs = QsoTime.parseUtc(record.qsoDate, record.timeOn) ?: return null
+        // ADIF：TIME_ON = 起始，TIME_OFF = 结束（缺 OFF 时两者相同，与旧行为一致）
+        val startMs = QsoTime.parseUtc(record.qsoDate, record.timeOn) ?: return null
+        val endMs = QsoTime.parseUtc(record.qsoDateOff, record.timeOff) ?: startMs
 
         val band = record.band?.trim()?.takeIf { BandPlan.contains(it) }
             ?: BandPlan.fromFreqMhz(record.freq)?.name
@@ -32,7 +34,8 @@ object AdifMapper {
             theirGrid = Maidenhead.normalize(record.gridSquare).takeIf { it.isNotEmpty() },
             myCall = record.myCall?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: fallbackMyCall,
             myGrid = Maidenhead.normalize(record.myGridSquare).takeIf { it.isNotEmpty() } ?: fallbackMyGrid,
-            utcMs = utcMs,
+            utcMs = endMs,
+            startUtcMs = startMs,
             band = band,
             freqHz = freqHz,
             mode = normalizeMode(record),
@@ -48,8 +51,15 @@ object AdifMapper {
     fun toRecord(entity: QsoEntity): AdifRecord {
         val fields = LinkedHashMap<String, String>()
         fields["CALL"] = entity.theirCall
-        fields["QSO_DATE"] = QsoTime.date(entity.utcMs)
-        fields["TIME_ON"] = QsoTime.time(entity.utcMs)
+        // 起始时间未知（老记录 / 手动新增）时回退为完成时间，保证 TIME_ON 始终存在
+        val startMs = entity.startUtcMs.takeIf { it > 0 } ?: entity.utcMs
+        fields["QSO_DATE"] = QsoTime.date(startMs)
+        fields["TIME_ON"] = QsoTime.time(startMs)
+        // 仅在确有更晚的结束时间时写出 OFF，避免老记录导出内容发生变化
+        if (entity.utcMs > startMs) {
+            fields["QSO_DATE_OFF"] = QsoTime.date(entity.utcMs)
+            fields["TIME_OFF"] = QsoTime.time(entity.utcMs)
+        }
         if (entity.band.isNotEmpty()) fields["BAND"] = entity.band
         val freqHz = if (entity.freqHz > 0) entity.freqHz else BandPlan.dialHz(entity.band)
         if (freqHz > 0) fields["FREQ"] = String.format(Locale.US, "%.5f", freqHz / 1_000_000.0)

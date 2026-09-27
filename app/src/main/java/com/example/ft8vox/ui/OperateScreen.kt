@@ -81,7 +81,7 @@ fun OperateScreen(
     settings: AppSettings,
     onOpenSettings: () -> Unit,
     onOpenMap: (String?) -> Unit,
-    onOpenLog: () -> Unit,
+    onOpenLog: (String?) -> Unit,
     onOpenAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -313,16 +313,26 @@ fun OperateScreen(
                                 detailFor = row
                             },
                             onDoubleClick = { onOpenMap(from) },
-                            onSwipeTarget = {
+                            onCall = {
                                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                     targetCall = from
                                     viewModel.selectTargetFreq(row.msg.df)
                                     viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                                    // 左滑＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
+                                    // 左滑 / 菜单「呼叫」＝「设为目标并呼叫」（new_ui.md §3.3）：与详情面板「呼叫」同一条路径，
                                     // 直接开始（闸门只有「发送总开关」），本时隙来得及就本时隙发
                                     request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
                                 }
                             },
+                            onReply = {
+                                // 菜单「回复」：按报文类型给出正确回复（CQ→应答 / 网格→报告 / 报告→R / R→RR73）
+                                if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
+                                    targetCall = from
+                                    viewModel.selectTargetFreq(row.msg.df)
+                                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
+                                    request { viewModel.replyTo(row.msg) }
+                                }
+                            },
+                            onOpenLog = { onOpenLog(from) },
                             onSwipeDelete = { viewModel.removeMessage(row.msg) },
                             onCopy = { copyToClipboard(row.msg.text) },
                             onIgnore = { from?.let { viewModel.ignoreCall(it) } },
@@ -382,7 +392,7 @@ fun OperateScreen(
             },
             onOpenLog = {
                 detailFor = null
-                onOpenLog()
+                onOpenLog(row.parsed.from)
             },
             onDismiss = { detailFor = null },
         )

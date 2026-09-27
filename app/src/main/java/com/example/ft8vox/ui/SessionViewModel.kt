@@ -27,6 +27,7 @@ import com.example.ft8vox.engine.VoxConfig
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.AutoAction
 import com.example.ft8vox.qso.AutoProgramSettings
+import com.example.ft8vox.qso.AutoProgramSelector
 import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
@@ -848,7 +849,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
-        val p = qsoEngine.startCq()
+        val p = qsoEngine.startCq(AudioEngine.utcNowMs())
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
@@ -877,7 +878,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
-        val p = qsoEngine.startResponderQso(call, grid)
+        val p = qsoEngine.startResponderQso(call, grid, AudioEngine.utcNowMs())
         if (!p.active) {
             _status.update { it.copy(status = "无法应答（呼号无效或与自身相同）") }
             return
@@ -1238,6 +1239,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 myCall = st.myCall,
                 myGrid = st.myGrid.ifEmpty { null },
                 utcMs = entry.utcMs,
+                startUtcMs = entry.startUtcMs,
                 band = st.band,
                 freqHz = st.dialHz,
                 mode = st.protocol.name,
@@ -1367,10 +1369,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 同频发射：把红线跟到目标频率（异频发射则保持设定频率）
         if (st.sameFreqTx) setTxFreq(t.df)
 
+        val nowMs = AudioEngine.utcNowMs()
         val p = when (t.kind) {
-            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid)
-            AutoTargetKind.CALL -> qsoEngine.startCallerQso(t.call, t.grid, t.snr)
-            AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr)
+            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid, nowMs)
+            AutoTargetKind.CALL -> qsoEngine.startCallerQso(t.call, t.grid, t.snr, nowMs)
+            AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr, nowMs)
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
         }
         if (!p.active && p.state != QsoState.DONE) return
@@ -1378,6 +1381,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update { it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}") }
         // ROGER 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
+    }
+
+    /**
+     * 人工菜单「回复」：对一条解码按**报文类型**给出正确回复（与自动程序同一条路径）。
+     *
+     * CQ → 应答；定向网格 → 发报告；定向报告 → 回 R 报告；定向 R → 回 RR73 收尾。
+     * 人工操作**不暂停**自动程序，只复位发射监管计时（FT8CN 口径）。
+     *
+     * @return false 表示该行不能作为 QSO 起点（自听 / `73` 类 / 非定向非 CQ / 未开「发送总开关」）
+     */
+    fun replyTo(row: DecodeResult): Boolean {
+        val t = AutoProgramSelector.toTarget(row, _status.value.myCall) ?: run {
+            _status.update { it.copy(status = "该报文不能作为通联起点（自听 / 73 收尾 / 非定向非 CQ）") }
+            return false
+        }
+        if (!_status.value.txEnabled) {
+            _status.update { it.copy(status = "请先打开「发射」开关") }
+            return false
+        }
+        scheduler.resetSupervision(AudioEngine.utcNowMs())
+        startAutoTarget(t)
+        return true
     }
 
     /** 由设置构造显示过滤条件（操作页与自动程序共用）。 */

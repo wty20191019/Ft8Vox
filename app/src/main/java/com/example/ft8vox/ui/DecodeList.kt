@@ -99,6 +99,9 @@ private val SwipeDeleteGray = Color(0xFF455A64)
  * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
  *
  * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条。
+ *
+ * 长按菜单（方案 §4 期 4）：呼叫（＝左滑）/ 回复（按报文类型自动决定发什么）/ 查看日志 /
+ * 复制消息 / 忽略；**不提供手动 73**（收尾由状态机与自动程序负责）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -107,7 +110,9 @@ fun DecodeCard(
     myCall: String,
     onClick: () -> Unit,
     onDoubleClick: () -> Unit,
-    onSwipeTarget: () -> Unit,
+    onCall: () -> Unit,
+    onReply: () -> Unit,
+    onOpenLog: () -> Unit,
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
@@ -184,7 +189,7 @@ fun DecodeCard(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onSwipeTarget()
+                                        onCall()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
@@ -302,6 +307,31 @@ fun DecodeCard(
 
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
+                text = { Text("呼叫 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onCall()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("回复 $callText") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onReply()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("查看日志") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onOpenLog()
+                },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
                 text = { Text("复制消息") },
                 onClick = {
                     menuOpen = false
@@ -309,12 +339,8 @@ fun DecodeCard(
                 },
             )
             DropdownMenuItem(
-                text = { Text("加宏（U3）") },
-                enabled = false,
-                onClick = {},
-            )
-            DropdownMenuItem(
                 text = { Text("忽略 $callText") },
+                enabled = from != null,
                 onClick = {
                     menuOpen = false
                     onIgnore()

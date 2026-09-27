@@ -24,7 +24,14 @@ data class QsoLogEntry(
     val theirGrid: String?,
     val reportSent: Int?,
     val reportReceived: Int?,
+    /** 通联**完成**时间（UTC 毫秒），即 ADIF 的 `QSO_DATE_OFF` / `TIME_OFF`。 */
     val utcMs: Long,
+    /**
+     * 通联**起始**时间（UTC 毫秒），即 ADIF 的 `QSO_DATE` / `TIME_ON`。
+     *
+     * 照 FT8CN 的 `startTime`：本段 QSO 第一次发射/应答的时刻；无法取得时回退为完成时间。
+     */
+    val startUtcMs: Long = 0,
 )
 
 /** QSO 状态机对外暴露的只读进度。 */
@@ -132,6 +139,8 @@ class QsoEngine {
      */
     private var lastSentReport: Int? = null
     private var txText: String? = null
+    /** 本段 QSO 的起始时间（UTC 毫秒，FT8CN `startTime` 口径；0＝未知，落库时回退为完成时间）。 */
+    private var startedUtcMs = 0L
     /** 无回应计数（FT8CN 口径，按解码批次累计，收到回复清零）。 */
     private var noReplyCount = 0
     private var logEntry: QsoLogEntry? = null
@@ -184,10 +193,11 @@ class QsoEngine {
         if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent
     }
 
-    /** 开始呼叫 CQ。 */
-    fun startCq(): QsoProgress {
+    /** 开始呼叫 CQ。[utcMs] 为本段起始时间（UTC 毫秒，用于日志 `startTime`）。 */
+    fun startCq(utcMs: Long = 0L): QsoProgress {
         require(canOperate) { "未配置呼号" }
         reset()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.CALLER
         awaitingResponders = true
         step = Step.CQ
@@ -202,11 +212,12 @@ class QsoEngine {
      * 先发 `<对方> <我> <网格>`（让 CQ 台拿到我的网格），随后等报告 → 发 `R<报告>` →
      * 等 RR73 → 发 73 收尾。
      */
-    fun startResponderQso(call: String, grid: String?): QsoProgress {
+    fun startResponderQso(call: String, grid: String?, utcMs: Long = 0L): QsoProgress {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
         reset()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.RESPONDER
         theirCall = their
         theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
@@ -227,11 +238,12 @@ class QsoEngine {
      *
      * @param snr 本次解码的信噪比（作为我发给对方的报告）
      */
-    fun startCallerQso(call: String, grid: String?, snr: Int): QsoProgress {
+    fun startCallerQso(call: String, grid: String?, snr: Int, utcMs: Long = 0L): QsoProgress {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
         reset()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.CALLER
         theirCall = their
         theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
@@ -251,11 +263,12 @@ class QsoEngine {
      * @param theirReport 对方给我的信号报告
      * @param snr 本次解码的信噪比（作为我发给对方的报告）
      */
-    fun respondToReport(call: String, theirReport: Int, snr: Int): QsoProgress {
+    fun respondToReport(call: String, theirReport: Int, snr: Int, utcMs: Long = 0L): QsoProgress {
         require(canOperate) { "未配置呼号" }
         val their = call.trim().uppercase()
         if (their.isEmpty() || their == myCall) return progress()
         reset()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.RESPONDER
         theirCall = their
         reportReceived = theirReport
@@ -285,6 +298,7 @@ class QsoEngine {
         reportSent = reportFromSnr(snr)
         step = Step.RR73
         render()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
         finish(utcMs = if (utcMs > 0) utcMs else 0L, slotUtcMs = 0L)
         return progress()
     }
@@ -463,12 +477,15 @@ class QsoEngine {
     private fun finish(utcMs: Long, slotUtcMs: Long) {
         if (logEntry != null) return
         val them = theirCall ?: return
+        val endMs = if (utcMs > 0) utcMs else slotUtcMs
         logEntry = QsoLogEntry(
             theirCall = them,
             theirGrid = theirGrid,
             reportSent = reportSent,
             reportReceived = reportReceived,
-            utcMs = if (utcMs > 0) utcMs else slotUtcMs,
+            utcMs = endMs,
+            // 起始时间未知时回退为完成时间（ADIF 的 TIME_ON 与 TIME_OFF 相同）
+            startUtcMs = if (startedUtcMs > 0) startedUtcMs else endMs,
         )
         syncState()
     }
@@ -483,6 +500,7 @@ class QsoEngine {
         reportReceived = null
         lastSentReport = null
         txText = null
+        startedUtcMs = 0L
         noReplyCount = 0
         logEntry = null
         awaitingResponders = false

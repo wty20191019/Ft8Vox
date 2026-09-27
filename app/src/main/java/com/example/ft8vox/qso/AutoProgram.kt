@@ -171,6 +171,57 @@ object AutoProgramSelector {
     }
 
     /**
+     * 把**单条**解码解析成一个手动可用的目标（解码菜单「呼叫 / 回复」用）。
+     *
+     * 与 [collect] 共用同一套报文分类，但**不受**两个开关、已通联、显示筛选影响
+     * （人工只改目标，不暂停自动程序）。无法作为 QSO 起点的报文返回 null：
+     * 自听、`RR73`/`73` 收尾报文、既非 CQ 又非发给我方的报文。
+     */
+    fun toTarget(msg: DecodeResult, myCall: String): AutoTarget? {
+        if (msg.deep) return null
+        val p = MessageParser.parse(msg.text)
+        val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: return null
+        if (from.equals(myCall, ignoreCase = true)) return null
+
+        val kind: AutoTargetKind
+        val report: Int?
+        if (p.isCq) {
+            kind = AutoTargetKind.CQ
+            report = null
+        } else if (p.addressedTo(myCall)) {
+            // RR73/73/RRR 表示通联已结束，不作为新 QSO 的起点
+            if (DecodeFilter.is73(p)) return null
+            when {
+                p.isRoger && p.report != null -> {
+                    kind = AutoTargetKind.ROGER
+                    report = p.report
+                }
+                p.report != null -> {
+                    kind = AutoTargetKind.REPORT
+                    report = p.report
+                }
+                p.grid != null -> {
+                    kind = AutoTargetKind.CALL
+                    report = null
+                }
+                else -> return null
+            }
+        } else {
+            return null
+        }
+        return AutoTarget(
+            call = from,
+            grid = p.grid,
+            snr = msg.snr,
+            df = msg.df,
+            kind = kind,
+            report = report,
+            slotUtcMs = msg.slotUtcMs,
+            cqModifier = p.cqModifier,
+        )
+    }
+
+    /**
      * 排序（无 `sortBy`）：降序键 = `(CQ 修饰符优先级, 解码顺序)`。
      *
      * `Kotlin` 的 `sortedByDescending` 是**稳定**排序，同优先级保持解码先后。

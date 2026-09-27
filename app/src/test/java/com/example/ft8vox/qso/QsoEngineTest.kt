@@ -323,6 +323,30 @@ class QsoEngineTest {
     }
 
     @Test
+    fun recordsStartTimeFromQsoBegin() {
+        val q = engine()
+        // 起始时间来自 start* 传入的 UTC；完成时间取报文时隙
+        q.startResponderQso("GJ0KYZ", "IO90", utcMs = 1_000L)
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 31_000L)))
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9, slotUtcMs = 46_000L)))
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(1_000L, log!!.startUtcMs)
+        assertEquals(46_000L, log.utcMs)
+    }
+
+    @Test
+    fun fallsBackToEndTimeWhenStartUnknown() {
+        val q = engine()
+        q.startResponderQso("GJ0KYZ", "IO90") // 不给起始时间
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 31_000L)))
+        q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9, slotUtcMs = 46_000L)))
+        val log = q.consumeCompleted()
+        assertNotNull(log)
+        assertEquals(log!!.utcMs, log.startUtcMs)
+    }
+
+    @Test
     fun asymmetricCollisionConvergesWithoutDeadlock() {
         // 真机截图场景的最小复现：A 已回过 R（等 RR73），B 仍在发纯报告（等 R），
         // 且 A 的 R 一直没被 B 收到。双方必须在有限步内各自完成并只记一条日志。
