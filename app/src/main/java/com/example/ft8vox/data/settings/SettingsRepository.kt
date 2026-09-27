@@ -15,6 +15,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DecodeFilterTag
+import com.example.ft8vox.qso.FollowRoster
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -96,6 +97,7 @@ private object Keys {
     val callFilter = stringPreferencesKey("call_filter")
     val ignoredCalls = stringSetPreferencesKey("ignored_calls")
     val followCalls = stringSetPreferencesKey("follow_calls")
+    val autoFollowOrder = stringPreferencesKey("auto_follow_order")
     val txQueue = stringPreferencesKey("tx_queue")
     val macros = stringPreferencesKey("macros")
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
@@ -157,6 +159,16 @@ private fun splitLines(s: String?): List<String>? =
 
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
+    val followCalls = this[Keys.followCalls]
+        ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        ?.toSet()
+        ?: defaults.followCalls
+    // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
+    val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
+        .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        .distinct()
+        .filter { it in followCalls }
+        .take(FollowRoster.AUTO_MAX)
     return AppSettings(
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,
@@ -172,7 +184,7 @@ private fun Preferences.toAppSettings(): AppSettings {
                 ?: defaults.auto.supervisionMinutes).coerceIn(0, 95),
             noReplyLimit = (this[Keys.autoNoReplyLimit]
                 ?: defaults.auto.noReplyLimit).coerceIn(0, 30),
-            autoFollowCq = this[Keys.autoFollowCq] ?: defaults.auto.autoFollowCq,
+            autoAddCqToFollow = this[Keys.autoFollowCq] ?: defaults.auto.autoAddCqToFollow,
             autoCallFollow = this[Keys.autoCallFollow] ?: defaults.auto.autoCallFollow,
         ),
         filterTags = readFilterTags(this, defaults.filterTags),
@@ -181,10 +193,8 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
             ?.toSet()
             ?: defaults.ignoredCalls,
-        followCalls = this[Keys.followCalls]
-            ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
-            ?.toSet()
-            ?: defaults.followCalls,
+        followCalls = followCalls,
+        autoFollowOrder = autoFollowOrder,
         txQueue = splitLines(this[Keys.txQueue]) ?: defaults.txQueue,
         macros = (splitLines(this[Keys.macros]) ?: defaults.macros).ifEmpty { defaults.macros },
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
@@ -239,12 +249,13 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.sameFreqTx] = sameFreqTx
     prefs[Keys.autoSupervisionMinutes] = auto.supervisionMinutes
     prefs[Keys.autoNoReplyLimit] = auto.noReplyLimit
-    prefs[Keys.autoFollowCq] = auto.autoFollowCq
+    prefs[Keys.autoFollowCq] = auto.autoAddCqToFollow
     prefs[Keys.autoCallFollow] = auto.autoCallFollow
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
     prefs[Keys.ignoredCalls] = ignoredCalls
     prefs[Keys.followCalls] = followCalls
+    prefs[Keys.autoFollowOrder] = autoFollowOrder.joinToString("\n")
     prefs[Keys.txQueue] = txQueue.joinToString("\n")
     prefs[Keys.macros] = macros.joinToString("\n")
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall

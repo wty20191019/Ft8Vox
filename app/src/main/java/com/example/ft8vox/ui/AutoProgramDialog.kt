@@ -108,23 +108,24 @@ fun AutoProgramPanel(
         )
 
         AutoOptionRow(
-            title = "自动关注 CQ",
-            subtitle = "把解码到的 CQ 台纳入自动候选；关掉后只自动呼叫你在解码列表长按「关注」过的台",
-            checked = program.autoFollowCq,
-            onChange = { v -> onOption { it.copy(autoFollowCq = v) } },
+            title = "自动收录 CQ 台",
+            subtitle = "每解到一个新的 CQ 台就自动加入 ⭐ 关注列表（自动收录最多 100 个，超出淘汰最早加入的；手动关注的不受此限）",
+            checked = program.autoAddCqToFollow,
+            onChange = { v -> onOption { it.copy(autoAddCqToFollow = v) } },
         )
         AutoOptionRow(
-            title = "自动呼叫关注的呼号",
+            title = "自动呼叫 CQ 台",
             subtitle = "是否真的去呼叫候选里的 CQ 台（总闸）；关掉后只回应定向呼叫、自己发 CQ",
             checked = program.autoCallFollow,
             onChange = { v -> onOption { it.copy(autoCallFollow = v) } },
         )
 
         Text(
-            "「关注」名单：在解码列表长按某台 →「关注」；点筛选条最右的 ⭐ 可查看 / 删除（右滑取消关注）；" +
-                "「自动关注 CQ」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
-                "两个开关都开＝自动应答任何未通联的 CQ 台；只关「自动关注 CQ」＝只呼叫关注的台；" +
-                "关掉「自动呼叫关注的呼号」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
+            "「关注」名单：在解码列表长按某台 →「关注」，或由「自动收录 CQ 台」自动加入；" +
+                "点筛选条最右的 ⭐ 可查看 / 删除（右滑取消关注）；" +
+                "「自动收录 CQ 台」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
+                "两个开关都开＝自动应答任何未通联的 CQ 台；只关「自动收录 CQ 台」＝只呼叫关注的台；" +
+                "关掉「自动呼叫 CQ 台」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
                 "对方直接呼叫我方一定应答；已通联的 CQ 台不再主动呼叫。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -268,7 +269,7 @@ private fun AutoStepButton(label: String, enabled: Boolean, onClick: () -> Unit)
 internal fun autoProgramSummary(p: AutoProgramSettings): String {
     val supervision = if (p.supervisionMinutes <= 0) "监管关" else "监管 ${p.supervisionMinutes} 分"
     val noReply = if (p.noReplyLimit <= 0) "无回应不限" else "无回应 ${p.noReplyLimit} 次换台"
-    val follow = if (p.autoFollowCq) "关注 CQ" else "不关注 CQ"
+    val follow = if (p.autoAddCqToFollow) "收录 CQ" else "不收录 CQ"
     val call = if (p.autoCallFollow) "自动呼叫" else "不自动呼叫"
     return "$supervision｜$noReply｜$follow｜$call"
 }

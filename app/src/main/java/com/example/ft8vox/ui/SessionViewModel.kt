@@ -34,6 +34,7 @@ import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.DEFAULT_MACROS
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
+import com.example.ft8vox.qso.FollowRoster
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
@@ -516,25 +517,51 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(ignoredCalls = emptySet()) }
     }
 
-    /** 关注一个呼号（筛选项「关注」只显示它；`autoFollowCq` 关时自动程序仍会呼叫它的 CQ）。 */
+    /** 手动关注一个呼号（长按菜单「关注」）；`autoAddCqToFollow` 关时自动程序仍会呼叫它的 CQ。 */
     fun followCall(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
         persist { it.copy(followCalls = it.followCalls + c) }
     }
 
-    /** 取消关注（「关注」筛选视图右滑 / 长按菜单都可调用）。 */
+    /** 取消关注（⭐ 关注列表右滑 / 长按菜单；自动收录的也一并从淘汰顺序里摘掉）。 */
     fun unfollowCall(call: String) {
         val c = call.trim().uppercase()
-        persist { it.copy(followCalls = it.followCalls - c) }
+        persist { it.copy(followCalls = it.followCalls - c, autoFollowOrder = it.autoFollowOrder - c) }
     }
 
     /** 切换关注状态（长按菜单「关注 / 取消关注」）。 */
     fun toggleFollow(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
         persist {
-            it.copy(
-                followCalls = if (c in it.followCalls) it.followCalls - c else it.followCalls + c,
-            )
+            if (c in it.followCalls) {
+                it.copy(followCalls = it.followCalls - c, autoFollowOrder = it.autoFollowOrder - c)
+            } else {
+                it.copy(followCalls = it.followCalls + c)
+            }
+        }
+    }
+
+    /**
+     * 「自动收录 CQ 台」：把本批解到的**新** CQ 呼号并入关注名单（超出 `FollowRoster.AUTO_MAX` 时
+     * 淘汰最早收录的；手动关注的永不被淘汰）。
+     *
+     * 与 FT8CN 的**有意偏离**：FT8CN 只推送到「呼叫」列表、不写关注名单，见 [FollowRoster] 文档。
+     */
+    private fun autoCollectCqToFollow(batch: List<DecodeResult>) {
+        if (batch.isEmpty()) return
+        val s = latestSettings
+        if (!s.auto.autoAddCqToFollow) return
+        val incoming = FollowRoster.pickCqCalls(
+            messages = batch,
+            myCall = _status.value.myCall,
+            ignoredCalls = s.ignoredCalls,
+            followedCalls = s.followCalls,
+        )
+        if (incoming.isEmpty()) return
+        persist { cur ->
+            val (calls, order) = FollowRoster.merge(cur.followCalls, cur.autoFollowOrder, incoming)
+            if (calls == cur.followCalls && order == cur.autoFollowOrder) cur
+            else cur.copy(followCalls = calls, autoFollowOrder = order)
         }
     }
 
@@ -1130,6 +1157,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _messages.update { current -> (decoded + current).take(200) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
+            // 「自动收录 CQ 台」：把本批新解到的 CQ 呼号并入关注名单
+            autoCollectCqToFollow(decoded)
             // U7d：有报文叫我呼号时短促提示
             val my = _status.value.myCall
             if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {

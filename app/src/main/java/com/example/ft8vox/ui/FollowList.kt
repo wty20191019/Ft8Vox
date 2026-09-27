@@ -60,9 +60,13 @@ fun FollowListPanel(
     onCall: (call: String, grid: String?, df: Int?) -> Unit,
     onUnfollow: (String) -> Unit,
     onClose: () -> Unit,
+    /** 由「自动收录 CQ 台」自动加入的呼号（行内显示「自动」标记）。 */
+    autoFollowed: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
-    val rows = remember(follows, messages, myGrid) { buildFollowRows(follows, messages, myGrid) }
+    val rows = remember(follows, messages, myGrid, autoFollowed) {
+        buildFollowRows(follows, messages, myGrid, autoFollowed)
+    }
 
     Column(modifier.fillMaxSize()) {
         Row(
@@ -124,6 +128,8 @@ private data class FollowRow(
     val df: Int? = null,
     val slotUtcMs: Long? = null,
     val distKm: Double? = null,
+    /** 由「自动收录 CQ 台」自动加入。 */
+    val auto: Boolean = false,
 )
 
 /** 每个关注呼号取本会话**最新**一条解码（`messages` 为新→旧），最近听到的排前面。 */
@@ -131,6 +137,7 @@ private fun buildFollowRows(
     follows: Set<String>,
     messages: List<DecodeResult>,
     myGrid: String,
+    autoFollowed: Set<String>,
 ): List<FollowRow> {
     val heard = HashMap<String, FollowRow>()
     for (m in messages) {
@@ -144,10 +151,12 @@ private fun buildFollowRows(
             df = m.df,
             slotUtcMs = m.slotUtcMs.takeIf { it > 0 },
             distKm = Geo.betweenGrids(myGrid, p.grid)?.first,
+            auto = from in autoFollowed,
         )
     }
     val heardRows = heard.values.sortedByDescending { it.slotUtcMs ?: Long.MIN_VALUE }
-    val unheardRows = follows.filter { it !in heard }.sorted().map { FollowRow(call = it) }
+    val unheardRows = follows.filter { it !in heard }.sorted()
+        .map { FollowRow(call = it, auto = it in autoFollowed) }
     return heardRows + unheardRows
 }
 
@@ -235,13 +244,23 @@ private fun FollowCard(
             )
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    row.call,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        row.call,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (row.auto) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "自动",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 Text(
                     followSubLine(row),
                     style = MaterialTheme.typography.labelSmall,

@@ -295,6 +295,7 @@ fun OperateScreen(
                     follows = settings.followCalls,
                     messages = messages,
                     myGrid = status.myGrid,
+                    autoFollowed = settings.autoFollowOrder.toSet(),
                     onCall = { call, grid, df ->
                         targetCall = call
                         request { viewModel.answer(call, grid, df) }

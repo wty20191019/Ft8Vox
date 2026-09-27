@@ -75,12 +75,12 @@ class AutoProgramTest {
     @Test
     fun collectCqGovernedByFollowSwitch() {
         val msgs = listOf(decoded("CQ W1AW FN42"))
-        // 关闭「自动关注 CQ」→ 不收集 CQ
+        // 关闭「自动收录 CQ 台」→ 不收集 CQ
         assertEquals(
             0,
             AutoProgramSelector.collect(
                 msgs,
-                program.copy(autoFollowCq = false),
+                program.copy(autoAddCqToFollow = false),
                 myCall = "F4FSY",
             ).size,
         )
@@ -93,10 +93,10 @@ class AutoProgramTest {
 
     @Test
     fun collectKeepsFollowedCqWhenSwitchOff() {
-        // 照 FT8CN：关掉「自动关注 CQ」，但该台在关注名单里 → 仍纳入候选
+        // 照 FT8CN：关掉「自动收录 CQ 台」，但该台在关注名单里 → 仍纳入候选
         val list = AutoProgramSelector.collect(
             listOf(decoded("CQ W1AW FN42"), decoded("CQ JA1ABC PM95")),
-            program.copy(autoFollowCq = false),
+            program.copy(autoAddCqToFollow = false),
             filter = DecodeFilterState(followedCalls = setOf("W1AW")),
             myCall = "F4FSY",
         )
@@ -230,9 +230,9 @@ class AutoProgramTest {
     }
 
     @Test
-    fun autoFollowCqOffMeansSendCq() {
-        // 「自动关注 CQ」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
-        val s = scheduler(program.copy(autoFollowCq = false))
+    fun autoAddCqToFollowOffMeansSendCq() {
+        // 「自动收录 CQ 台」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
+        val s = scheduler(program.copy(autoAddCqToFollow = false))
         assertEquals(
             AutoAction.SendCq,
             s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
@@ -241,8 +241,8 @@ class AutoProgramTest {
 
     @Test
     fun followedCqIsExceptionToAutoFollowCqSwitch() {
-        // 照 FT8CN：关掉「自动关注 CQ」，但该台在关注名单里 → 仍自动呼叫
-        val s = scheduler(program.copy(autoFollowCq = false))
+        // 照 FT8CN：关掉「自动收录 CQ 台」，但该台在关注名单里 → 仍自动呼叫
+        val s = scheduler(program.copy(autoAddCqToFollow = false))
         val action = s.onDecoded(
             listOf(decoded("CQ W1AW FN42")),
             filter = DecodeFilterState(followedCalls = setOf("W1AW")),
@@ -391,7 +391,7 @@ class AutoProgramTest {
         val d = AutoProgramSettings()
         assertEquals(10, d.supervisionMinutes)
         assertEquals(0, d.noReplyLimit)
-        assertTrue(d.autoFollowCq)
+        assertTrue(d.autoAddCqToFollow)
         assertTrue(d.autoCallFollow)
     }
 }

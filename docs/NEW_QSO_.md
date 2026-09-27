@@ -158,7 +158,7 @@
 
 | 报文 | 类型 | 是否入选 |
 | --- | --- | --- |
-| 对方的 `CQ` | `CQ` | 仅当 `autoFollowCq` 开、**或**发信人在「关注名单」里，**且**未通联（`workedCall` 硬过滤）；**不套用显示筛选** |
+| 对方的 `CQ` | `CQ` | 仅当 `autoAddCqToFollow` 开、**或**发信人在「关注名单」里，**且**未通联（`workedCall` 硬过滤）；**不套用显示筛选** |
 | `<我> <对方> <网格>` | `CALL` | **一律入选** |
 | `<我> <对方> <报告>` | `REPORT` | **一律入选** |
 | `<我> <对方> R<报告>` | `ROGER` | **一律入选** |
@@ -181,7 +181,7 @@
 | --- | --- | --- | --- |
 | 1 | 优先回应「我的当前目标」 | 由第 1 层 `QsoEngine.onDecoded` 完成（非当前目标的定向报文不驱动引擎） | 【现有】 |
 | 2 | **任何人呼叫我，一定应答** | 有进行中 QSO 且**目标本批沉默**时，`AutoScheduler.directedTakeover` 挑「其他定向台」并换台 | 【改造】 |
-| 3 | S&P：自动应答未通联的 CQ 台 | `nextAction`：`autoCallFollow` 且候选非空 → `AnswerCq`，否则 `SendCq`（候选已由 `autoFollowCq` / 关注名单在 `collect` 里把关） | 【现有】 |
+| 3 | S&P：自动应答未通联的 CQ 台 | `nextAction`：`autoCallFollow` 且候选非空 → `AnswerCq`，否则 `SendCq`（候选已由 `autoAddCqToFollow` / 关注名单在 `collect` 里把关） | 【现有】 |
 
 **循环 2 的触发条件**（新增）：
 
@@ -256,12 +256,13 @@
 | --- | --- | --- | --- |
 | 发射监管 | `autoSupervisionMinutes` | 10 | `0,5,15,…,95` 分钟 |
 | 无回应限制 | `autoNoReplyLimit` | 0 | `0..30`；0＝不换台 |
-| 自动关注 CQ | `autoFollowCq` | true | 把解码到的 CQ 台**纳入候选**（照 FT8CN＝推送到呼叫列表）；关掉后**只**呼叫「关注名单」里的 CQ 台 |
-| 自动呼叫关注的呼号 | `autoCallFollow` | true | 是否**真的去呼叫**候选里的 CQ 台（总闸）；关掉后只回应定向呼叫 + 自己发 CQ |
+| 自动收录 CQ 台 | `autoAddCqToFollow` | true | **写入关注名单**：每解到一个新的 CQ 台就自动加入 ⭐ 关注列表（封顶 100，超出淘汰最早的）；同时把 CQ 台**纳入候选**。关掉后只自动呼叫「关注名单」里的 CQ 台。**本机有意偏离 FT8CN**（FT8CN `autoFollowCQ` 只推送到呼叫列表、不写关注名单） |
+| 自动呼叫 CQ 台 | `autoCallFollow` | true | 是否**真的去呼叫**候选里的 CQ 台（总闸）；关掉后只回应定向呼叫 + 自己发 CQ |
 
-> **「关注名单」**（`AppSettings.followCalls`）：在解码列表**长按某台 →「关注 / 取消关注」**加入 / 移除；
+> **「关注名单」**（`AppSettings.followCalls` + `autoFollowOrder`）：在解码列表**长按某台 →「关注 / 取消关注」**
+> 加入 / 移除，或由「自动收录 CQ 台」**自动加入**（带「自动」标记、封顶 100、可右滑移除）；
 > 点筛选条最右的 **⭐** 打开「**关注呼号列表**」面板查看（列表里**左滑＝呼叫、右滑＝取消关注**）。
-> **它不是解码筛选**（不新增 chip）：照 FT8CN，它**不受 `autoFollowCq` 限制**（关掉开关仍会呼叫名单里 CQ 台的 CQ）。
+> **它不是解码筛选**（不新增 chip）：照 FT8CN，它**不受 `autoAddCqToFollow` 限制**（关掉开关仍会呼叫名单里 CQ 台的 CQ）。
 > 与 FT8CN 的差异只有一处：FT8CN 的 `followCallsigns` 是独立 SQLite 表、**只能在局域网 Web 后台删除**，
 > 本机存在设置里、App 内即可删。
 
@@ -343,8 +344,8 @@
 | 发送总开关 `txEnabled` | false（不持久化） | 【现有】 |
 | 发射监管 `supervisionMinutes` | 10 | 【现有】 |
 | 无回应限制 `noReplyLimit` | 0（忽略） | 【现有】 |
-| 自动关注 CQ `autoFollowCq` | true | 【现有】 |
-| 自动呼叫关注的呼号 `autoCallFollow` | true | 【现有】 |
+| 自动收录 CQ 台 `autoAddCqToFollow` | true | 【本机偏离：FT8CN 不写名单】 |
+| 自动呼叫 CQ 台 `autoCallFollow` | true | 【现有】 |
 | 同频发射 `sameFreqTx` | — | 【现有】 |
 | 报告范围 | -24…+30 | 【现有】 |
 
@@ -382,7 +383,8 @@
 | `RR73` 兜底 | `checkTargetCallMe` 等三重兜底 | **结构上不可达**（不滞留 RR73） | 等价防死，代码更少 |
 | 选台 | 无优先级，按解码先后 | **CQ 修饰符**同级 tie-break | 叠加加分，不影响应答 |
 | 深度解码 | 不驱动自动（有闸门） | 不驱动（`deep` 恒 false，占位） | 同口径 |
-| 关注呼号名单 | `followCallsigns` 表（手动 / 地图 / Web 后台删除，持久保存） | `AppSettings.followCalls`（解码长按「关注」，⭐ 列表里可删；**不是解码筛选**） | 同口径；本机多一个 App 内删除入口 |
+| 关注呼号名单 | `followCallsigns` 表（手动 / 地图 / Web 后台删除，持久保存） | `AppSettings.followCalls` + `autoFollowOrder`（手动长按「关注」，**或**「自动收录 CQ 台」自动加入；⭐ 列表里可删；**不是解码筛选**） | **有意偏离**：本机多一条自动收录来源与 App 内删除入口 |
+| `autoFollowCQ` | 只把 CQ 推送到「呼叫」列表，**不写关注名单**（帮助文件明确） | `autoAddCqToFollow`＝**真的写入关注名单**（封顶 100，淘汰最早的；手动关注不淘汰） | **有意偏离** |
 | 2 s 时窗闸门 | 有（`MainViewModel:318`） | **无**，逐条处理 | 整批闸门会丢对方回复 |
 
 ---

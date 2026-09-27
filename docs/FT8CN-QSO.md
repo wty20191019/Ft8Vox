@@ -458,8 +458,8 @@ if (ft8TransmitSignal.isActivated() && sequential != getNowSequential()) return;
 | 发射确认框 | 无 | 删 `AutoEnableConfirmDialog`；`txEnabled` 即唯一闸门 | 照搬 |
 | 复合呼号匹配 | 目标带 `/` 时 `contains`（单向） | **双向**（任一方带 `/` 即 `contains`） | 超集/加固 |
 | 选台排序 | 无 DX 分级 | `AutoProgramSelector.rank`：DX > 我所在区域 > 其它修饰符 > 无（稳定保序） | 超集（自定） |
-| 关注呼号名单 | `followCallsigns` 表：手动（呼叫列表/地图）关注、持久保存、App 内不能删；名单里的台不受 `autoFollowCQ` 限制 | `AppSettings.followCalls`：解码列表**长按「关注 / 取消关注」**加入 / 移除，筛选条最右 **⭐** 打开「关注呼号列表」查看（左滑呼叫 / 右滑取消关注）；名单里的台不受 `autoFollowCq` 限制 | 照搬（本机多一个 App 内删除入口） |
-| 两个 CQ 开关 | `autoFollowCQ`＝把 CQ 推送到呼叫列表；`autoCallFollow`＝是否自动呼叫（总闸），配合关注名单 | `autoFollowCq` 把关 CQ 候选（关注名单是例外）、`autoCallFollow` 把关是否呼叫 | 照搬 |
+| 关注呼号名单 | `followCallsigns` 表：手动（呼叫列表/地图）关注、持久保存、App 内不能删；名单里的台不受 `autoFollowCQ` 限制 | `AppSettings.followCalls` + `autoFollowOrder`：手动长按「关注 / 取消关注」，**或**由「自动收录 CQ 台」自动加入；筛选条最右 **⭐** 打开「关注呼号列表」查看（左滑呼叫 / 右滑取消关注）；名单里的台不受 `autoAddCqToFollow` 限制 | **有意偏离**（本机多一条自动收录来源 + App 内删除入口） |
+| 两个 CQ 开关 | `autoFollowCQ`＝把 CQ 推送到呼叫列表（**不写名单**）；`autoCallFollow`＝是否自动呼叫（总闸），配合关注名单 | `autoAddCqToFollow`＝**写入关注名单** + 把关 CQ 候选（关注名单是例外）、`autoCallFollow`＝把关是否呼叫 | **有意偏离**（见 `NEW_QSO_` §十三） |
 | RR73 三重兜底 | ③④⑤ | 引擎结构上 RR73 不滞留，兜底不可达；以「收敛兜底 + 逐条过滤」代替 | 有意偏离（等价防死） |
 
 **FT8CN 有意没有、Ft8Vox 也不引入的东西**：Hound/Fox、逐条精确 DXCC 分级、多档 AutoSeq、完成确认卡。
