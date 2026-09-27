@@ -532,10 +532,9 @@ fun TxDrawer(
                 Text(
                     when {
                         !status.txEnabled ->
-                            "发送总开关已关：只接收，不发射任何报文。打开后由「发送」按钮 / 解码卡片手势或自动程序决定发什么。"
-                        status.autoProgram.mode.enabled ->
-                            "发送总开关已开，自动程序已启用（${status.autoProgram.mode.shortLabel}）：" +
-                                "选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
+                            "发送总开关已关：只接收，不发射任何报文。打开后由自动程序或手动「发送」决定发什么。"
+                        status.qso.active || status.txArmed ->
+                            "发送总开关已开，自动程序运行中：选台与整段 QSO 报文流程由自动程序决定；手动「发送」仍可用。"
                         canSendNow -> "发送总开关已开；当前为我方周期且剩余时间够播完本条报文：点「发送」将立即发射"
                         else -> "发送总开关已开；非我方周期或剩余时间不足以播完本条报文：点「发送」将排到下一个我方发射周期"
                     },
@@ -581,25 +580,25 @@ fun TxDrawer(
                 ) {
                     Text("自动程序", style = MaterialTheme.typography.labelMedium)
                     Text(
-                        status.autoProgram.mode.shortLabel,
+                        if (status.txEnabled) "运行中" else "待命",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (status.autoProgram.mode.enabled) MaterialTheme.colorScheme.primary
+                        color = if (status.txEnabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = onOpenAutoProgram) { Text("设置…") }
                 }
-                if (status.autoProgram.mode.enabled) {
+                if (status.txEnabled) {
                     Text(
-                        "第 2 层：${status.autoPhaseLabel ?: "—"}" +
+                        status.autoPhaseLabel ?: "自动运行" +
                             if (status.autoQueueSize > 0) "｜队列 ${status.autoQueueSize} 台" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
-                    "没有独立的启用开关：模式「0 手动模式」＝关闭，1 主叫 / 2 混合 ＝开启。" +
-                        "切换模式会弹防误发确认；确认启用时若「发送总开关」为关会自动打开，" +
-                        "随后选台、排队与整段 QSO 的报文流程都交给自动程序。",
+                    "自动程序没有独立开关：打开「发送总开关」即自动发射（无确认框），关闭即停。" +
+                        "定向呼叫我方的报文一定应答；其余按「自动关注 CQ / 自动呼叫」两个开关与" +
+                        "「无回应次数」决定选台与换台。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

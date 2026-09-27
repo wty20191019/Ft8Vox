@@ -62,7 +62,6 @@ import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.AutoMode
 import com.example.ft8vox.ui.theme.BarCq
 import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
@@ -99,8 +98,6 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
-    // 待确认的「启用自动程序」模式（「0 手动模式」→ 1/2 时的防误发确认）
-    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -414,14 +411,13 @@ fun SettingsScreen(
             )
             AutoProgramPanel(
                 program = app.auto,
-                onSetMode = { m -> requestAutoMode(m, sessionStatus, session) { confirmAutoMode = it } },
                 onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
                 // 设置页本身可滚动：面板完全展开、跟随整页滚动，不再套一层内部滚动
                 nestedScroll = false,
             )
             PrefNote(
-                "第 1 层（QSO 引擎）按「重发机制」对同一目标重发；" +
-                    "第 2 层（自动程序）负责选台、排队、主叫/混合模式切换与保护限制。",
+                "自动程序没有独立开关：打开「发送总开关」即自动发射。" +
+                    "第 1 层（QSO 引擎）跑六步报文序列；第 2 层负责选台、应答与发射监管。",
             )
             PrefDivider()
             PrefAction(
@@ -638,18 +634,6 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text("取消") }
             },
-        )
-    }
-
-    confirmAutoMode?.let { m ->
-        AutoEnableConfirmDialog(
-            mode = m,
-            status = sessionStatus,
-            onConfirm = {
-                confirmAutoMode = null
-                session.setAutoMode(m)
-            },
-            onDismiss = { confirmAutoMode = null },
         )
     }
 }

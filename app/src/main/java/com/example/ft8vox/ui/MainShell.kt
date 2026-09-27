@@ -29,7 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import com.example.ft8vox.qso.AutoMode
 
 /**
  * 底部导航的四个页面（new_ui.md §2：操作 / 地图 / 日志 / 设置）。
@@ -65,8 +64,6 @@ fun MainShell(
     var mapFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var mapFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
-    // 待确认的「启用自动程序」模式（从「0 手动模式」切到 1/2 时的防误发确认）
-    var confirmAutoMode by remember { mutableStateOf<AutoMode?>(null) }
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
@@ -158,37 +155,10 @@ fun MainShell(
     if (autoDialogOpen) {
         AutoProgramDialog(
             program = status.autoProgram,
-            onSetMode = { m -> requestAutoMode(m, status, session) { confirmAutoMode = it } },
             onOption = session::setAutoOption,
             onDismiss = { autoDialogOpen = false },
         )
     }
-
-    confirmAutoMode?.let { m ->
-        AutoEnableConfirmDialog(
-            mode = m,
-            status = status,
-            onConfirm = {
-                confirmAutoMode = null
-                session.setAutoMode(m)
-            },
-            onDismiss = { confirmAutoMode = null },
-        )
-    }
-}
-
-/**
- * 点击自动程序工作模式：从「0 手动模式」切到 1/2 时先记下待确认模式（由调用方渲染
- * [AutoEnableConfirmDialog]），其余情况直接生效。
- */
-internal fun requestAutoMode(
-    mode: AutoMode,
-    status: ReceiverStatus,
-    session: SessionViewModel,
-    onNeedConfirm: (AutoMode) -> Unit,
-) {
-    if (mode.enabled && !status.autoProgram.mode.enabled) onNeedConfirm(mode)
-    else session.setAutoMode(mode)
 }
 
 /** 取宿主 Activity（Compose 的 `LocalContext` 可能是被包装过的 Context）。 */

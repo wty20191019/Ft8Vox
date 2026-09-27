@@ -72,6 +72,20 @@ class WorkedIndex(
     fun hasWorkedItuZone(call: String?): Boolean =
         Dxcc.resolve(call)?.ituZone?.let { it in ituZones } ?: false
 
+    /**
+     * 增量并入一个呼号 / 网格，产出新索引（落库后立即生效，见方案 §4.4）。
+     *
+     * 只并入非空项；呼号按大写、网格按 4 字符方格归并（与构造口径一致）。
+     * 索引不可变，调用方用 `_worked.update { it.plus(call, grid) }` 替换。
+     */
+    fun plus(call: String?, grid: String?): WorkedIndex {
+        if (call.isNullOrBlank() && grid.isNullOrBlank()) return this
+        return WorkedIndex(
+            calls = calls + listOfNotNull(call),
+            grids = grids + listOfNotNull(grid),
+        )
+    }
+
     companion object {
         val EMPTY = WorkedIndex()
     }

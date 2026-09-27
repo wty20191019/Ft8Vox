@@ -20,7 +20,7 @@ class QsoEngineTest {
         slotUtcMs = slotUtcMs,
     )
 
-    private fun engine(): QsoEngine = QsoEngine(maxRetries = 6).apply {
+    private fun engine(): QsoEngine = QsoEngine().apply {
         configure("F4FSY", "JN25")
     }
 
@@ -83,7 +83,7 @@ class QsoEngineTest {
         // CQ 阶段由第 2 层收集/排序回应者：状态机不自行认人，也不计重试
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(0, s.retries)
+        assertEquals(0, s.noReplyCount)
         assertEquals("CQ F4FSY JN25", s.txText)
     }
 
@@ -94,7 +94,7 @@ class QsoEngineTest {
         q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC W9XYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(1, s.retries)
+        assertEquals(1, s.noReplyCount)
     }
 
     @Test
@@ -104,48 +104,32 @@ class QsoEngineTest {
         q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC F4FSY JN25")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
-        assertEquals(1, s.retries)
+        assertEquals(1, s.noReplyCount)
     }
 
     @Test
-    fun silentSlotsDoNotCountAsRetriesUntilTransmitted() {
+    fun silentSlotsCountNoReplyPerBatch() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
-        // 没发射过：连过几个空时隙也不该累计重试（否则两端周期相反时会被迫提前放弃）
+        // FT8CN 口径：空批也按批次累计无回应（不要求先发射）
         repeat(5) { q.onDecoded(emptyList()) }
-        assertEquals(0, q.progress().retries)
-        // 发射一次后仍无有效回复 → 才计一次
-        q.onTransmitted()
-        q.onDecoded(emptyList())
-        assertEquals(1, q.progress().retries)
+        assertEquals(5, q.progress().noReplyCount)
     }
 
     @Test
-    fun givesUpAfterMaxRetries() {
+    fun neverFailsWithoutReply() {
         val q = engine()
-        q.startResponderQso("GJ0KYZ", "IO90")
-        var last = q.progress()
-        repeat(7) {
-            q.onTransmitted() // 每次都实际重发一次
-            last = q.onDecoded(emptyList())
-        }
-        assertEquals(QsoState.FAILED, last.state)
-        assertNull(last.txText)
-        assertFalse(last.active)
-    }
-
-    @Test
-    fun neverGivesUpWhenRetryMechanismDisabled() {
-        val q = engine()
-        q.configure("F4FSY", "JN25", maxRetries = 3, giveUp = false)
         q.startResponderQso("GJ0KYZ", "IO90")
         var last = q.progress()
         repeat(20) {
-            q.onTransmitted()
+            q.onTransmitted() // 每次都实际重发一次
             last = q.onDecoded(emptyList())
         }
+        // 引擎不再因重试耗尽而放弃（放弃由第 2 层按 noReplyLimit 决定）
         assertEquals(QsoState.WAIT_REPLY, last.state)
         assertTrue(last.active)
+        assertEquals(20, last.noReplyCount)
+        assertNotNull(last.txText)
     }
 
     @Test
@@ -209,8 +193,8 @@ class QsoEngineTest {
     fun bothAnsweringConvergeWithoutRepeatingReports() {
         // 两端都自动运行、同时应答对方（真机 bug 的最小复现）：交替时隙交换报文，
         // 应在几步内双方都完成并各记一条日志，且空中不出现「重复的 R 报告」。
-        val a = QsoEngine(maxRetries = 6).apply { configure("A1AAA", "JN25") }
-        val b = QsoEngine(maxRetries = 6).apply { configure("B2BBB", "IO90") }
+        val a = QsoEngine().apply { configure("A1AAA", "JN25") }
+        val b = QsoEngine().apply { configure("B2BBB", "IO90") }
         a.startResponderQso("B2BBB", "IO90")
         b.startResponderQso("A1AAA", "JN25")
         var aText = a.progress().txText
@@ -342,8 +326,8 @@ class QsoEngineTest {
     fun asymmetricCollisionConvergesWithoutDeadlock() {
         // 真机截图场景的最小复现：A 已回过 R（等 RR73），B 仍在发纯报告（等 R），
         // 且 A 的 R 一直没被 B 收到。双方必须在有限步内各自完成并只记一条日志。
-        val a = QsoEngine(maxRetries = 6).apply { configure("A1AAA", "JN25") }
-        val b = QsoEngine(maxRetries = 6).apply { configure("B2BBB", "IO90") }
+        val a = QsoEngine().apply { configure("A1AAA", "JN25") }
+        val b = QsoEngine().apply { configure("B2BBB", "IO90") }
         a.respondToReport("B2BBB", theirReport = -8, snr = -10) // A → B2BBB A1AAA R-10
         b.startCallerQso("A1AAA", "IO90", snr = -8)             // B → A1AAA B2BBB -08
 

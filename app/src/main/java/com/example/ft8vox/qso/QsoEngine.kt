@@ -37,15 +37,13 @@ data class QsoProgress(
     val reportReceived: Int? = null,
     /** 下一个发射时隙要发送的报文；null 表示不发。 */
     val txText: String? = null,
-    val retries: Int = 0,
-    val maxRetries: Int = 3,
     /** 六步指令序列的当前序号（1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；0=无）。 */
     val order: Int = 0,
     /**
      * 无回应计数（FT8CN 口径：按**解码批次**累计，收到有效回复即清零）。
      *
-     * 与 [retries]（按「实际重发次数」累计）不同，它对应 FT8CN 的 `noReplyLimit` 安全阀，
-     * 供第 2 层判断「超出后换台 / 回 CQ」。
+     * 它对应 FT8CN 的 `noReplyLimit` 安全阀，供第 2 层判断「超出后换台 / 回 CQ」；
+     * 引擎自身**不再**因重试耗尽而放弃（`retryLimit` 体系已退役，见方案 §1.5）。
      */
     val noReplyCount: Int = 0,
     /**
@@ -67,7 +65,6 @@ data class QsoProgress(
             QsoState.FAILED -> "已放弃（对方无响应）"
             QsoState.WAIT_REPLY ->
                 if (awaitingResponders) "CQ 已发出，等待回应"
-                else if (role == QsoRole.CALLER) "呼叫 CQ（第 ${retries + 1} 次）"
                 else "等待 $theirCall 回复"
             QsoState.WAIT_REPORT -> "已发报告 ${reportSent?.let { MessageParser.formatReport(it) } ?: ""}，等待 $theirCall 的 R 报告"
             QsoState.WAIT_RR73 -> "等待 $theirCall 的 RR73"
@@ -100,15 +97,15 @@ data class QsoProgress(
  *
  * 这样任意两端从任意阶段进入，都会在若干步内收敛到 `DONE`，且空中不出现重复报文。
  *
- * ### 重试
+ * ### 无回应与放弃
  *
- * 重试次数按**实际重发次数**累计（`onTransmitted` 后收到的下一个解码批次若没带来
- * 推进才 +1），而不是每过一个空时隙就 +1；否则两端周期相反时会在真正放弃前提前
- * 触发「放弃 → 第 2 层重启」的抖动。
+ * 引擎自身**不再**因重试耗尽而放弃（`retryLimit` 体系退役，见方案 §1.5）：未推进时按
+ * **解码批次**累计 [QsoProgress.noReplyCount]（FT8CN 口径），收到有效回复即清零。
+ * 是否「目标作废、换台 / 回 CQ」由第 2 层按设置项 `noReplyLimit` 决定。
  *
  * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]。
  */
-class QsoEngine(private var maxRetries: Int = 3) {
+class QsoEngine {
 
     /**
      * 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。
@@ -135,21 +132,9 @@ class QsoEngine(private var maxRetries: Int = 3) {
      */
     private var lastSentReport: Int? = null
     private var txText: String? = null
-    private var retries = 0
     /** 无回应计数（FT8CN 口径，按解码批次累计，收到回复清零）。 */
     private var noReplyCount = 0
-    /** 无回应上限；0＝忽略（FT8CN `noReplyLimit`，由第 2 层配置）。 */
-    private var noReplyLimit = 0
     private var logEntry: QsoLogEntry? = null
-
-    /** 通过重试耗尽而放弃（用于 [QsoState.FAILED]）。 */
-    private var failed = false
-
-    /** 上一次发射后是否还没收到任何有价值的回复（决定是否累计一次重试）。 */
-    private var awaitingReplySinceTx = false
-
-    /** 超过 [maxRetries] 是否放弃（false＝一直重发，仅用于关闭「重发机制」时）。 */
-    private var giveUp = true
 
     /** 是否处于「已发 CQ、等回应者」阶段（见 [QsoProgress.awaitingResponders]）。 */
     private var awaitingResponders = false
@@ -157,19 +142,13 @@ class QsoEngine(private var maxRetries: Int = 3) {
     /** 是否已配置好呼号，可以开始 QSO。 */
     val canOperate: Boolean get() = myCall.isNotEmpty()
 
-    /** 更新台站信息与重发机制（来自设置）。 */
+    /** 更新台站信息（来自设置）。 */
     fun configure(
         myCall: String,
         myGrid: String,
-        maxRetries: Int = this.maxRetries,
-        giveUp: Boolean = this.giveUp,
-        noReplyLimit: Int = this.noReplyLimit,
     ) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
-        this.maxRetries = maxRetries.coerceIn(1, 50)
-        this.giveUp = giveUp
-        this.noReplyLimit = noReplyLimit.coerceIn(0, 30)
     }
 
     fun progress(): QsoProgress = QsoProgress(
@@ -180,8 +159,6 @@ class QsoEngine(private var maxRetries: Int = 3) {
         reportSent = reportSent,
         reportReceived = reportReceived,
         txText = txText,
-        retries = retries,
-        maxRetries = maxRetries,
         order = step.order,
         noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
@@ -197,8 +174,7 @@ class QsoEngine(private var maxRetries: Int = 3) {
     /**
      * 通知状态机：本轮 [QsoProgress.txText] 已实际发射完毕。
      *
-     * 若 QSO 已结束（DONE/FAILED），清空 txText，避免无限重发；否则标记「本轮已发，
-     * 等回复」，供 [onDecoded] 判断是否累计一次重试。
+     * 若 QSO 已结束（DONE/FAILED），清空 txText，避免无限重发。
      */
     fun onTransmitted() {
         if (state == QsoState.DONE || state == QsoState.FAILED) {
@@ -206,7 +182,6 @@ class QsoEngine(private var maxRetries: Int = 3) {
         }
         // Tx2 实际发出后快照，供 Tx3 的 R 报告复用（「每次重测最新」⇒ 重发 Tx2 会刷新）
         if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent
-        awaitingReplySinceTx = true
     }
 
     /** 开始呼叫 CQ。 */
@@ -323,8 +298,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
     /**
      * 处理一个接收时隙的解码结果，推进状态机。
      *
-     * 每次调用只消费一条有效报文；未产生推进时累计重试（仅在上一轮**确实发射过**、
-     * 即等过一次回复后才 +1）。
+     * 每次调用只消费一条有效报文；未产生推进时按 FT8CN 口径累计 [noReplyCount]
+     * （由第 2 层据此判断换台）；深度/弱信号批次不计。
      */
     fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
         if (!canOperate) return progress()
@@ -336,6 +311,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
         var advanced = false
         var latestTargetSnr: Int? = null
         for (m in messages) {
+            // 深度（弱信号二次）解码只用于显示，不推进 QSO（FT8CN isDeep；当前恒 false）
+            if (m.deep) continue
             val p = MessageParser.parse(m.text)
             val from = p.from ?: continue
             if (from.equals(myCall, ignoreCase = true)) continue // 忽略自己
@@ -350,9 +327,7 @@ class QsoEngine(private var maxRetries: Int = 3) {
         }
 
         if (advanced) {
-            retries = 0
             noReplyCount = 0
-            awaitingReplySinceTx = false
             // 非终态转移只改了 step，需要把对外 state 同步过来（终态分支里 finish 已同步，幂等）
             syncState()
         } else {
@@ -362,21 +337,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
                 reportSent = reportFromSnr(latestTargetSnr)
                 render()
             }
-            // 无回应按解码批次累计（FT8CN 口径；含空批）
-            noReplyCount++
-            if (awaitingReplySinceTx) {
-                // 上一轮发了报文、本批解码没能推进 → 计一次无效重发
-                awaitingReplySinceTx = false
-                retries++
-                // giveUp=false（关闭「重发机制」）时一直重发，不主动放弃
-                if (giveUp && retries > maxRetries) {
-                    failed = true
-                    step = Step.NONE
-                    txText = null
-                    theirCall = null
-                    theirGrid = null
-                }
-            }
+            // 无回应按解码批次累计（FT8CN 口径；含空批）；纯深度/弱信号批次不计（方案 §1.6）
+            if (messages.isEmpty() || messages.any { !it.deep }) noReplyCount++
             syncState()
         }
         return progress()
@@ -480,10 +442,14 @@ class QsoEngine(private var maxRetries: Int = 3) {
         }
     }
 
-    /** 依 [step] / [failed] 同步对外状态。 */
+    /**
+     * 依 [step] 同步对外状态。
+     *
+     * 注意：[QsoState.FAILED] 已不再由「重试耗尽」产生（`retryLimit` 体系退役）；保留该枚举值
+     * 仅为兼容 UI，异常/中止一律走 [stop]（回到 IDLE）。
+     */
     private fun syncState() {
         state = when {
-            failed -> QsoState.FAILED
             step == Step.RR73 || step == Step.SEVENTY3 -> QsoState.DONE
             step == Step.REPORT -> QsoState.WAIT_REPORT
             step == Step.ROGER -> QsoState.WAIT_RR73
@@ -517,11 +483,8 @@ class QsoEngine(private var maxRetries: Int = 3) {
         reportReceived = null
         lastSentReport = null
         txText = null
-        retries = 0
         noReplyCount = 0
         logEntry = null
-        failed = false
-        awaitingReplySinceTx = false
         awaitingResponders = false
     }
 

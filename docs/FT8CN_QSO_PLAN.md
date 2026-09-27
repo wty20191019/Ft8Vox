@@ -450,9 +450,42 @@ FT8CN `QSLRecord` 字段对照：
 2. **`isFrom` 改为双向对称**（FT8CN 的超集）：FT8CN 只在**目标**带 `/` 时用 `contains`；本实现改为「任一方带 `/` 即用 `contains`」，避免「对方先以裸呼号出现、后续改用 `/P`」时被判成陌生人而漏应答。
 3. **`noReplyLimit` 参数已预留**（`QsoEngine.configure(...)`），但引擎自身的放弃仍用 `retries`（与设置项 `retryLimit` 相连）；期 2 会把它切到 `noReplyCount` 并迁到第 2 层「换台」逻辑。
 
-### 期 2–5（待办）
+### 期 2（本轮已完成，含期 3 的 VM 部分 + 期 4 的 UI 部分）
 
-见 §7 分期表。
+> 期 2 原设计只动 `AutoProgram.kt`，但新设置模型（`AutoProgramSettings` 四项）会级联
+> `SettingsRepository` / `SessionViewModel` / `AutoProgramDialog` / `MainShell` / `SettingsScreen` /
+> `TxDrawer` / `AppChrome`，无法只改调度层就让构建通过；因此本轮把**期 2 + 期 3（VM 逻辑）
+> + 期 4（设置面板与删确认框）**一起做完，只剩 **Room 日志字段**与**解码列表菜单**未做。
+
+| 文件 | 改动 |
+| --- | --- |
+| `qso/AutoProgram.kt`（重写） | 删 `AutoMode`/`AutoSort`/`DecodeTiming`/`MIXED_CQ_NO_REPLY_LIMIT`；`AutoProgramSettings(supervisionMinutes=10, noReplyLimit=0, autoFollowCq=true, autoCallFollow=true)` + `SUPERVISION_MINUTES`/`NO_REPLY_LIMIT_RANGE`；`AutoTarget` 加 `cqModifier`；`collect` 定向一律入选（不受筛选/已通联/开关）、CQ 台按 `autoFollowCq` 且硬编码跳过已通联、去 `DecodeFilter.matches` 与距离排序；`rank` 按 `DX > 我所在区域 > 其它修饰符 > 无`（稳定保序）+ `areaOfGrid` 粗判大洲；`AutoScheduler` 去 `phase`/`paused`/`txAccumMs`/`pause`/`resume`，监管超时→`Stop`，新增 `onTargetGaveUp`（超限换台/回 CQ）、`enable`/`disable`/`resetSupervision`/`markProtectedStop` |
+| `qso/QsoEngine.kt` | 退役 `retryLimit` 体系：删 `maxRetries`/`giveUp`/`FAILED(重试耗尽)`/`retries`/`awaitingReplySinceTx` 与放弃分支；`configure(myCall, myGrid)`；`noReplyCount` 保留（第 2 层据此换台）；深度解码 `m.deep` 不推进、纯 deep 批次不计无回应 |
+| `engine/DecodeResult.kt` | 类体新增 `deep: Boolean = false`（钩子；**不动 JNI 构造签名**，当前恒 false） |
+| `qso/DecodeHighlight.kt` | `WorkedIndex.plus(call, grid)` 增量合并，供落库后实时生效 |
+| `data/settings/SettingsRepository.kt` | 四个新键 `auto_supervision_minutes` / `auto_no_reply_limit` / `auto_follow_cq` / `auto_call_follow`；旧键常量保留、**不再读写**（便于回滚） |
+| `ui/SessionViewModel.kt` | 删 `setAutoMode`/`phaseLabel`/`manualQso`/`manualIntervention`/`resumeAutoAfterManual`/`stopAutoByProtection`/`lastLoggedMs`/`QSO_LOG_DEDUP_MS`；自动程序闸门改由 `txEnabled` 驱动；`setTxEnabled` 开→`scheduler.enable`、关→`stopTransmit`；`AutoAction.Stop`→`stopAutoBySupervision`（**关总开关**）；每接收批次检查发射监管；`maybeGiveUpTarget` 在 `qsoEngine.onDecoded` 后按 `noReplyLimit` 换台/回 CQ；落库改**会话内去重 + `_worked.plus` 实时**（`stop()`/换波段清空）；`qsoEngine.configure(myCall, myGrid)` |
+| `ui/AutoProgramDialog.kt`（重写） | 四项面板（发射监管档位 / 无回应次数 / 两个开关）；**删除 `AutoEnableConfirmDialog`**；`autoProgramSummary` 改四项摘要 |
+| `ui/MainShell.kt` / `ui/SettingsScreen.kt` | 删 `confirmAutoMode` / `requestAutoMode` / 确认弹窗调用；面板调用去掉 `onSetMode` |
+| `ui/TxDrawer.kt` / `ui/AppChrome.kt` | 去掉 `mode.shortLabel`/`mode.enabled`，改按 `txEnabled` 显示「运行中/待命」；抽屉文案改新口径 |
+
+**验证**：`:app:testDebugUnitTest` **294 例 / 32 suite 全绿**；`:app:assembleDebug` **BUILD SUCCESSFUL**。
+
+**期 2 与初版方案的差异**：
+
+1. **`QsoProgress.retries`/`maxRetries` 一并删除**（原方案列在「删除」清单）；`QsoState.FAILED` 枚举值**保留**但不再由重试产生（仅兼容 UI 引用，异常/中止走 `stop()`→IDLE）。
+2. **`QsoEngine.configure` 去掉 `noReplyLimit` 参数**：上限判断完全在第 2 层（`AutoScheduler` + VM `maybeGiveUpTarget`），引擎只提供 `noReplyCount`。
+3. **发射监管检查点**除了 `onDecoded`/`onQsoFinished`/`onTargetGaveUp`，还在 VM 每个接收批次统一检查一次（含进行中的 QSO 与仅自听批次），避免「对静默伙伴无限重试」时监管永不触发。
+4. **`DecodeResult.deep` 放类体**（不动主构造器），保证 native JNI 构造签名 `(Ljava/lang/String;IFIIJ)V` 不变。
+
+**仍未做（转后期）**：
+
+- **解码列表菜单**（呼叫 / 回复 / 查看日志；不加手动 73）——期 4 剩余项，仅 UI，不影响自动逻辑。
+- **Room 日志字段补齐**（起止时间 / 波段 / 基频 + `Migration`）——期 3 数据层剩余项。
+
+### 期 3–5（待办）
+
+见 §7 分期表（期 3 的 VM 逻辑已随本轮完成，剩 Room 数据层）。
 
 ---
 
