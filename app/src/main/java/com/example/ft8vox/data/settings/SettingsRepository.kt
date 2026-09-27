@@ -133,6 +133,7 @@ private object Keys {
     val decodeLdpc = intPreferencesKey("decode_ldpc")
     val decodeMaxCandidates = intPreferencesKey("decode_max_candidates")
     val decodeMaxDecoded = intPreferencesKey("decode_max_decoded")
+    val decodePasses = intPreferencesKey("decode_passes")
     val decodeFMin = intPreferencesKey("decode_f_min")
     val decodeFMax = intPreferencesKey("decode_f_max")
 }
@@ -243,6 +244,7 @@ private fun Preferences.toAppSettings(): AppSettings {
             ldpcIterations = this[Keys.decodeLdpc] ?: defaults.decode.ldpcIterations,
             maxCandidates = this[Keys.decodeMaxCandidates] ?: defaults.decode.maxCandidates,
             maxDecoded = this[Keys.decodeMaxDecoded] ?: defaults.decode.maxDecoded,
+            passes = this[Keys.decodePasses] ?: defaults.decode.passes,
             fMinHz = this[Keys.decodeFMin] ?: defaults.decode.fMinHz,
             fMaxHz = this[Keys.decodeFMax] ?: defaults.decode.fMaxHz,
         ).clamped(),
@@ -301,6 +303,7 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.decodeLdpc] = decode.ldpcIterations
     prefs[Keys.decodeMaxCandidates] = decode.maxCandidates
     prefs[Keys.decodeMaxDecoded] = decode.maxDecoded
+    prefs[Keys.decodePasses] = decode.passes
     prefs[Keys.decodeFMin] = decode.fMinHz
     prefs[Keys.decodeFMax] = decode.fMaxHz
 }

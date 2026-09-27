@@ -14,6 +14,7 @@ class DecodeParamsTest {
         assertEquals(120, d.maxCandidates)
         assertEquals(20, d.ldpcIterations)
         assertEquals(100, d.maxDecoded)
+        assertEquals(2, d.passes) // SIC 默认 2 趟
     }
 
     @Test
@@ -23,16 +24,20 @@ class DecodeParamsTest {
             maxCandidates = 100000,
             ldpcIterations = 0,
             maxDecoded = 1,
+            passes = 0,
         )
         assertEquals(DecodeParams.MIN_SCORE_RANGE.first, p.minScore)
         assertEquals(DecodeParams.MAX_CANDIDATES_RANGE.last, p.maxCandidates)
         assertEquals(DecodeParams.LDPC_RANGE.first, p.ldpcIterations)
         assertEquals(DecodeParams.MAX_DECODED_RANGE.first, p.maxDecoded)
+        assertEquals(DecodeParams.PASSES_RANGE.first, p.passes)
     }
 
     @Test
     fun clampedIsIdempotentForValidValues() {
-        val valid = DecodeParams(minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80)
+        val valid = DecodeParams(
+            minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80, passes = 3,
+        )
         assertEquals(valid, valid.clamped())
     }
 }

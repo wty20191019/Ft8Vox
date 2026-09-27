@@ -301,7 +301,7 @@ fun SettingsScreen(
                 title = "解码深度",
                 subtitle = "预设「快」＝下面的默认值（照搬 FT8CN「快速解码」：迭代 20 / 候选 120 / 单时隙上限 100）。" +
                     "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
-                    "「快」按钮可一键恢复上面 6 项的默认值（频率范围不随预设变化）。" +
+                    "「快」按钮可一键恢复上面 7 项的默认值（频率范围不随预设变化）。" +
                     "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
@@ -371,6 +371,17 @@ fun SettingsScreen(
                 subtitle = "一个时隙最多输出的报文条数（5–100）。拥挤波段（如 20m 高峰）" +
                     "调大可避免已解出的报文被丢弃。",
                 onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "减谱重解趟数",
+                value = app.decode.passes,
+                range = DecodeSettings.PASSES_RANGE,
+                subtitle = "SIC（多趟减谱重解）趟数（1–4）。解完一趟后把已解出的报文从瀑布幅度上" +
+                    "抹掉，在残留谱上再搜一趟，把被强台压住的同频弱信号挖出来。" +
+                    "1＝关（单趟，最快）；2＝默认（离线 60 个官方音频 956→989 条，+3.5%，零回归）；" +
+                    "再往上增益很小、耗时近似成倍。即时生效。",
+                onChange = { v -> settings.updateDecode { it.copy(passes = v) } },
             )
             PrefDivider()
             PrefStepper(

@@ -10,12 +10,13 @@ class DecodeSettingsTest {
     @Test
     fun fastPresetIsExactlyTheDefaultSettings() {
         // 「快」＝构造函数默认值：两处不许漂移；值照搬 FT8CN「快速解码」（迭代 20 / 候选 120 / 上限 100）
-        val applied = DecodeSettings(ldpcIterations = 40, maxCandidates = 200, maxDecoded = 90)
+        val applied = DecodeSettings(ldpcIterations = 40, maxCandidates = 200, maxDecoded = 90, passes = 3)
             .applyPreset(DecodePreset.FAST)
         assertEquals(DecodeSettings(), applied)
         assertEquals(20, applied.ldpcIterations)
         assertEquals(120, applied.maxCandidates)
         assertEquals(100, applied.maxDecoded)
+        assertEquals(2, applied.passes) // SIC 趟数也归「快」预设管，默认 2
     }
 
     @Test
@@ -35,6 +36,11 @@ class DecodeSettingsTest {
         assertEquals(
             DecodePreset.CUSTOM,
             AppSettings(decode = DecodeSettings(maxDecoded = 90)).decodePreset,
+        )
+        // SIC 趟数也是预设管辖项：手改成 3 趟就算「自定义」
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(passes = 3)).decodePreset,
         )
         assertEquals(
             DecodePreset.FAST,
@@ -79,6 +85,7 @@ class DecodeSettingsTest {
             ldpcIterations = 1000,
             maxCandidates = 1,
             maxDecoded = 9999,
+            passes = 99,
             fMinHz = 10,
             fMaxHz = 99999,
         ).clamped()
@@ -89,6 +96,7 @@ class DecodeSettingsTest {
         assertEquals(DecodeSettings.LDPC_RANGE.last, wild.ldpcIterations)
         assertEquals(DecodeSettings.MAX_CANDIDATES_RANGE.first, wild.maxCandidates)
         assertEquals(DecodeSettings.MAX_DECODED_RANGE.last, wild.maxDecoded)
+        assertEquals(DecodeSettings.PASSES_RANGE.last, wild.passes)
         assertEquals(DecodeSettings.F_MIN_RANGE.first, wild.fMinHz)
         assertEquals(DecodeSettings.F_MAX_RANGE.last, wild.fMaxHz)
     }
@@ -107,6 +115,7 @@ class DecodeSettingsTest {
                 ldpcIterations = 40,
                 maxCandidates = 200,
                 maxDecoded = 70,
+                passes = 3,
             ),
         )
         val p = s.decodeParams
@@ -114,6 +123,7 @@ class DecodeSettingsTest {
         assertEquals(40, p.ldpcIterations)
         assertEquals(200, p.maxCandidates)
         assertEquals(70, p.maxDecoded)
+        assertEquals(3, p.passes)
     }
 
     @Test

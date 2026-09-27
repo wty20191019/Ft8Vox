@@ -97,7 +97,7 @@ fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAI
  * 想更全就逐项调大（会显示「自定义」）。
  *
  * - [timeOsr]/[freqOsr]/[fMinHz]/[fMaxHz] 属于 `monitor_config_t`，改动需**重建引擎**；
- * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded] 每次解码读取，**热生效**。
+ * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded]/[passes] 每次解码读取，**热生效**。
  */
 data class DecodeSettings(
     val timeOsr: Int = 2,
@@ -106,6 +106,8 @@ data class DecodeSettings(
     val ldpcIterations: Int = 20,
     val maxCandidates: Int = 120,
     val maxDecoded: Int = 100,
+    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/UI.md §5.4.2。 */
+    val passes: Int = 2,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
 ) {
@@ -114,7 +116,7 @@ data class DecodeSettings(
         // 「快」＝构造函数默认值（改这里必须同步改上面的默认值，单测会卡住漂移）
         DecodePreset.FAST -> DecodeSettings(
             timeOsr = 2, freqOsr = 2, minScore = 10,
-            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100,
+            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, passes = 2,
             fMinHz = fMinHz, fMaxHz = fMaxHz,
         )
         DecodePreset.CUSTOM -> this
@@ -129,7 +131,7 @@ data class DecodeSettings(
     fun samePresetValues(other: DecodeSettings): Boolean =
         timeOsr == other.timeOsr && freqOsr == other.freqOsr && minScore == other.minScore &&
             ldpcIterations == other.ldpcIterations && maxCandidates == other.maxCandidates &&
-            maxDecoded == other.maxDecoded
+            maxDecoded == other.maxDecoded && passes == other.passes
 
     /**
      * 把各字段钳制到允许范围。
@@ -144,6 +146,7 @@ data class DecodeSettings(
         ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
         maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
         maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
+        passes = passes.coerceIn(PASSES_RANGE),
         fMinHz = fMinHz.coerceIn(F_MIN_RANGE),
         fMaxHz = fMaxHz.coerceIn(F_MAX_RANGE),
     ).let { if (it.fMaxHz < it.fMinHz + 100) it.copy(fMaxHz = it.fMinHz + 100) else it }
@@ -156,6 +159,8 @@ data class DecodeSettings(
         val LDPC_RANGE = 5..60
         val MAX_CANDIDATES_RANGE = 20..500
         val MAX_DECODED_RANGE = 5..100
+        /** SIC 趟数范围；上与 native `K_MAX_DECODE_PASSES` 一致。 */
+        val PASSES_RANGE = 1..4
         val F_MIN_RANGE = 100..2000
         val F_MAX_RANGE = 1000..5000
     }
@@ -339,5 +344,6 @@ data class AppSettings(
             maxCandidates = decode.maxCandidates,
             ldpcIterations = decode.ldpcIterations,
             maxDecoded = decode.maxDecoded,
+            passes = decode.passes,
         )
 }

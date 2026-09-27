@@ -19,6 +19,13 @@ data class DecodeParams(
     val ldpcIterations: Int = 20,
     /** 单时隙最多解出的报文条数。 */
     val maxDecoded: Int = 100,
+    /**
+     * 多趟减谱重解（SIC）趟数：1 = 单趟（不做减谱重解），2 = 默认。
+     *
+     * 见 docs/UI.md §5.4.2：解完一趟后把已解报文在瀑布幅度上抹掉、再搜一趟，
+     * 把被强信号压住的弱信号挖出来；趟数每加一趟解码耗时约合再乘一次。
+     */
+    val passes: Int = 2,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {
@@ -26,6 +33,8 @@ data class DecodeParams(
         val MAX_CANDIDATES_RANGE = 20..500
         val LDPC_RANGE = 5..60
         val MAX_DECODED_RANGE = 5..100
+        /** SIC 趟数上与 native 的 `K_MAX_DECODE_PASSES` 一致。 */
+        val PASSES_RANGE = 1..4
 
         /** 钳制到安全范围，避免越界值传到 native。 */
         fun of(
@@ -33,14 +42,17 @@ data class DecodeParams(
             maxCandidates: Int,
             ldpcIterations: Int,
             maxDecoded: Int,
+            passes: Int = 2,
         ): DecodeParams = DecodeParams(
             minScore = minScore.coerceIn(MIN_SCORE_RANGE),
             maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
             ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
             maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
+            passes = passes.coerceIn(PASSES_RANGE),
         )
     }
 
     /** 钳制到安全范围。 */
-    fun clamped(): DecodeParams = of(minScore, maxCandidates, ldpcIterations, maxDecoded)
+    fun clamped(): DecodeParams =
+        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes)
 }
