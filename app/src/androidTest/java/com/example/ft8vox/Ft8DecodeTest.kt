@@ -64,6 +64,8 @@ class Ft8DecodeTest {
     @Test
     fun decodesSingleSlotMessages() {
         val messages = decodeAsset("191111_110145.wav")
+        // 期望清单 2 条（同目录 .txt），当前实现全解出
+        assertTrue("至少应解出 2 条，实际 ${messages.size} 条：$messages", messages.size >= 2)
         assertTrue("expected 'GJ0KYZ RK9AX MO05', got=$messages", messages.any { it.contains("GJ0KYZ RK9AX MO05") })
         assertTrue("expected 'RY8CAA', got=$messages", messages.any { it.contains("RY8CAA") })
     }
@@ -71,6 +73,9 @@ class Ft8DecodeTest {
     @Test
     fun decodesBusySlotMessages() {
         val messages = decodeAsset("191111_110615.wav")
+        // 期望清单 22 条；当前实现（快预设 + SIC 2 趟）实测 17 条。
+        // 阈值取实测 −2：既能拦住条数回归（丢一条即失败），又不过度敏感。
+        assertTrue("至少应解出 15 条，实际 ${messages.size} 条：$messages", messages.size >= 15)
         val expected = listOf("VK4BLE OH8JK R-17", "CQ F4FSY JN25", "JR5MJS OH8NW 73")
         for (message in expected) {
             assertTrue("expected '$message', got=$messages", messages.any { it.contains(message) })
