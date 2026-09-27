@@ -32,9 +32,13 @@ typedef struct
     int max_candidates;  ///< 单时隙候选上限
     int ldpc_iterations; ///< LDPC 最大迭代次数，越高越慢但弱信号更有机会
     int max_decoded;     ///< 单时隙最多解出的报文条数
+    /// SIC 解码趟数：1 = 单趟（不做减谱重解）；2 = 解完一趟后把所有已解报文
+    /// 在瀑布幅度上抹掉、再搜一趟，把被强信号掩盖的弱信号挖出来。
+    /// 0（未设置，例如 JNI 只填了前 4 个字段）按默认 2 趟处理。
+    int passes;
 } ftx_decode_params_t;
 
-/// 默认解码参数（与 ft8_lib 官方示例 decode_ft8.c 一致）。
+/// 默认解码参数（与 Kotlin 侧 DecodeSettings「快」预设一致：10/120/20/100、2 趟）。
 ftx_decode_params_t ftx_decode_params_default(void);
 
 /// 解码会话：封装 monitor（STFT/瀑布）、分块缓冲、waterfall 行流与呼号哈希表，
