@@ -299,9 +299,10 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "预设「快」＝下面的默认值（迭代 10 / 候选 80 / 单时隙上限 50）。" +
+                subtitle = "预设「快」＝下面的默认值（照搬 FT8CN「快速解码」：迭代 20 / 候选 120 / 单时隙上限 100）。" +
                     "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
-                    "「快」按钮可一键恢复这套默认值。时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
+                    "「快」按钮可一键恢复上面 6 项的默认值（频率范围不随预设变化）。" +
+                    "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
                     if (app.decodePreset == DecodePreset.CUSTOM) add(DecodePreset.CUSTOM)
@@ -378,7 +379,7 @@ fun SettingsScreen(
                 range = DecodeSettings.F_MIN_RANGE,
                 step = 50,
                 unit = " Hz",
-                subtitle = "解码搜索与瀑布显示的下边界（默认 200 Hz，即 SSB 通带低端）。" +
+                subtitle = "解码搜索与瀑布显示的下边界（默认 100 Hz，即 SSB 通带低端）。" +
                     "需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
             )

@@ -7,17 +7,18 @@ package com.example.ft8vox.engine
  * （见 [AudioEngine.setDecodeParams] / [Ft8Engine.setDecodeParams]）；而 [Ft8Config] 里的
  * 频率范围与 OSR 需要重建引擎。
  *
- * 默认值与 ft8_lib 官方示例 `demo/decode_ft8.c` 一致。
+ * 默认值＝设置的「快」预设，照搬 FT8CN「快速解码」（10 / 120 / 20 / 100）；
+ * 该默认只在设置下发前的极短窗口内生效，正常运行时用的是设置页的值。
  */
 data class DecodeParams(
     /** Costas 同步最低得分，越高候选越少、越快，漏解风险越大。 */
     val minScore: Int = 10,
     /** 单时隙候选上限。 */
-    val maxCandidates: Int = 140,
+    val maxCandidates: Int = 120,
     /** LDPC 最大迭代次数，越高越慢但弱信号解码率更高。 */
-    val ldpcIterations: Int = 25,
+    val ldpcIterations: Int = 20,
     /** 单时隙最多解出的报文条数。 */
-    val maxDecoded: Int = 50,
+    val maxDecoded: Int = 100,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {

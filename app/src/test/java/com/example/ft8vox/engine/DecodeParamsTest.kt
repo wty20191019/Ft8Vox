@@ -7,12 +7,13 @@ import org.junit.Test
 class DecodeParamsTest {
 
     @Test
-    fun defaultsMatchFt8LibSample() {
+    fun defaultsMatchFt8cnFastDecode() {
+        // 与设置页「快」预设（DecodeSettings 构造默认值）保持同一口径
         val d = DecodeParams()
         assertEquals(10, d.minScore)
-        assertEquals(140, d.maxCandidates)
-        assertEquals(25, d.ldpcIterations)
-        assertEquals(50, d.maxDecoded)
+        assertEquals(120, d.maxCandidates)
+        assertEquals(20, d.ldpcIterations)
+        assertEquals(100, d.maxDecoded)
     }
 
     @Test

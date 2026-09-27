@@ -9,13 +9,13 @@ class DecodeSettingsTest {
 
     @Test
     fun fastPresetIsExactlyTheDefaultSettings() {
-        // 「快」＝构造函数默认值：两处不许漂移；用户点名的三项就是 迭代 10 / 候选 80 / 单时隙上限 50
+        // 「快」＝构造函数默认值：两处不许漂移；值照搬 FT8CN「快速解码」（迭代 20 / 候选 120 / 上限 100）
         val applied = DecodeSettings(ldpcIterations = 40, maxCandidates = 200, maxDecoded = 90)
             .applyPreset(DecodePreset.FAST)
         assertEquals(DecodeSettings(), applied)
-        assertEquals(10, applied.ldpcIterations)
-        assertEquals(80, applied.maxCandidates)
-        assertEquals(50, applied.maxDecoded)
+        assertEquals(20, applied.ldpcIterations)
+        assertEquals(120, applied.maxCandidates)
+        assertEquals(100, applied.maxDecoded)
     }
 
     @Test

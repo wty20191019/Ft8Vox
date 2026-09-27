@@ -58,8 +58,8 @@ enum class WaterfallHeight(val label: String, val fraction: Float) {
 /**
  * 解码预设档位。
  *
- * **只有一个真预设 [FAST]（默认）**：原「标准 / 深」两档已删除 —— 想要更全的解码时
- * 逐项手改下面 6 个高级参数（改后会自动显示 [CUSTOM]）。
+ * **只有一个真预设 [FAST]（默认）**：参数照搬 FT8CN 的「快速解码」；原「标准 / 深」
+ * 两档已删除 —— 想要更全的解码时逐项手改下面 6 个高级参数（改后会自动显示 [CUSTOM]）。
  */
 enum class DecodePreset(val label: String) {
     FAST("快"),
@@ -89,28 +89,32 @@ fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAI
 /**
  * 解码参数（对应 native 的可调项）。
  *
- * **构造函数的默认值就是「快」预设**（`DecodePreset.FAST`，由单测锁定，两处不许漂移）：
- * 迭代 10 / 候选 80 / 单时隙上限 50。想更全就逐项调大（会显示「自定义」）。
+ * **构造函数的默认值就是「快」预设**（`DecodePreset.FAST`，由单测锁定，两处不许漂移），
+ * 照搬 FT8CN「快速解码」的实测参数：时间/频率 OSR 2 / 最低得分 10 / LDPC 迭代 20 /
+ * 候选上限 120 / 单时隙上限 100 / 频率范围 100–3000 Hz（FT8CN 的 `libft8cn.so` 里
+ * `init_decoder` 写死的正是 `f_min=100`、`f_max=3000`、`time_osr=2`、`freq_osr=2`，
+ * 「快」的 LDPC 迭代 20、候选 120，见 `fast_kLDPC_iterations` / `kMax_candidates`）。
+ * 想更全就逐项调大（会显示「自定义」）。
  *
  * - [timeOsr]/[freqOsr]/[fMinHz]/[fMaxHz] 属于 `monitor_config_t`，改动需**重建引擎**；
  * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded] 每次解码读取，**热生效**。
  */
 data class DecodeSettings(
-    val timeOsr: Int = 1,
-    val freqOsr: Int = 1,
-    val minScore: Int = 12,
-    val ldpcIterations: Int = 10,
-    val maxCandidates: Int = 80,
-    val maxDecoded: Int = 50,
-    val fMinHz: Int = 200,
+    val timeOsr: Int = 2,
+    val freqOsr: Int = 2,
+    val minScore: Int = 10,
+    val ldpcIterations: Int = 20,
+    val maxCandidates: Int = 120,
+    val maxDecoded: Int = 100,
+    val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
 ) {
     /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {
         // 「快」＝构造函数默认值（改这里必须同步改上面的默认值，单测会卡住漂移）
         DecodePreset.FAST -> DecodeSettings(
-            timeOsr = 1, freqOsr = 1, minScore = 12,
-            ldpcIterations = 10, maxCandidates = 80, maxDecoded = 50,
+            timeOsr = 2, freqOsr = 2, minScore = 10,
+            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100,
             fMinHz = fMinHz, fMaxHz = fMaxHz,
         )
         DecodePreset.CUSTOM -> this
