@@ -19,28 +19,31 @@ enum class TxMessageKind(val label: String, val order: Int) {
 }
 
 /**
- * 报文构造、类型识别、宏展开与队列的**纯逻辑**（无 Android 依赖，可 JVM 单测）。
- *
- * 占位符：`{call}` 目标呼号、`{mycall}` 我的呼号、`{mygrid}` 我的网格、`{report}` 信号报告。
+ * 报文构造、类型识别与发射调度的**纯逻辑**（无 Android 依赖，可 JVM 单测）。
  */
 object TxCompose {
 
     /** 自定义文本上限（FT8 报文 75 bit，UI 按字符数提示）。 */
     const val MAX_TEXT_CHARS = 75
 
-    /** 按类型构造报文；需要目标而目标为空时返回 null。 */
+    /**
+     * 按类型构造报文；需要目标而目标为空时返回 null。
+     *
+     * [cqPrefix] 只对 [TxMessageKind.CQ] 生效：CQ 前缀（如 `DX`、`TEST`），**空串＝普通 CQ**。
+     */
     fun compose(
         kind: TxMessageKind,
         target: String?,
         myCall: String,
         myGrid: String,
         report: Int = 0,
+        cqPrefix: String = "",
     ): String? {
         val me = myCall.trim().uppercase()
         val grid = myGrid.trim().uppercase()
         val them = target?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
         return when (kind) {
-            TxMessageKind.CQ -> join("CQ", me, grid)
+            TxMessageKind.CQ -> join("CQ", cqPrefix.trim().uppercase(), me, grid)
             TxMessageKind.GRID -> them?.let { join(it, me, grid) }
             TxMessageKind.REPORT -> them?.let { join(it, me, MessageParser.formatReport(report)) }
             TxMessageKind.ROGER -> them?.let { join(it, me, "R${MessageParser.formatReport(report)}") }
@@ -77,78 +80,25 @@ object TxCompose {
         return m.snr.coerceIn(-24, 30)
     }
 
-    /** 展开宏模板。 */
-    fun expandMacro(
-        template: String,
-        target: String?,
-        myCall: String,
-        myGrid: String,
-        report: Int = 0,
-    ): String {
-        val them = target?.trim()?.uppercase().orEmpty()
-        return template
-            .replace("{call}", them)
-            .replace("{mycall}", myCall.trim().uppercase())
-            .replace("{mygrid}", myGrid.trim().uppercase())
-            .replace("{report}", MessageParser.formatReport(report))
-            .split(Regex("\\s+"))
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
-    }
-
     private fun join(vararg parts: String): String =
         parts.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
 }
 
-/** 宏模板默认值（4×2 = 8 个，可在抽屉里编辑）。 */
-val DEFAULT_MACROS: List<String> = listOf(
-    "CQ {mycall} {mygrid}",
-    "CQ DX {mycall} {mygrid}",
-    "{call} {mycall} {mygrid}",
-    "{call} {mycall} {report}",
-    "{call} {mycall} R{report}",
-    "{call} {mycall} RR73",
-    "{call} {mycall} 73",
-    "CQ TEST {mycall} {mygrid}",
-)
-
 /**
- * 发送队列的有序操作（纯 Kotlin）。
+ * CQ 前缀默认值（4×2 = 8 个可编辑格子，抽屉里可改）。
  *
- * 队列只保存报文原文，展示标签由 [TxCompose] 派生。
+ * 前缀插在 `CQ` 与我方呼号之间（如 `CQ DX K1ABC FN42`）；**空串＝普通 CQ**（`CQ K1ABC FN42`）。
  */
-object TxQueue {
-
-    /** 队列上限，避免无节制堆积。 */
-    const val MAX = 20
-
-    fun enqueue(list: List<String>, text: String): List<String> {
-        val t = text.trim()
-        if (t.isEmpty()) return list
-        if (list.size >= MAX) return list
-        return list + t
-    }
-
-    fun removeAt(list: List<String>, index: Int): List<String> =
-        if (index in list.indices) list.filterIndexed { i, _ -> i != index } else list
-
-    /** 把 [from] 位置的报文移动到 [to]（越界返回原列表）。 */
-    fun move(list: List<String>, from: Int, to: Int): List<String> {
-        if (from !in list.indices || to !in list.indices || from == to) return list
-        val m = list.toMutableList()
-        val item = m.removeAt(from)
-        m.add(to, item)
-        return m
-    }
-
-    /** 队列胶囊标签，形如 `1:JA1ABC/回复`。 */
-    fun label(index: Int, text: String, myCall: String = ""): String {
-        val p = MessageParser.parse(text)
-        val target = p.to ?: p.from
-        val kind = TxCompose.kindOf(text, myCall)?.label ?: "自定义"
-        return "${index + 1}:${target ?: "-"}/$kind"
-    }
-}
+val DEFAULT_CQ_PREFIXES: List<String> = listOf(
+    "",
+    "DX",
+    "ASIA",
+    "EU",
+    "NA",
+    "JA",
+    "TEST",
+    "POTA",
+)
 
 /**
  * 发射调度（docs/UI.md §2.3 第 6 条）：

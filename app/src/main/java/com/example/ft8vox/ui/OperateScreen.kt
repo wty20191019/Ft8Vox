@@ -391,11 +391,8 @@ fun OperateScreen(
         onTxEnabledChange = { viewModel.setTxEnabled(it) },
         onSameFreqChange = { viewModel.setSameFreqTx(it) },
         onOpenAutoProgram = onOpenAutoProgram,
-        onMacrosChange = { viewModel.setMacros(it) },
-        onEnqueue = { viewModel.enqueueTx(it) },
-        onRemoveQueued = { viewModel.removeQueuedTx(it) },
-        onMoveQueued = { from, to -> viewModel.moveQueuedTx(from, to) },
-        onClearQueue = { viewModel.clearTxQueue() },
+        onCqPrefixesChange = { viewModel.setCqPrefixes(it) },
+        onCqPrefixSelect = { viewModel.setCqPrefixIndex(it) },
         modifier = Modifier.align(Alignment.BottomCenter),
     )
     }

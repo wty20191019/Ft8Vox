@@ -4,7 +4,7 @@ import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.qso.AutoProgramSettings
-import com.example.ft8vox.qso.DEFAULT_MACROS
+import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterTag
 
 /** 发射时隙奇偶：0=偶数周期，1=奇数周期（具体时隙由「自动」按手机 UTC 时间锁定）。 */
@@ -190,10 +190,15 @@ data class AppSettings(
     val autoFollowOrder: List<String> = emptyList(),
 
     // ---- 发射抽屉（docs/UI.md §2.3） ----
-    /** 发送队列（报文原文，有序）。 */
-    val txQueue: List<String> = emptyList(),
-    /** 宏模板（4×2）。 */
-    val macros: List<String> = DEFAULT_MACROS,
+    /**
+     * CQ 前缀（4×2 = 8 个可编辑格子）。
+     *
+     * 前缀插在 `CQ` 与我方呼号之间（如 `CQ DX K1ABC FN42`）；**空串＝普通 CQ**。
+     * 选中哪一个由 [cqPrefixIndex] 决定，**所有 CQ 都用它**（抽屉「消息类型 6 CQ」与自动程序 / 手动呼叫）。
+     */
+    val cqPrefixes: List<String> = DEFAULT_CQ_PREFIXES,
+    /** 当前选中的 CQ 前缀在 [cqPrefixes] 中的下标（越界按 0 处理）。 */
+    val cqPrefixIndex: Int = 0,
 
     // ---- 地图页（docs/UI.md §2.4） ----
     /** CQ 旗帜是否显示呼号。 */
@@ -272,6 +277,16 @@ data class AppSettings(
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
         get() = Protocol.entries.firstOrNull { it.name == protocolName } ?: Protocol.FT8
+
+    /**
+     * 当前 CQ 前缀文本（已去空白 / 转大写；空串＝普通 CQ）。
+     *
+     * [cqPrefixIndex] 越界时回落 `cqPrefixes[0]`，列表为空时回落空串。
+     */
+    val cqPrefix: String
+        get() = cqPrefixes.getOrElse(cqPrefixIndex) { cqPrefixes.firstOrNull().orEmpty() }
+            .trim()
+            .uppercase()
 
     /**
      * 发射前导总时长（ms）＝ PTT 前导静音 [pttDelayMs] + 发射前导音 [txLeadToneMs]。

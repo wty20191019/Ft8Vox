@@ -11,7 +11,6 @@ import androidx.compose.foundation.gestures.DraggableState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,18 +22,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -73,7 +68,6 @@ import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.qso.TxMessageKind
-import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.TxScheduler
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
@@ -98,7 +92,7 @@ private const val DRAWER_SETTLE_MS = 400L
  * 收起态为 56dp 条（目标 / 状态 / 发送总开关）；**按住条身向上拖动即跟手展开**
  * （条身上移、面板从条身下方露出来），松手后按位置 / 甩动速度自动吸附到展开或收起；
  * 点击条身、长按条身同样展开。展开后条身就是「手柄」，把它向下拖 / 点遮罩 / 按返回键都能收起。
- * 面板内含目标信息、报文类型、自定义文本、4×2 宏、发送队列与大发射按钮。
+ * 面板内含目标信息、报文类型、自定义文本、4×2 CQ 前缀与大发射按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,20 +110,18 @@ fun TxDrawer(
     onTxEnabledChange: (Boolean) -> Unit,
     onSameFreqChange: (Boolean) -> Unit,
     onOpenAutoProgram: () -> Unit,
-    onMacrosChange: (List<String>) -> Unit,
-    onEnqueue: (String) -> Unit,
-    onRemoveQueued: (Int) -> Unit,
-    onMoveQueued: (Int, Int) -> Unit,
-    onClearQueue: () -> Unit,
+    onCqPrefixesChange: (List<String>) -> Unit,
+    onCqPrefixSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var composeText by rememberSaveable { mutableStateOf("") }
-    var editingMacro by remember { mutableStateOf<Int?>(null) }
+    var editingCqPrefix by remember { mutableStateOf<Int?>(null) }
 
     val target = status.qso.theirCall ?: targetCall
-    // 下一次计划发射的完整报文（发射中＝实际在播的那条，见 ReceiverStatus.displayTxText）
-    val displayTxText = status.displayTxText
+    // 下一次计划发射的完整报文：**始终显示「下次发什么」**（发射途中改目标 / QSO 推进也跟着变）。
+    // 顶栏第 3 行仍按「发射中冻结为在播报文」显示（displayTxText），两者互补。
+    val nextTxText = status.pendingTxText
     val report = TxCompose.reportFor(messages, target)
     // 立即发判据：报文波形 + 前导必须能在本时隙剩余时间内播完（否则排下一个我方周期）
     val canSendNow = TxScheduler.canSendNow(
@@ -173,10 +165,9 @@ fun TxDrawer(
         }
     }
 
-    /** 主发送：自定义文本 > 队列头 > 默认动作（无目标呼叫 CQ / 有目标应答）。 */
+    /** 主发送：自定义文本 > 默认动作（无目标呼叫 CQ / 有目标应答）。 */
     fun primarySend() {
-        val fromQueue = composeText.isBlank()
-        val text = if (fromQueue) settings.txQueue.firstOrNull().orEmpty() else composeText
+        val text = composeText
         if (text.isBlank()) {
             // 默认呼叫 CQ；已选目标时默认应答对方
             if (target != null) {
@@ -187,8 +178,7 @@ fun TxDrawer(
             }
             return
         }
-        val direct = dispatch(text)
-        if (fromQueue && direct) onRemoveQueued(0)
+        dispatch(text)
     }
 
     BoxWithConstraints(modifier.fillMaxSize().clipToBounds()) {
@@ -293,7 +283,7 @@ fun TxDrawer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // 左：目标 + 「下一次会发射什么」的完整报文（发射中冻结为实际在播的那条）
+                // 左：目标 + 「下次发什么」的完整报文（发射途中改目标也会跟着变）
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "→ ${target ?: "无目标"}",
@@ -304,14 +294,10 @@ fun TxDrawer(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        when {
-                            displayTxText == null -> "空闲（无待发报文）"
-                            status.txing -> "发射中 $displayTxText"
-                            else -> "待发 $displayTxText"
-                        },
+                        if (nextTxText == null) "空闲（无下次发送）" else "下次发送 $nextTxText",
                         style = MaterialTheme.typography.labelMedium,
                         fontFamily = FontFamily.Monospace,
-                        color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -402,7 +388,10 @@ fun TxDrawer(
                         ) ?: ""
                     }
                     KindButton("6 CQ", Modifier.weight(1f)) {
-                        composeText = TxCompose.compose(TxMessageKind.CQ, target, status.myCall, status.myGrid) ?: ""
+                        composeText = TxCompose.compose(
+                            TxMessageKind.CQ, target, status.myCall, status.myGrid,
+                            cqPrefix = settings.cqPrefix,
+                        ) ?: ""
                     }
                 }
 
@@ -429,62 +418,35 @@ fun TxDrawer(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                // 4) 宏 4×2
+                // 4) CQ 前缀（4×2 单选：选中哪个，所有 CQ 都用它）
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("宏", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                    Text("长按编辑", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("CQ 前缀", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text(
+                        "选中即用于所有 CQ｜长按编辑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 for (r in 0 until 2) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (c in 0 until 4) {
                             val idx = r * 4 + c
-                            val template = settings.macros.getOrNull(idx)
-                            MacroButton(
-                                template = template,
+                            val prefix = settings.cqPrefixes.getOrNull(idx)
+                            CqPrefixButton(
+                                prefix = prefix,
+                                selected = prefix != null && idx == settings.cqPrefixIndex,
                                 modifier = Modifier.weight(1f),
-                                onClick = {
-                                    if (template != null) {
-                                        composeText = TxCompose.expandMacro(
-                                            template, target, status.myCall, status.myGrid, report,
-                                        )
-                                    }
-                                },
-                                onLongClick = { editingMacro = idx },
+                                onClick = { if (prefix != null) onCqPrefixSelect(idx) },
+                                onLongClick = { editingCqPrefix = idx },
                             )
                         }
                     }
                 }
 
-                // 5) 发送队列
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("发送队列", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                    if (settings.txQueue.isNotEmpty()) {
-                        TextButton(onClick = onClearQueue) { Text("清空", style = MaterialTheme.typography.labelSmall) }
-                    }
-                }
-                if (settings.txQueue.isEmpty()) {
-                    Text("（空）点「加入队列」排入待发报文", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        settings.txQueue.forEachIndexed { i, text ->
-                            QueuePill(
-                                label = TxQueue.label(i, text, status.myCall),
-                                onLoad = { composeText = text },
-                                onMoveUp = { onMoveQueued(i, i - 1) },
-                                onMoveDown = { onMoveQueued(i, i + 1) },
-                                onRemove = { onRemoveQueued(i) },
-                            )
-                        }
-                    }
-                }
-
-                // 6) 大发送按钮（TX 时变红 + 倒计时，点按即停止）
+                // 5) 大发送按钮（TX 时变红 + 倒计时，点按即停止）
                 Button(
                     onClick = { if (status.txArmed) onStopTx() else primarySend() },
                     enabled = if (status.txArmed) {
@@ -497,7 +459,12 @@ fun TxDrawer(
                     ),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 ) {
-                    val summary = composeText.ifBlank { settings.txQueue.firstOrNull().orEmpty() }
+                    // 无自定义文本时的默认动作摘要：有目标＝应答，无目标＝CQ（带当前前缀）
+                    val defaultSummary = if (target != null) {
+                        "应答 $target"
+                    } else {
+                        listOf("CQ", settings.cqPrefix, status.myCall).filter { it.isNotBlank() }.joinToString(" ")
+                    }
                     Text(
                         if (status.txArmed) {
                             if (status.txing) {
@@ -505,30 +472,20 @@ fun TxDrawer(
                             } else {
                                 "停止发射 · ${"%.1f".format(status.txCountdownMs.coerceAtLeast(0) / 1000.0)}s"
                             }
-                        } else if (summary.isBlank()) {
-                            if (target != null) "发送：应答 $target" else "发送：CQ ${status.myCall}"
+                        } else if (composeText.isNotBlank()) {
+                            "发送：$composeText"
                         } else {
-                            "发送：$summary"
+                            "发送：$defaultSummary"
                         },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(
-                        onClick = { if (composeText.isNotBlank()) onEnqueue(composeText) },
-                        enabled = composeText.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Text("加入队列", style = MaterialTheme.typography.labelMedium)
-                    }
-                    OutlinedButton(
-                        onClick = onStopTx,
-                        enabled = status.txArmed,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("停止发射", style = MaterialTheme.typography.labelMedium) }
-                }
+                OutlinedButton(
+                    onClick = onStopTx,
+                    enabled = status.txArmed,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("停止发射", style = MaterialTheme.typography.labelMedium) }
                 Text(
                     when {
                         !status.txEnabled ->
@@ -544,7 +501,7 @@ fun TxDrawer(
 
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
-                // 7) 自动序列（同频/异频发射 / 自动程序）；发射周期固定为「自动」
+                // 6) 自动序列（同频/异频发射 / 自动程序）；发射周期固定为「自动」
                 Text("自动序列", style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(
@@ -611,22 +568,22 @@ fun TxDrawer(
         }
     }
 
-    editingMacro?.let { idx ->
-        MacroEditDialog(
-            initial = settings.macros.getOrNull(idx) ?: "",
+    editingCqPrefix?.let { idx ->
+        CqPrefixEditDialog(
+            initial = settings.cqPrefixes.getOrNull(idx) ?: "",
             onConfirm = { value ->
-                val list = settings.macros.toMutableList()
+                val list = settings.cqPrefixes.toMutableList()
                 while (list.size <= idx) list.add("")
                 list[idx] = value
-                onMacrosChange(list)
-                editingMacro = null
+                onCqPrefixesChange(list)
+                editingCqPrefix = null
             },
-            onDismiss = { editingMacro = null },
+            onDismiss = { editingCqPrefix = null },
         )
     }
 }
 
-/** 消息类型大按钮（支持长按编辑宏的复用样式）。 */
+/** 消息类型大按钮（沿用与外层一致的 48dp 触摸目标）。 */
 @Composable
 private fun KindButton(
     label: String,
@@ -639,11 +596,16 @@ private fun KindButton(
     }
 }
 
-/** 宏按钮：点展开到自定义框，长按编辑模板。 */
+/**
+ * CQ 前缀格子：点一下**选中**（所有 CQ 都用它），长按编辑前缀文本。
+ *
+ * [prefix] 为 null 表示该格子尚未定义；空串＝普通 CQ（显示「无」）。
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MacroButton(
-    template: String?,
+private fun CqPrefixButton(
+    prefix: String?,
+    selected: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -652,56 +614,32 @@ private fun MacroButton(
         modifier = modifier
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            template?.take(12) ?: "—",
+            when {
+                prefix == null -> "—"
+                prefix.isBlank() -> "无"
+                else -> prefix.uppercase()
+            },
             style = MaterialTheme.typography.labelSmall,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-/** 队列胶囊：点加载到自定义框，长按菜单可上移/下移/删除，右侧 X 直接删除。 */
-@OptIn(ExperimentalFoundationApi::class)
+/** CQ 前缀编辑对话框。 */
 @Composable
-private fun QueuePill(
-    label: String,
-    onLoad: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onRemove: () -> Unit,
-) {
-    var menu by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .combinedClickable(onClick = onLoad, onLongClick = { menu = true })
-                .padding(start = 10.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            IconButton(onClick = onRemove) {
-                Icon(Icons.Filled.Close, contentDescription = "删除", modifier = Modifier.size(16.dp))
-            }
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("上移") }, onClick = { menu = false; onMoveUp() })
-            DropdownMenuItem(text = { Text("下移") }, onClick = { menu = false; onMoveDown() })
-            DropdownMenuItem(text = { Text("删除") }, onClick = { menu = false; onRemove() })
-        }
-    }
-}
-
-/** 宏编辑对话框。 */
-@Composable
-private fun MacroEditDialog(
+private fun CqPrefixEditDialog(
     initial: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -709,18 +647,18 @@ private fun MacroEditDialog(
     var value by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("编辑宏") },
+        title = { Text("编辑 CQ 前缀") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedTextField(
                     value = value,
                     onValueChange = { value = it },
                     singleLine = true,
-                    label = { Text("模板") },
+                    label = { Text("前缀") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "占位符：{call} {mycall} {mygrid} {report}",
+                    "插在 CQ 与我方呼号之间（如 DX → CQ DX K1ABC FN42）；留空＝普通 CQ。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

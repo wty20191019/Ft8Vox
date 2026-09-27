@@ -133,6 +133,8 @@ class QsoEngine {
 
     private var myCall: String = ""
     private var myGrid: String = ""
+    /** CQ 前缀（`CQ <前缀> <我> <网格>`；空串＝普通 CQ），由 [startCq] 设置。 */
+    private var cqModifier: String = ""
 
     private var role = QsoRole.NONE
     private var state = QsoState.IDLE
@@ -210,14 +212,20 @@ class QsoEngine {
         if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent
     }
 
-    /** 开始呼叫 CQ。[utcMs] 为本段起始时间（UTC 毫秒，用于日志 `startTime`）。 */
-    fun startCq(utcMs: Long = 0L): QsoProgress {
+    /**
+     * 开始呼叫 CQ。
+     *
+     * [utcMs] 为本段起始时间（UTC 毫秒，用于日志 `startTime`）；[cqPrefix] 为 CQ 前缀
+     * （插在 `CQ` 与我方呼号之间，空串＝普通 CQ），**整段 CQ 阶段沿用**（每周期重发同一条）。
+     */
+    fun startCq(utcMs: Long = 0L, cqPrefix: String = ""): QsoProgress {
         require(canOperate) { "未配置呼号" }
         reset()
         startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.CALLER
         awaitingResponders = true
         step = Step.CQ
+        cqModifier = cqPrefix.trim().uppercase()
         render()
         syncState()
         return progress()
@@ -460,7 +468,9 @@ class QsoEngine {
         val them = theirCall
         txText = when (step) {
             Step.NONE -> null
-            Step.CQ -> listOf("CQ", myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            Step.CQ -> listOf("CQ", cqModifier, myCall, myGrid)
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
             Step.GRID ->
                 if (them == null) null
                 else listOf(them, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")

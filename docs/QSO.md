@@ -52,7 +52,7 @@
 | 第 2 层 设置 UI | `ui/AutoProgramDialog.kt`（四项，照 FT8CN） |
 | 第 3 层 人工覆盖 | `ui/SessionViewModel.kt`（`replyTo` / `setTxEnabled` / `resetSupervision`） |
 | 报文解析 | `qso/Message.kt`（`ParsedMessage` / `MessageParser` / `CallMatch`） |
-| Tx 槽与宏 | `qso/TxCompose.kt`（`TxMessageKind` / `DEFAULT_MACROS` / `TxScheduler` / `TxQueue`） |
+| Tx 槽与 CQ 前缀 | `qso/TxCompose.kt`（`TxMessageKind` / `DEFAULT_CQ_PREFIXES` / `TxScheduler`） |
 | 显示筛选 / 已通联索引 | `qso/DecodeFilter.kt`、`qso/DecodeHighlight.kt`（`WorkedIndex`） |
 | 忙时换台 | `AutoScheduler.directedTakeover`（FT8CN 循环 2） |
 
@@ -73,7 +73,8 @@
 
 - `QsoProgress.order` 对外暴露当前序号（`0` = 无）；`TxCompose.TxMessageKind` 的 `order` 与之一致
   （`GRID=1 / REPORT=2 / ROGER=3 / RR73=4 / SEVENTY_THREE=5 / CQ=6`，`CUSTOM=0`）。
-- `DEFAULT_MACROS` 重排为上述 6 条 ＋ CQ 修饰符变体 ＋ 自定义。
+- CQ 前缀（`AppSettings.cqPrefixes` / `cqPrefixIndex`，抽屉 4×2 单选）由 `startCq(utcMs, cqPrefix)` 传入，
+  渲染为 `CQ <前缀> <我> <网格>`（空串＝普通 CQ）；`TxCompose` 侧由 `DEFAULT_CQ_PREFIXES` + `compose(..., cqPrefix)` 提供同口径。
 - `TxCompose.kindOf()` 映射：`isCq→6`、`grid→1`、`report→2`、`isRoger→3`、`isRr73→4`、`is73→5`。
 
 ### 2.2 `QsoState`（对外只读状态）
@@ -295,7 +296,7 @@
 | --- | --- |
 | `qso/AutoProgram.kt` | 第 2 层：`AutoProgramSettings`（四项）、`SUPERVISION_MINUTES`、`NO_REPLY_LIMIT_RANGE`、`AutoTarget`/`AutoTargetKind`、`AutoAction` 封闭接口、`AutoProgramSelector.collect` / `toTarget` / `rank` / `modifierPriority` / `areaOfGrid`、`AutoScheduler` |
 | `qso/QsoEngine.kt` | 第 1 层：`QsoState`、`QsoProgress`（含 `order`/`noReplyCount`/`advanced`）、六步 `Step`、收敛阶梯、报告快照、`finish()`/`consumeCompleted()` |
-| `qso/TxCompose.kt` | `TxMessageKind`（六步）、`DEFAULT_MACROS`、`TxScheduler`（`MIN_SEND_NOW_MS` / `minSendNowMs`）、`TxQueue` |
+| `qso/TxCompose.kt` | `TxMessageKind`（六步）、`DEFAULT_CQ_PREFIXES`、`TxScheduler`（`MIN_SEND_NOW_MS` / `minSendNowMs`） |
 | `qso/FollowRoster.kt` | 「自动收录 CQ 台」纯逻辑：`pickCqCalls`（跳过**本波段**已通联）/ `merge` / `AUTO_MAX` |
 | `qso/Message.kt` | `ParsedMessage` / `MessageParser` / `CallMatch`（`shortCall` / `isCallingMe` / `isFrom`） |
 | `qso/DecodeFilter.kt` / `qso/DecodeHighlight.kt` | 显示筛选 / `WorkedIndex` + `plus` |
@@ -359,7 +360,7 @@
 
 - 解码列表长按菜单：**呼叫 / 回复**（`replyTo`）、**查看日志**、**关注 / 取消关注**、复制消息、忽略该呼号；
   **不加手动 73**。
-- 顶栏左滑呼叫、就地发射（`TxQueue`）。
+- 顶栏左滑呼叫、就地发射（`TxScheduler`）。
 - 设置页四项自动程序设置（`ui/AutoProgramDialog.kt`）。
 - **唯一闸门**是「发送总开关」`txEnabled`（默认关、不持久化）：关闭即停、打开即恢复；
   **直接生效、不弹确认框**（`AutoEnableConfirmDialog` 已删）。

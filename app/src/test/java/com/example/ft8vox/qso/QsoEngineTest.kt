@@ -106,6 +106,16 @@ class QsoEngineTest {
     }
 
     @Test
+    fun cqPrefixIsInsertedIntoEveryCqMessage() {
+        val q = engine()
+        val p = q.startCq(0L, "dx")
+        assertEquals("CQ DX F4FSY JN25", p.txText)
+        // 空白前缀 = 普通 CQ
+        q.stop()
+        assertEquals("CQ F4FSY JN25", q.startCq(0L, "  ").txText)
+    }
+
+    @Test
     fun cqPhaseWaitsForSchedulerInsteadOfPickingFirst() {
         val q = engine()
         val cq = q.startCq()

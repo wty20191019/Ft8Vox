@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 发射抽屉纯逻辑（报文构造/宏/队列/调度）的 JVM 单测。 */
+/** 发射抽屉纯逻辑（报文构造 / CQ 前缀 / 发射调度）的 JVM 单测。 */
 class TxComposeTest {
 
     private fun decode(text: String, snr: Int, df: Int = 1200, slot: Long = 0) =
@@ -98,69 +98,34 @@ class TxComposeTest {
         assertEquals(-24, TxCompose.reportFor(listOf(decode("CQ JA1ABC FN42", -99)), "JA1ABC"))
     }
 
-    // ---- 宏展开 ----
+    // ---- CQ 前缀 ----
 
     @Test
-    fun expandsMacroPlaceholders() {
-        val out = TxCompose.expandMacro(
-            "{call} {mycall} {report} {mygrid}",
-            target = "ja1abc",
-            myCall = "k1abc",
-            myGrid = "fn42",
-            report = -7,
+    fun composesCqWithPrefix() {
+        assertEquals(
+            "CQ DX K1ABC FN42",
+            TxCompose.compose(TxMessageKind.CQ, null, "k1abc", "fn42", cqPrefix = "dx"),
         )
-        assertEquals("JA1ABC K1ABC -07 FN42", out)
     }
 
     @Test
-    fun macroKeepsLiteralTextAndCollapsesSpaces() {
-        val out = TxCompose.expandMacro("CQ   TEST   {mycall}", null, "k1abc", "", 0)
-        assertEquals("CQ TEST K1ABC", out)
+    fun blankPrefixIsPlainCq() {
+        assertEquals("CQ K1ABC FN42", TxCompose.compose(TxMessageKind.CQ, null, "k1abc", "fn42", cqPrefix = "  "))
     }
 
     @Test
-    fun defaultMacrosAreEightAndExpandable() {
-        assertEquals(8, DEFAULT_MACROS.size)
-        for (m in DEFAULT_MACROS) {
-            val out = TxCompose.expandMacro(m, "JA1ABC", "K1ABC", "FN42", 0)
-            assertTrue("宏展开不应为空: $m", out.isNotEmpty())
-        }
-    }
-
-    // ---- 发送队列 ----
-
-    @Test
-    fun queueEnqueueSkipsBlankAndCapsAtMax() {
-        var q = emptyList<String>()
-        q = TxQueue.enqueue(q, "  ")
-        assertTrue(q.isEmpty())
-
-        q = TxQueue.enqueue(q, "A")
-        q = TxQueue.enqueue(q, "B")
-        assertEquals(listOf("A", "B"), q)
-
-        var big = emptyList<String>()
-        repeat(TxQueue.MAX + 5) { big = TxQueue.enqueue(big, "M$it") }
-        assertEquals(TxQueue.MAX, big.size)
+    fun prefixOnlyAffectsCq() {
+        assertEquals(
+            "JA1ABC K1ABC -07",
+            TxCompose.compose(TxMessageKind.REPORT, "ja1abc", "K1ABC", "FN42", -7, cqPrefix = "DX"),
+        )
     }
 
     @Test
-    fun queueRemoveAndMove() {
-        val q = listOf("A", "B", "C")
-        assertEquals(listOf("A", "C"), TxQueue.removeAt(q, 1))
-        assertEquals(q, TxQueue.removeAt(q, 9))
-
-        assertEquals(listOf("B", "A", "C"), TxQueue.move(q, 0, 1))
-        assertEquals(listOf("B", "C", "A"), TxQueue.move(q, 0, 2))
-        assertEquals(listOf("C", "A", "B"), TxQueue.move(q, 2, 0))
-        assertEquals(q, TxQueue.move(q, 0, 0))
-        assertEquals(q, TxQueue.move(q, -1, 1))
-    }
-
-    @Test
-    fun queueLabelFormat() {
-        assertEquals("1:JA1ABC/网格", TxQueue.label(0, "JA1ABC K1ABC FN42", "K1ABC"))
-        assertEquals("2:K1ABC/CQ", TxQueue.label(1, "CQ K1ABC FN42", "K1ABC"))
+    fun defaultCqPrefixesHaveEightSlotsAndFirstIsPlain() {
+        assertEquals(8, DEFAULT_CQ_PREFIXES.size)
+        assertEquals("", DEFAULT_CQ_PREFIXES.first())
+        assertTrue(DEFAULT_CQ_PREFIXES.drop(1).all { it.isNotBlank() })
     }
 
     // ---- 发射调度 ----

@@ -31,7 +31,7 @@ import com.example.ft8vox.qso.AutoProgramSelector
 import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
-import com.example.ft8vox.qso.DEFAULT_MACROS
+import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.FollowRoster
@@ -40,7 +40,6 @@ import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
-import com.example.ft8vox.qso.TxQueue
 import com.example.ft8vox.qso.WorkedIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -604,26 +603,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(callFilter = value) }
     }
 
-    /** 保存宏模板（最多 8 个；全空则回落默认）。 */
-    fun setMacros(list: List<String>) {
-        val cleaned = list.map { it.trim() }.filter { it.isNotEmpty() }.take(8)
-        persist { it.copy(macros = cleaned.ifEmpty { DEFAULT_MACROS }) }
+    /** 保存 CQ 前缀格子（最多 8 个，**保留空格子**＝普通 CQ；全空则回落默认）。 */
+    fun setCqPrefixes(list: List<String>) {
+        val cleaned = list.map { it.trim().uppercase() }.take(8)
+        persist { it.copy(cqPrefixes = if (cleaned.any { p -> p.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES) }
     }
 
-    fun enqueueTx(text: String) {
-        persist { it.copy(txQueue = TxQueue.enqueue(it.txQueue, text)) }
-    }
-
-    fun removeQueuedTx(index: Int) {
-        persist { it.copy(txQueue = TxQueue.removeAt(it.txQueue, index)) }
-    }
-
-    fun moveQueuedTx(from: Int, to: Int) {
-        persist { it.copy(txQueue = TxQueue.move(it.txQueue, from, to)) }
-    }
-
-    fun clearTxQueue() {
-        persist { it.copy(txQueue = emptyList()) }
+    /** 选中某个 CQ 前缀格子（所有 CQ 都用它）。 */
+    fun setCqPrefixIndex(index: Int) {
+        persist { it.copy(cqPrefixIndex = index.coerceIn(0, (it.cqPrefixes.size - 1).coerceAtLeast(0))) }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -933,7 +921,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
-        val p = qsoEngine.startCq(AudioEngine.utcNowMs())
+        val p = qsoEngine.startCq(AudioEngine.utcNowMs(), latestSettings.cqPrefix)
         _status.update { it.copy(qso = p, txArmed = true, status = "QSO：${p.description}") }
     }
 
