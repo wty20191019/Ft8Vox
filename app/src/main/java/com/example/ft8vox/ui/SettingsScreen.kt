@@ -299,19 +299,18 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "预设一键改下面 6 项（时间/频率 OSR、最低得分、LDPC 迭代、候选上限、" +
-                    "单时隙上限）；频率范围不随预设变化。单项手改后显示「自定义」。" +
-                    "OSR 与频率范围需重开接收生效，其余即时生效。",
+                subtitle = "预设「快」＝下面的默认值（照搬 FT8CN「快速解码」：迭代 20 / 候选 120 / 单时隙上限 100）。" +
+                    "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
+                    "「快」按钮可一键恢复上面 7 项的默认值（频率范围不随预设变化）。" +
+                    "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
                 options = buildList {
                     add(DecodePreset.FAST)
-                    add(DecodePreset.STANDARD)
-                    add(DecodePreset.DEEP)
                     if (app.decodePreset == DecodePreset.CUSTOM) add(DecodePreset.CUSTOM)
                 },
                 selected = app.decodePreset,
                 onSelect = { p ->
                     if (p != DecodePreset.CUSTOM) {
-                        settings.update { s -> s.copy(decode = s.decode.applyPreset(p), decodePreset = p) }
+                        settings.update { s -> s.copy(decode = s.decode.applyPreset(p)) }
                     }
                 },
                 label = { it.label },
@@ -375,12 +374,23 @@ fun SettingsScreen(
             )
             PrefDivider()
             PrefStepper(
+                title = "减谱重解趟数",
+                value = app.decode.passes,
+                range = DecodeSettings.PASSES_RANGE,
+                subtitle = "SIC（多趟减谱重解）趟数（1–4）。解完一趟后把已解出的报文从瀑布幅度上" +
+                    "抹掉，在残留谱上再搜一趟，把被强台压住的同频弱信号挖出来。" +
+                    "1＝关（单趟，最快）；2＝默认（离线 60 个官方音频 956→989 条，+3.5%，零回归）；" +
+                    "再往上增益很小、耗时近似成倍。即时生效。",
+                onChange = { v -> settings.updateDecode { it.copy(passes = v) } },
+            )
+            PrefDivider()
+            PrefStepper(
                 title = "频率下限",
                 value = app.decode.fMinHz,
                 range = DecodeSettings.F_MIN_RANGE,
                 step = 50,
                 unit = " Hz",
-                subtitle = "解码搜索与瀑布显示的下边界（默认 200 Hz，即 SSB 通带低端）。" +
+                subtitle = "解码搜索与瀑布显示的下边界（默认 100 Hz，即 SSB 通带低端）。" +
                     "需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
             )
@@ -534,7 +544,8 @@ fun SettingsScreen(
             PrefDivider()
             PrefChoice(
                 title = "瀑布高度",
-                subtitle = "改动回到操作页立即生效（占用解码列表的可视高度）",
+                subtitle = "按屏高百分比：15% / 24%（默认）/ 45%，改动回到操作页立即生效" +
+                    "（占用解码列表的可视高度；实际高度下限 150dp，很矮的屏幕上 15% 会被抬到 150dp）",
                 options = WaterfallHeight.entries,
                 selected = app.waterfallHeight,
                 onSelect = { v -> settings.update { it.copy(waterfallHeight = v) } },
@@ -548,7 +559,7 @@ fun SettingsScreen(
                 onClick = {
                     settings.update {
                         it.copy(
-                            waterfallHeight = WaterfallHeight.NORMAL,
+                            waterfallHeight = WaterfallHeight.PCT24,
                             fontSize = FontSize.MEDIUM,
                         )
                     }
@@ -1026,11 +1037,9 @@ private fun VoxLevelRow(status: ReceiverStatus) {
     }
 }
 
-/** 改一项高级解码参数：自动钳制并标记为「自定义」预设。 */
+/** 改一项高级解码参数：自动钳制（预设显示由 `AppSettings.decodePreset` 反推，无需手工标记）。 */
 private fun SettingsViewModel.updateDecode(transform: (DecodeSettings) -> DecodeSettings) {
-    update { s ->
-        s.copy(decode = transform(s.decode).clamped(), decodePreset = DecodePreset.CUSTOM)
-    }
+    update { s -> s.copy(decode = transform(s.decode).clamped()) }
 }
 
 @Composable

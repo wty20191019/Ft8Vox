@@ -8,31 +8,62 @@ import org.junit.Test
 class DecodeSettingsTest {
 
     @Test
-    fun presetFastIsCheaperThanStandard() {
-        val standard = DecodeSettings()
-        val fast = standard.applyPreset(DecodePreset.FAST)
-        assertTrue(fast.timeOsr < standard.timeOsr || fast.freqOsr < standard.freqOsr)
-        assertTrue(fast.ldpcIterations < standard.ldpcIterations)
-        assertTrue(fast.maxCandidates < standard.maxCandidates)
-        assertTrue(fast.minScore >= standard.minScore)
+    fun fastPresetIsExactlyTheDefaultSettings() {
+        // 「快」＝构造函数默认值：两处不许漂移；值照搬 FT8CN「快速解码」（迭代 20 / 候选 120 / 上限 100）
+        val applied = DecodeSettings(ldpcIterations = 40, maxCandidates = 200, maxDecoded = 90, passes = 3)
+            .applyPreset(DecodePreset.FAST)
+        assertEquals(DecodeSettings(), applied)
+        assertEquals(20, applied.ldpcIterations)
+        assertEquals(120, applied.maxCandidates)
+        assertEquals(100, applied.maxDecoded)
+        assertEquals(2, applied.passes) // SIC 趟数也归「快」预设管，默认 2
     }
 
     @Test
-    fun presetDeepIsHeavierThanStandard() {
-        val standard = DecodeSettings()
-        val deep = standard.applyPreset(DecodePreset.DEEP)
-        assertTrue(deep.timeOsr >= standard.timeOsr)
-        assertTrue(deep.freqOsr >= standard.freqOsr)
-        assertTrue(deep.ldpcIterations > standard.ldpcIterations)
-        assertTrue(deep.maxCandidates > standard.maxCandidates)
-        assertTrue(deep.maxDecoded > standard.maxDecoded)
-        assertTrue(deep.minScore <= standard.minScore)
+    fun defaultSettingsIsTheFastPreset() {
+        val s = AppSettings()
+        assertEquals(DecodePreset.FAST, s.decodePreset)
+        assertEquals(DecodeSettings(), s.decode)
+    }
+
+    @Test
+    fun decodePresetIsDerivedFromValues() {
+        // 手改任一项 → 自定义；只改频率范围（不随预设变化）→ 仍是「快」
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(minScore = 9)).decodePreset,
+        )
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(maxDecoded = 90)).decodePreset,
+        )
+        // SIC 趟数也是预设管辖项：手改成 3 趟就算「自定义」
+        assertEquals(
+            DecodePreset.CUSTOM,
+            AppSettings(decode = DecodeSettings(passes = 3)).decodePreset,
+        )
+        assertEquals(
+            DecodePreset.FAST,
+            AppSettings(decode = DecodeSettings(fMinHz = 300, fMaxHz = 2700)).decodePreset,
+        )
+    }
+
+    @Test
+    fun waterfallHeightsAreScreenPercentagesWithCompactDefault() {
+        // 默认 = 原来的「紧凑」＝ 24% 屏高
+        assertEquals(WaterfallHeight.PCT24, AppSettings().waterfallHeight)
+        assertEquals(0.24f, WaterfallHeight.PCT24.fraction, 0.0001f)
+        assertEquals(listOf("15%", "24%", "45%"), WaterfallHeight.entries.map { it.label })
+        assertEquals(
+            listOf(0.15f, 0.24f, 0.45f),
+            WaterfallHeight.entries.map { it.fraction },
+        )
     }
 
     @Test
     fun presetsDoNotTouchFrequencyRange() {
         val base = DecodeSettings(fMinHz = 300, fMaxHz = 2700)
-        for (p in listOf(DecodePreset.FAST, DecodePreset.STANDARD, DecodePreset.DEEP)) {
+        for (p in DecodePreset.entries) {
             val applied = base.applyPreset(p)
             assertEquals(300, applied.fMinHz)
             assertEquals(2700, applied.fMaxHz)
@@ -54,6 +85,7 @@ class DecodeSettingsTest {
             ldpcIterations = 1000,
             maxCandidates = 1,
             maxDecoded = 9999,
+            passes = 99,
             fMinHz = 10,
             fMaxHz = 99999,
         ).clamped()
@@ -64,6 +96,7 @@ class DecodeSettingsTest {
         assertEquals(DecodeSettings.LDPC_RANGE.last, wild.ldpcIterations)
         assertEquals(DecodeSettings.MAX_CANDIDATES_RANGE.first, wild.maxCandidates)
         assertEquals(DecodeSettings.MAX_DECODED_RANGE.last, wild.maxDecoded)
+        assertEquals(DecodeSettings.PASSES_RANGE.last, wild.passes)
         assertEquals(DecodeSettings.F_MIN_RANGE.first, wild.fMinHz)
         assertEquals(DecodeSettings.F_MAX_RANGE.last, wild.fMaxHz)
     }
@@ -82,6 +115,7 @@ class DecodeSettingsTest {
                 ldpcIterations = 40,
                 maxCandidates = 200,
                 maxDecoded = 70,
+                passes = 3,
             ),
         )
         val p = s.decodeParams
@@ -89,6 +123,7 @@ class DecodeSettingsTest {
         assertEquals(40, p.ldpcIterations)
         assertEquals(200, p.maxCandidates)
         assertEquals(70, p.maxDecoded)
+        assertEquals(3, p.passes)
     }
 
     @Test

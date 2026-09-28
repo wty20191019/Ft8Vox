@@ -43,12 +43,21 @@ class DecodeParamsInstrumentedTest {
 
     @Test
     fun decodesWithFastPreset() {
-        assertDecoded(DecodeParams.of(minScore = 12, maxCandidates = 80, ldpcIterations = 10, maxDecoded = 30))
+        // passes = 1（关 SIC）也要能解出：顺带覆盖 JNI 第 5 个参数（SIC 趟数）
+        assertDecoded(
+            DecodeParams.of(
+                minScore = 12, maxCandidates = 80, ldpcIterations = 10, maxDecoded = 30, passes = 1,
+            ),
+        )
     }
 
     @Test
     fun decodesWithDeepPreset() {
-        assertDecoded(DecodeParams.of(minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80))
+        assertDecoded(
+            DecodeParams.of(
+                minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80, passes = 4,
+            ),
+        )
     }
 
     /** 运行中热更新参数（不重建引擎）也要生效且不破坏解码。 */

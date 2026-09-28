@@ -126,13 +126,14 @@ private object Keys {
     val fontSize = stringPreferencesKey("font_size")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
     val sampleRate = stringPreferencesKey("sample_rate")
-    val decodePreset = stringPreferencesKey("decode_preset")
+    // 解码预设不再持久化：改由 `AppSettings.decodePreset` 从解码参数反推（旧 `decode_preset` 键不再读写）
     val decodeTimeOsr = intPreferencesKey("decode_time_osr")
     val decodeFreqOsr = intPreferencesKey("decode_freq_osr")
     val decodeMinScore = intPreferencesKey("decode_min_score")
     val decodeLdpc = intPreferencesKey("decode_ldpc")
     val decodeMaxCandidates = intPreferencesKey("decode_max_candidates")
     val decodeMaxDecoded = intPreferencesKey("decode_max_decoded")
+    val decodePasses = intPreferencesKey("decode_passes")
     val decodeFMin = intPreferencesKey("decode_f_min")
     val decodeFMax = intPreferencesKey("decode_f_max")
 }
@@ -236,7 +237,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         fontSize = enumOr(Keys.fontSize, defaults.fontSize),
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
-        decodePreset = enumOr(Keys.decodePreset, defaults.decodePreset),
         decode = DecodeSettings(
             timeOsr = this[Keys.decodeTimeOsr] ?: defaults.decode.timeOsr,
             freqOsr = this[Keys.decodeFreqOsr] ?: defaults.decode.freqOsr,
@@ -244,6 +244,7 @@ private fun Preferences.toAppSettings(): AppSettings {
             ldpcIterations = this[Keys.decodeLdpc] ?: defaults.decode.ldpcIterations,
             maxCandidates = this[Keys.decodeMaxCandidates] ?: defaults.decode.maxCandidates,
             maxDecoded = this[Keys.decodeMaxDecoded] ?: defaults.decode.maxDecoded,
+            passes = this[Keys.decodePasses] ?: defaults.decode.passes,
             fMinHz = this[Keys.decodeFMin] ?: defaults.decode.fMinHz,
             fMaxHz = this[Keys.decodeFMax] ?: defaults.decode.fMaxHz,
         ).clamped(),
@@ -296,13 +297,13 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.fontSize] = fontSize.name
     prefs[Keys.waterfallHeight] = waterfallHeight.name
     prefs[Keys.sampleRate] = sampleRate.name
-    prefs[Keys.decodePreset] = decodePreset.name
     prefs[Keys.decodeTimeOsr] = decode.timeOsr
     prefs[Keys.decodeFreqOsr] = decode.freqOsr
     prefs[Keys.decodeMinScore] = decode.minScore
     prefs[Keys.decodeLdpc] = decode.ldpcIterations
     prefs[Keys.decodeMaxCandidates] = decode.maxCandidates
     prefs[Keys.decodeMaxDecoded] = decode.maxDecoded
+    prefs[Keys.decodePasses] = decode.passes
     prefs[Keys.decodeFMin] = decode.fMinHz
     prefs[Keys.decodeFMax] = decode.fMaxHz
 }
