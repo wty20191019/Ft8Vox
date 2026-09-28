@@ -24,6 +24,19 @@ static const float db_power_sum[40] = {
     0.001373142636584f, 0.001090761428665f, 0.000866444976964f, 0.000688255828734f, 0.000546709946839f
 };
 
+// -----------------------------------------------------------------------------
+// 软信息归一化目标方差
+//
+// ftx_normalize_logl() 把一条候选的 174 个 LLR 归一到「方差 = 本值」。ft8_lib 原为
+// 24.0（标准差 ≈ 4.9）。WSJT-X ft8b.f90 的 normalizebmet() 归一到标准差 1，再乘
+// scalefac = 2.83，等效方差 2.83² ≈ 8.0。两者只差一个常数，但会与 BP 的 tanh
+// 非线性相互作用。离线语料实测（69 个 wav / 期望 1298 条，passes=2）：
+// 4 → 899、8 → 974、24 → 989、48 → 982，即 24 已是峰值，故保持不动。
+// -----------------------------------------------------------------------------
+#ifndef FTX_LLR_NORM_VARIANCE
+#define FTX_LLR_NORM_VARIANCE 24.0f
+#endif
+
 /// Compute log likelihood log(p(1) / p(0)) of 174 message bits for later use in soft-decision LDPC decoding
 /// @param[in] wf Waterfall data collected during message slot
 /// @param[in] cand Candidate to extract the message from
@@ -317,7 +330,9 @@ static void ftx_normalize_logl(float* log174)
     float variance = (sum2 - (sum * sum * inv_n)) * inv_n;
 
     // Normalize log174 distribution and scale it with experimentally found coefficient
-    float norm_factor = sqrtf(24.0f / variance);
+    // 方差为 0（例如整段静音/噪声底完全平坦，所有 LLR 都恰好为 0）时不能乘 inf，
+    // 否则 0 * inf = NaN 会污染整条 BP 消息；此时保持全 0，让 BP 直接判失败。
+    float norm_factor = (variance > 0.0f) ? sqrtf(FTX_LLR_NORM_VARIANCE / variance) : 0.0f;
     for (int i = 0; i < FTX_LDPC_N; ++i)
     {
         log174[i] *= norm_factor;
