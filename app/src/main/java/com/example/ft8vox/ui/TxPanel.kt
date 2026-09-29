@@ -49,7 +49,7 @@ import com.example.ft8vox.ui.theme.VoxTxRed
  *
  * - 第 1 行：`生成信息 · 自定义报文 · CQ 前缀 · 发送`
  * - 第 2 行：`停止发射 · 自动程序 · 正在发送`
- * - 第 3–4 行：**六个报文槽 3×2**（网格 / 报告 / R报告 / RR73 / 73 / CQ），槽上直接写报文内容。
+ * - 第 3–4 行：**六个报文槽 3 列 × 2 行、列优先**（`1 3 5` / `2 4 6`），槽上直接写报文内容。
  *
  * 闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收），本组件不再自带开关。
  *
@@ -192,14 +192,15 @@ fun TxPanel(
             )
         }
 
-        // ---- 第 3–4 行：六个槽 3×2 ----
-        for (half in 0..1) {
+        // ---- 第 3–4 行：六个槽 3 列 × 2 行，**列优先**（1 3 5 / 2 4 6）----
+        for (row in 0..1) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 for (col in 0..2) {
-                    val index = half * 3 + col
+                    // 列优先：第 c 列第 r 行 = 第 c*2+r 个槽
+                    val index = col * 2 + row
                     val (kind, text) = slots[index]
                     TxSlot(
                         index = index + 1,
