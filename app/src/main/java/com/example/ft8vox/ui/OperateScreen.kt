@@ -22,8 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,7 +44,6 @@ import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
-import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.DecodeHighlight
 import com.example.ft8vox.qso.HighlightPrefs
 import com.example.ft8vox.qso.HighlightRole
@@ -56,9 +53,10 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 操作页（docs/UI-JTDX.md §2）：**信息头 + 过滤行 + 左表格 + 右控制列 + 底发射区**。
+ * 操作页（docs/UI-MOBILE.md §3）：**控制行 + 解码表 + 常驻发射区**。
  *
- * 信息头/控制行/状态条由 [MainShell] 统一提供，本页只负责「表格 + 控制列 + 发射区」。
+ * 信息头/底部导航/状态条由 [MainShell] 统一提供，本页只负责「控制行 + 表格 + 发射区」。
+ * 第五轮起无筛选 / 搜索（§20），解码表永远显示全部解码。
  */
 @Composable
 fun OperateScreen(
@@ -71,8 +69,6 @@ fun OperateScreen(
     onOpenMap: (String?) -> Unit,
     onOpenLog: (String?) -> Unit,
     onOpenAutoProgram: () -> Unit,
-    filterOpen: Boolean,
-    onFilterOpenChange: (Boolean) -> Unit,
     followOpen: Boolean,
     onFollowOpenChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -94,16 +90,11 @@ fun OperateScreen(
         cm.setPrimaryClip(ClipData.newPlainText("FT8 消息", text))
     }
 
-    // 过滤 + 高亮（纯逻辑，见 DecodeFilter / DecodeHighlight）
+    // 高亮 + 忽略名单（docs/UI-MOBILE.md §20：操作页不再做筛选 / 搜索，解码表永远显示全部）
     val filter = DecodeFilterState(
-        tags = settings.filterTags,
-        query = settings.callFilter,
         ignoredCalls = settings.ignoredCalls,
         followedCalls = settings.followCalls,
     )
-    val counts = remember(messages, worked, status.myCall, settings.ignoredCalls) {
-        DecodeFilter.counts(messages, worked, status.myCall, settings.ignoredCalls)
-    }
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     val highlightPrefs = HighlightPrefs(
         newCall = settings.highlightNewCall,
@@ -153,7 +144,7 @@ fun OperateScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().padding(4.dp)) {
-        // ---- 表格上方只留一行：过滤 / 清除 / 关注 / 时间告警 ----
+        // ---- 表格上方只留一行：监听 / 清除 / 关注 / 时间告警 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -163,11 +154,6 @@ fun OperateScreen(
                 text = if (status.running) "监听 ▣" else "监听",
                 onClick = { if (status.running) viewModel.stop() else onRequestStart() },
                 active = status.running,
-            )
-            JtdxButton(
-                text = "过滤…",
-                onClick = { onFilterOpenChange(true) },
-                active = filterOpen,
             )
             JtdxButton(
                 text = "清除",
@@ -185,14 +171,6 @@ fun OperateScreen(
             } else {
                 JtdxCaption("时间同步")
             }
-            Spacer(Modifier.weight(1f))
-            JtdxCaption(filterSummary(filter, counts))
-            if (settings.callFilter.isNotBlank()) {
-                JtdxButton(
-                    text = "搜索：${settings.callFilter}",
-                    onClick = { viewModel.setCallFilter("") },
-                )
-            }
         }
 
         // 表头已去掉（两行制里含义自明，省一行高度，docs/UI-MOBILE.md §14）
@@ -205,7 +183,7 @@ fun OperateScreen(
             ) {
                 if (rows.isEmpty()) {
                     Text(
-                        decodeEmptyHint(status, messages.size, filter.isEmptySelection),
+                        decodeEmptyHint(status, messages.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -277,18 +255,6 @@ fun OperateScreen(
         )
     }
 
-    if (filterOpen) {
-        DecodeFilterDialog(
-            filter = filter,
-            counts = counts,
-            callFilter = settings.callFilter,
-            onCallFilter = { viewModel.setCallFilter(it) },
-            onToggle = { viewModel.setFilterTags(filter.toggle(it).tags) },
-            onClearSearch = { viewModel.setCallFilter("") },
-            onDismiss = { onFilterOpenChange(false) },
-        )
-    }
-
     if (followOpen) {
         AlertDialog(
             onDismissRequest = { onFollowOpenChange(false) },
@@ -307,7 +273,6 @@ fun OperateScreen(
                         },
                         onUnfollow = { viewModel.unfollowCall(it) },
                         onClearAll = { clearFollowConfirm = true },
-                        onClose = { onFollowOpenChange(false) },
                     )
                 }
             },
@@ -363,6 +328,7 @@ fun OperateScreen(
  * 解码列表空态提示文案（纯函数，便于 JVM 单测）。
  *
  * 四种情况：未选筛选项 / 未开始接收 / 已接收但无解码 / 有解码但被过滤。
+ * `filterEmptySelection` 自 §20 起操作页已不再传（筛选弹窗删除），保留参数与分支仅为兼容既有单测。
  */
 fun decodeEmptyHint(
     status: ReceiverStatus,
@@ -373,84 +339,4 @@ fun decodeEmptyHint(
     !status.running -> "未开始接收：点此授权并开始接收"
     decodedTotal == 0 -> "等待解码…\n（未接天线 / 无音频输入时不会出现解码）"
     else -> "没有符合当前筛选条件的解码消息"
-}
-
-/** 当前筛选摘要（顶部那一行的右侧小字）。 */
-private fun filterSummary(filter: DecodeFilterState, counts: Map<DecodeFilterTag, Int>): String {
-    val tags = DecodeFilterTag.entries.filter { filter.isSelected(it) }
-    if (tags.isEmpty()) return "筛选：无（列表为空）"
-    return "筛选：" + tags.joinToString(" / ") { "${it.label} ${counts[it] ?: 0}" }
-}
-
-/** 过滤弹窗（docs/UI-JTDX.md §1）：六个 Chip + 呼号/前缀/网格搜索。 */
-@Composable
-private fun DecodeFilterDialog(
-    filter: DecodeFilterState,
-    counts: Map<DecodeFilterTag, Int>,
-    callFilter: String,
-    onCallFilter: (String) -> Unit,
-    onToggle: (DecodeFilterTag) -> Unit,
-    onClearSearch: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("过滤解码列表") },
-        text = {
-            Column {
-                // 六个筛选项排成 3 列 × 2 行、列优先（1 3 5 / 2 4 6），一屏全见不用横滑
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    val tags = DecodeFilterTag.entries
-                    val rowsN = 2
-                    val colsN = (tags.size + rowsN - 1) / rowsN
-                    for (r in 0 until rowsN) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            for (c in 0 until colsN) {
-                                val i = c * rowsN + r
-                                if (i < tags.size) {
-                                    val tag = tags[i]
-                                    FilterChip(
-                                        selected = filter.isSelected(tag),
-                                        onClick = { onToggle(tag) },
-                                        label = {
-                                            Text(
-                                                "${tag.label} ${counts[tag] ?: 0}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                maxLines = 1,
-                                            )
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                } else {
-                                    Spacer(Modifier.weight(1f))
-                                }
-                            }
-                        }
-                    }
-                }
-                JtdxCaption("全部 之外为多选并集；一个都没选时列表为空", modifier = Modifier.padding(top = 6.dp))
-                JtdxTextField(
-                    value = callFilter,
-                    onValueChange = onCallFilter,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    placeholder = "呼号 / 前缀 / 网格（逗号分隔）",
-                )
-                if (callFilter.isNotBlank()) {
-                    TextButton(onClick = onClearSearch) { Text("清除搜索") }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
-    )
 }

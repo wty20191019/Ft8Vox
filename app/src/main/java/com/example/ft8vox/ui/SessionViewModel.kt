@@ -33,7 +33,6 @@ import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
-import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.FollowRoster
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
@@ -525,10 +524,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(auto = transform(it.auto)) }
     }
 
-    fun setFilterTags(tags: Set<DecodeFilterTag>) {
-        persist { it.copy(filterTags = tags) }
-    }
-
     /** 忽略一个呼号（不再显示其解码，也不参与自动程序选台）。 */
     fun ignoreCall(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
@@ -603,10 +598,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             if (calls == cur.followCalls && order == cur.autoFollowOrder) cur
             else cur.copy(followCalls = calls, autoFollowOrder = order)
         }
-    }
-
-    fun setCallFilter(value: String) {
-        persist { it.copy(callFilter = value) }
     }
 
     /** 保存 CQ 前缀格子（最多 8 个，**保留空格子**＝普通 CQ；全空则回落默认）。 */
@@ -1546,12 +1537,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** 由设置构造显示过滤条件（操作页与自动程序共用）。 */
+    /**
+     * 显示 / 自动程序共用的呼号名单（docs/UI-MOBILE.md §20）。
+     *
+     * 操作页的筛选与搜索已整体删除，因此这里**不再带 tags / query**（恒为 `ALL` + 空搜索），
+     * 只保留忽略名单（隐藏）与关注名单（自动程序例外）。`AppSettings.filterTags` / `callFilter`
+     * 两个字段仅为兼容旧设置保留，界面已无入口。
+     */
     private fun currentFilter(): DecodeFilterState {
         val s = latestSettings
         return DecodeFilterState(
-            tags = s.filterTags,
-            query = s.callFilter,
             ignoredCalls = s.ignoredCalls,
             followedCalls = s.followCalls,
         )
