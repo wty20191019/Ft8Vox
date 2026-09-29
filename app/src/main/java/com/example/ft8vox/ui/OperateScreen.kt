@@ -157,6 +157,11 @@ fun OperateScreen(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             JtdxButton(
+                text = if (status.running) "监听 ▣" else "监听",
+                onClick = { if (status.running) viewModel.stop() else onRequestStart() },
+                active = status.running,
+            )
+            JtdxButton(
                 text = "过滤…",
                 onClick = { onFilterOpenChange(true) },
                 active = filterOpen,
@@ -189,10 +194,10 @@ fun OperateScreen(
 
         DecodeTableHeader()
 
-        // ---- 左表格 + 右控制列 ----
-        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // ---- 解码表格（竖屏整宽）----
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             Box(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 if (rows.isEmpty()) {
@@ -252,69 +257,11 @@ fun OperateScreen(
                     )
                 }
             }
-
-            // ---- 右控制列（JTDX 那一竖排按钮；只放本项目已有功能）----
-            Column(
-                modifier = Modifier
-                    .width(92.dp)
-                    .fillMaxHeight()
-                    .padding(start = 4.dp)
-                    .background(JtdxPanelHi),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Spacer(Modifier.height(2.dp))
-                JtdxButton(
-                    text = if (status.running) "监听 ▣" else "监听",
-                    onClick = { if (status.running) viewModel.stop() else onRequestStart() },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    active = status.running,
-                )
-                JtdxButton(
-                    text = "停止发射",
-                    onClick = { viewModel.stopTransmit() },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    enabled = status.txing || status.txArmed,
-                    accent = VoxTxRed,
-                    active = status.txing,
-                )
-                JtdxButton(
-                    text = "清除解码",
-                    onClick = { viewModel.clearMessages() },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    enabled = messages.isNotEmpty(),
-                )
-                JtdxButton(
-                    text = "关注列表",
-                    onClick = { onFollowOpenChange(true) },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    active = followOpen,
-                )
-                JtdxButton(
-                    text = "自动程序",
-                    onClick = onOpenAutoProgram,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    active = status.txEnabled,
-                )
-                if (status.myCall.isEmpty()) {
-                    JtdxButton(
-                        text = "去设置",
-                        onClick = onOpenSettings,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        accent = VoxError,
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                JtdxCaption("DX 目标", modifier = Modifier.padding(horizontal = 4.dp))
-                JtdxReadOnly(
-                    value = targetCall ?: status.qso.theirCall.orEmpty(),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).padding(bottom = 4.dp),
-                )
-            }
         }
 
         Spacer(Modifier.height(3.dp))
 
-        // ---- 底发射区（取代发射抽屉）----
+        // ---- 底发射区（竖屏常驻，docs/UI-MOBILE.md §3.4）----
         TxPanel(
             status = status,
             settings = settings,
@@ -323,7 +270,6 @@ fun OperateScreen(
             onSendOnce = { request { viewModel.sendOnce(it) } },
             onStartCq = { request { viewModel.startCq() } },
             onStopTx = { viewModel.stopTransmit() },
-            onTxEnabledChange = { viewModel.setTxEnabled(it) },
             onCqPrefixIndex = { viewModel.setCqPrefixIndex(it) },
             onOpenAutoProgram = onOpenAutoProgram,
         )

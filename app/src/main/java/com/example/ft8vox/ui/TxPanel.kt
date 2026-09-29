@@ -2,29 +2,33 @@ package com.example.ft8vox.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
@@ -32,21 +36,21 @@ import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.qso.TxMessageKind
 import com.example.ft8vox.ui.theme.JtdxBorder
+import com.example.ft8vox.ui.theme.JtdxButton
 import com.example.ft8vox.ui.theme.JtdxGreen
 import com.example.ft8vox.ui.theme.JtdxPanel
+import com.example.ft8vox.ui.theme.JtdxPanelHi
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 底发射区（docs/UI-JTDX.md §4）：取代原来的「发射抽屉」。
+ * 底部发射区（docs/UI-MOBILE.md §3.4）：竖屏**常驻**，不再折叠。
  *
- * **默认收起成一行**（`totalSwich + 生成信息 + 自定义报文 + 发送 + 停止发射 + 报文槽 ▾`），
- * 把有限的高度让给解码表格；点「报文槽 ▾」才展开六个槽的完整面板。
- * 展开后左列 = 发送总开关 / 生成信息 / CQ 前缀 / 自定义报文 / 发送·停止·自动程序 / 待发预览；
- * 右列 = **六个报文槽 Tx1–Tx6**，内容即现有六步报文（网格 / 报告 / R报告 / RR73 / 73 / CQ），
- * 点一下即排到下一个我方时隙（CQ 槽走 `startCq`）。
+ * - 第 1 行：`生成信息 · 自定义报文 · CQ 前缀 · 发送`
+ * - 第 2 行：`停止发射 · 自动程序 · 待发预览`
+ * - 第 3–4 行：**六个报文槽 3×2**（网格 / 报告 / R报告 / RR73 / 73 / CQ），槽上直接写报文内容。
  *
- * 闸门仍是「发送总开关」（默认关 = 只接收）。
+ * 闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收），本组件不再自带开关。
  */
 @Composable
 fun TxPanel(
@@ -57,7 +61,6 @@ fun TxPanel(
     onSendOnce: (String) -> Unit,
     onStartCq: () -> Unit,
     onStopTx: () -> Unit,
-    onTxEnabledChange: (Boolean) -> Unit,
     onCqPrefixIndex: (Int) -> Unit,
     onOpenAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
@@ -69,7 +72,7 @@ fun TxPanel(
     val reportReceived = status.qso.reportReceived ?: reportSent
     val cqPrefix = settings.cqPrefix
 
-    // 六个槽的报文：每帧现算，永远与六步序列一致（docs/UI-JTDX.md §4）
+    // 六个槽的报文：每帧现算，永远与六步序列一致（docs/UI-MOBILE.md §3.4）
     val slots = remember(target, myCall, myGrid, reportSent, reportReceived, cqPrefix) {
         listOf(
             TxMessageKind.GRID to TxCompose.compose(TxMessageKind.GRID, target, myCall, myGrid),
@@ -84,10 +87,10 @@ fun TxPanel(
 
     var custom by remember { mutableStateOf("") }
     var prefixOpen by remember { mutableStateOf(false) }
-    // 默认收起：优先保证解码表格可见（docs/UI-JTDX.md §4）
-    var expanded by rememberSaveable { mutableStateOf(false) }
     val tone = status.displayTxText
     val generate = { custom = tone ?: cqText ?: "" }
+    // 竖屏窄，槽内文字最多两行
+    val portrait = LocalConfiguration.current.screenWidthDp < 600
 
     Column(
         modifier = modifier
@@ -97,203 +100,163 @@ fun TxPanel(
             .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        if (!expanded) {
-            // ---- 收起态：只占一行 ----
+        // ---- 第 1 行：生成信息 / 自定义报文 / CQ 前缀 / 发送 ----
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            JtdxButton(text = "生成信息", onClick = generate)
+            JtdxTextField(
+                value = custom,
+                onValueChange = { custom = it },
+                modifier = Modifier.weight(1f),
+                placeholder = tone ?: "自定义报文",
+                textStyle = MaterialTheme.typography.labelSmall,
+            )
+            Box {
+                JtdxButton(
+                    text = "CQ ${cqPrefix.ifEmpty { "无" }} ▾",
+                    onClick = { prefixOpen = true },
+                    active = cqPrefix.isNotEmpty(),
+                )
+                DropdownMenu(expanded = prefixOpen, onDismissRequest = { prefixOpen = false }) {
+                    for ((i, p) in settings.cqPrefixes.withIndex()) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (i == settings.cqPrefixIndex) "● ${p.ifEmpty { "无（普通 CQ）" }}"
+                                    else "　${p.ifEmpty { "无（普通 CQ）" }}",
+                                )
+                            },
+                            onClick = {
+                                prefixOpen = false
+                                onCqPrefixIndex(i)
+                            },
+                        )
+                    }
+                }
+            }
+            JtdxButton(
+                text = "发送",
+                onClick = { onSendOnce(custom) },
+                enabled = custom.isNotBlank(),
+                active = status.txArmed && !status.txing,
+            )
+        }
+
+        // ---- 第 2 行：停止发射 / 自动程序 / 待发预览 ----
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            JtdxButton(
+                text = "停止发射",
+                onClick = onStopTx,
+                enabled = status.txing || status.txArmed,
+                accent = VoxTxRed,
+                active = status.txing,
+            )
+            JtdxButton(
+                text = "自动程序",
+                onClick = onOpenAutoProgram,
+                active = status.txEnabled,
+            )
+            Text(
+                text = "待发：${tone ?: "空闲"}",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        // ---- 第 3–4 行：六个槽 3×2 ----
+        for (half in 0..1) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                TxMasterSwitch(status.txEnabled, onTxEnabledChange)
-                JtdxButton(text = "生成信息", onClick = generate)
-                JtdxTextField(
-                    value = custom,
-                    onValueChange = { custom = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = tone ?: "自定义报文（「生成信息」可自动填入）",
-                    textStyle = MaterialTheme.typography.labelSmall,
-                )
-                JtdxButton(
-                    text = "发送",
-                    onClick = { onSendOnce(custom) },
-                    enabled = custom.isNotBlank(),
-                    active = status.txArmed && !status.txing,
-                )
-                JtdxButton(
-                    text = "停止发射",
-                    onClick = onStopTx,
-                    enabled = status.txing,
-                    accent = VoxTxRed,
-                    active = status.txing,
-                )
-                JtdxButton(text = "报文槽 ▾", onClick = { expanded = true })
-            }
-        } else {
-            // ---- 展开态：左侧开关行 + 控制列 + 六个槽 ----
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                TxMasterSwitch(status.txEnabled, onTxEnabledChange)
-                Spacer(Modifier.weight(1f))
-                if (!status.txEnabled) {
-                    Text(
-                        "发送总开关关闭：只接收（打开后才允许发射）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VoxError,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                for (col in 0..2) {
+                    val index = half * 3 + col
+                    val (kind, text) = slots[index]
+                    TxSlot(
+                        index = index + 1,
+                        kind = kind,
+                        text = text,
+                        lit = text != null && tone == text,
+                        txing = status.txing,
+                        maxLines = if (portrait) 2 else 3,
+                        onClick = { if (kind == TxMessageKind.CQ) onStartCq() else text?.let(onSendOnce) },
                     )
                 }
-                JtdxButton(text = "收起 ▴", onClick = { expanded = false })
             }
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // ---- 左列：闸门与报文构造 ----
-                Column(
-                    modifier = Modifier.width(232.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        JtdxButton(
-                            text = "生成信息",
-                            onClick = generate,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Box {
-                            JtdxButton(
-                                text = "CQ：${cqPrefix.ifEmpty { "无" }} ▾",
-                                onClick = { prefixOpen = true },
-                                modifier = Modifier.width(96.dp),
-                                active = cqPrefix.isNotEmpty(),
-                            )
-                            DropdownMenu(expanded = prefixOpen, onDismissRequest = { prefixOpen = false }) {
-                                for ((i, p) in settings.cqPrefixes.withIndex()) {
-                                    DropdownMenuItem(
-                                        text = { Text(if (i == settings.cqPrefixIndex) "● ${p.ifEmpty { "无（普通 CQ）" }}" else "　${p.ifEmpty { "无（普通 CQ）" }}") },
-                                        onClick = {
-                                            prefixOpen = false
-                                            onCqPrefixIndex(i)
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    JtdxTextField(
-                        value = custom,
-                        onValueChange = { custom = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = "自定义报文（「生成信息」可自动填入）",
-                        textStyle = MaterialTheme.typography.labelSmall,
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        JtdxButton(
-                            text = "发送",
-                            onClick = { onSendOnce(custom) },
-                            modifier = Modifier.weight(1f),
-                            enabled = custom.isNotBlank(),
-                            active = status.txArmed && !status.txing,
-                        )
-                        JtdxButton(
-                            text = "停止发射",
-                            onClick = onStopTx,
-                            modifier = Modifier.weight(1f),
-                            enabled = status.txing,
-                            accent = VoxTxRed,
-                            active = status.txing,
-                        )
-                        JtdxButton(
-                            text = "自动程序",
-                            onClick = onOpenAutoProgram,
-                            modifier = Modifier.weight(1f),
-                            active = status.txEnabled,
-                        )
-                    }
-
-                    Text(
-                        "待发：${tone ?: "空闲（无下次发送）"}",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                VerticalDivider(
-                    modifier = Modifier.heightIn(min = 100.dp),
-                    color = JtdxBorder,
-                )
-
-                // ---- 右列：六个报文槽 ----
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    for ((index, slot) in slots.withIndex()) {
-                        val (kind, text) = slot
-                        val isCq = kind == TxMessageKind.CQ
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            JtdxLed(
-                                on = text != null && tone == text,
-                                color = if (status.txing) VoxTxRed else JtdxGreen,
-                            )
-                            Text(
-                                "${index + 1}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(12.dp),
-                            )
-                            JtdxButton(
-                                text = text ?: "—",
-                                onClick = { if (isCq) onStartCq() else text?.let(onSendOnce) },
-                                modifier = Modifier.weight(1f),
-                                enabled = text != null,
-                                textStyle = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                            )
-                            JtdxCaption(kind.label, modifier = Modifier.width(34.dp))
-                        }
-                    }
-                }
-            }
-
-            if (status.qso.active) {
-                Text(
-                    "QSO：${status.qso.description}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = JtdxGreen,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        if (status.qso.active) {
+            Text(
+                "QSO：${status.qso.description}",
+                style = MaterialTheme.typography.labelSmall,
+                color = JtdxGreen,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else if (!status.txEnabled) {
+            Text(
+                "只接收：打开信息头右上角「发射」开关后才允许发射",
+                style = MaterialTheme.typography.labelSmall,
+                color = VoxError,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
 
-/**
- * 发送总开关（JTDX 式方块开关）：开启整块绿色高亮 + 「允许发射」，关闭时红字「只接收」。
- *
- * 用方块按钮而不是 Material `Switch`，是为了在收起态只占一行高度（`Switch` 的 48dp 触摸热区太高）。
- */
+/** 一个报文槽（3×2 网格中的一格）：编号 + 步骤名 + 报文内容，点一下即排程发射。 */
 @Composable
-private fun TxMasterSwitch(enabled: Boolean, onChange: (Boolean) -> Unit) {
-    JtdxButton(
-        text = if (enabled) "总开关 开" else "总开关 关",
-        onClick = { onChange(!enabled) },
-        active = enabled,
-    )
-    JtdxCaption(
-        text = if (enabled) "允许发射" else "只接收",
-        color = if (enabled) JtdxGreen else VoxError,
-    )
+private fun RowScope.TxSlot(
+    index: Int,
+    kind: TxMessageKind,
+    text: String?,
+    lit: Boolean,
+    txing: Boolean,
+    maxLines: Int,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .heightIn(min = 42.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(JtdxPanelHi)
+            .border(1.dp, if (lit) (if (txing) VoxTxRed else JtdxGreen) else JtdxBorder, RoundedCornerShape(2.dp))
+            .clickable(enabled = text != null, onClick = onClick)
+            .padding(horizontal = 3.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                JtdxLed(on = lit, color = if (txing) VoxTxRed else JtdxGreen)
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    "$index ${kind.label}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text ?: "—",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }

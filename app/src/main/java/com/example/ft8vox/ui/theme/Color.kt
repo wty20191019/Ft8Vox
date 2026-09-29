@@ -52,6 +52,21 @@ val JtdxValue = Color(0xFF7FE3FF)
 /** 表格行底色（比卡片略深，贴近 JTDX 列表）。 */
 val JtdxRow = Color(0xFF1A1A26)
 
+// ---- JTDX/WSJT-X 默认解码高亮底色（docs/UI-MOBILE.md §6） ----
+// 取 WSJT-X `DecodeHighlightingModel::defaults_` 的原值；深色板上按 alpha 铺整行底。
+/** 自己发的（Transmitted）。 */
+val HlTx = Color(0xFFFFF200)
+/** 叫我（My Call in message）。 */
+val HlMyCall = Color(0xFFFF6666)
+/** CQ in message。 */
+val HlCq = Color(0xFF66FF66)
+/** 新 DXCC。 */
+val HlDxcc = Color(0xFFFF00FF)
+/** 新网格。 */
+val HlGrid = Color(0xFFFF8000)
+/** 新呼号。 */
+val HlCall = Color(0xFF00FFFF)
+
 // ---- 解码卡片左侧色条（docs/UI.md §3.1） ----
 val BarNewDecode = Color(0xFF4CAF50) // 绿：新解码
 val BarToMe = Color(0xFF89B4FA) // 蓝：与我有关

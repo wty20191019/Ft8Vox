@@ -70,6 +70,12 @@ import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarToMe
 import com.example.ft8vox.ui.theme.BarTx
 import com.example.ft8vox.ui.theme.BarWorked
+import com.example.ft8vox.ui.theme.HlCall
+import com.example.ft8vox.ui.theme.HlCq
+import com.example.ft8vox.ui.theme.HlDxcc
+import com.example.ft8vox.ui.theme.HlGrid
+import com.example.ft8vox.ui.theme.HlMyCall
+import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
@@ -166,6 +172,8 @@ fun SettingsScreen(
                 },
                 supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
             )
+            PrefDivider()
+            ManualCallBlock(session = session, myCall = app.myCall)
         }
 
         // ---------- 6.1 电台（仅 VOX） ----------
@@ -523,35 +531,7 @@ fun SettingsScreen(
             HighlightLegend()
         }
 
-        // ---------- 6.5 外观 ----------
-        SettingsGroup("外观") {
-            PrefChoice(
-                title = "主题",
-                options = ThemeMode.entries,
-                selected = app.themeMode,
-                onSelect = { v -> settings.update { it.copy(themeMode = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "字体",
-                options = FontSize.entries,
-                selected = app.fontSize,
-                onSelect = { v -> settings.update { it.copy(fontSize = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefAction(
-                title = "恢复布局",
-                subtitle = "字体回到默认（瀑布已单独成页，不再有「瀑布高度」设置）",
-                buttonLabel = "恢复",
-                onClick = {
-                    settings.update {
-                        it.copy(fontSize = FontSize.MEDIUM)
-                    }
-                },
-            )
-        }
+        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/UI-MOBILE.md §1：无亮/暗主题、无字体档位） ----------
 
         // ---------- 6.6 日志 ----------
         SettingsGroup("日志") {
@@ -767,6 +747,48 @@ private fun PrefSwitch(
     })
 }
 
+/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/UI-MOBILE.md §12：从旧操作页控制行搬来）。 */
+@Composable
+private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
+    var dxCall by remember { mutableStateOf("") }
+    var dxGrid by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = dxCall,
+                onValueChange = { dxCall = it.trim().uppercase().take(12) },
+                label = { Text("DX 呼号") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = dxGrid,
+                onValueChange = { dxGrid = it.trim().uppercase().take(6) },
+                label = { Text("DX 网格") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OutlinedButton(
+            onClick = {
+                session.answer(dxCall.trim().uppercase(), dxGrid.trim().uppercase().ifEmpty { null })
+            },
+            enabled = myCall.isNotBlank() && dxCall.isNotBlank(),
+            modifier = Modifier.padding(top = 8.dp),
+        ) { Text("呼叫") }
+        Text(
+            "手动输入呼号/网格并立即呼叫（竖屏操作页不放输入框，避免占高度）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
 /** 高亮色小圆点（带一圈淡描边，亮色主题下也看得清）。 */
 @Composable
 private fun ColorDot(color: Color) {
@@ -791,11 +813,13 @@ private fun HighlightLegend() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
-        LegendRow(BarTx, "正在发射（整行黄底黑字）")
-        LegendRow(BarToMe, "与我有关 / 当前 QSO 对手（呼号同时显示为红字）")
-        LegendRow(BarCq, "CQ")
-        LegendRow(BarDuplicate, "重复解码（同一文本在更早时隙出现过；整行变淡）")
-        LegendRow(BarNewDecode, "其余新解码（兜底）")
+        LegendRow(HlTx, "自己发的 / 正在发射（整行黄底）")
+        LegendRow(HlMyCall, "叫我（整行红底，呼号同时红字）")
+        LegendRow(HlCq, "CQ（整行绿底）")
+        LegendRow(HlDxcc, "新 DXCC（整行品红底）")
+        LegendRow(HlGrid, "新网格（整行橙底）")
+        LegendRow(HlCall, "新呼号（整行青底）")
+        LegendRow(BarWorked, "已通联 / 重复（不上底色，文字弱化）")
     }
 }
 

@@ -5,9 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.ui.LogViewModel
 import com.example.ft8vox.ui.MainShell
 import com.example.ft8vox.ui.SessionViewModel
@@ -24,11 +21,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            val app by settings.settings.collectAsState()
-            Ft8VoxTheme(
-                darkTheme = app.themeMode == ThemeMode.DARK,
-                fontScale = app.fontSize.scale,
-            ) {
+            // 新竖屏外壳固定深色、固定字号（docs/UI-MOBILE.md §1：去掉亮/暗主题与字体档位）
+            Ft8VoxTheme {
                 MainShell(session = session, log = log, settings = settings)
             }
         }

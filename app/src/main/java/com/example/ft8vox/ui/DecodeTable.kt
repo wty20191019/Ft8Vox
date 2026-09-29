@@ -61,15 +61,15 @@ import com.example.ft8vox.qso.DecodeStyle
 import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
-import com.example.ft8vox.ui.theme.BarCq
-import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewDecode
 import com.example.ft8vox.ui.theme.BarNewEntity
 import com.example.ft8vox.ui.theme.BarNewGrid
-import com.example.ft8vox.ui.theme.BarToMe
-import com.example.ft8vox.ui.theme.BarTx
-import com.example.ft8vox.ui.theme.BarWorked
+import com.example.ft8vox.ui.theme.HlCall
+import com.example.ft8vox.ui.theme.HlCq
+import com.example.ft8vox.ui.theme.HlDxcc
+import com.example.ft8vox.ui.theme.HlGrid
+import com.example.ft8vox.ui.theme.HlMyCall
+import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.JtdxRow
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
@@ -91,28 +91,48 @@ data class DecodeRow(
     val style: DecodeStyle,
 )
 
-/** 高亮类别 → 左侧色条颜色（docs/UI.md §3.1）。 */
-fun barColor(role: HighlightRole): Color = when (role) {
-    HighlightRole.TX -> BarTx
-    HighlightRole.TO_ME -> BarToMe
-    HighlightRole.CQ -> BarCq
-    HighlightRole.WORKED -> BarWorked
-    HighlightRole.DUPLICATE -> BarDuplicate
-    HighlightRole.NEW_GRID -> BarNewGrid
-    HighlightRole.NEW_ENTITY -> BarNewEntity
-    HighlightRole.NEW_CALL -> BarNewCall
-    HighlightRole.NORMAL -> BarNewDecode
+/** 整行底色的不透明度（深色板上把 JTDX 的亮色底压暗，保证浅色文字仍清晰）。 */
+private const val HL_ALPHA = 0.42f
+
+/**
+ * 高亮类别 → **整行底色**（JTDX/WSJT-X 默认，docs/UI-MOBILE.md §6）。
+ *
+ * 已通联 / 重复 / 普通不上底色（返回 null），用文字弱化表达。
+ */
+fun highlightRowColor(role: HighlightRole): Color? = when (role) {
+    HighlightRole.TX -> HlTx
+    HighlightRole.TO_ME -> HlMyCall
+    HighlightRole.CQ -> HlCq
+    HighlightRole.NEW_GRID -> HlGrid
+    HighlightRole.NEW_ENTITY -> HlDxcc
+    HighlightRole.NEW_CALL -> HlCall
+    HighlightRole.WORKED -> null
+    HighlightRole.DUPLICATE -> null
+    HighlightRole.NORMAL -> null
+}
+
+/** 高亮类别 → 单色（供频谱页叠加的解码呼号文字用）。 */
+fun highlightTextColor(role: HighlightRole): Color = when (role) {
+    HighlightRole.TX -> HlTx
+    HighlightRole.TO_ME -> HlMyCall
+    HighlightRole.CQ -> HlCq
+    HighlightRole.NEW_GRID -> HlGrid
+    HighlightRole.NEW_ENTITY -> HlDxcc
+    HighlightRole.NEW_CALL -> HlCall
+    HighlightRole.WORKED -> Color(0xFF9AA0B5)
+    HighlightRole.DUPLICATE -> Color(0xFF9AA0B5)
+    HighlightRole.NORMAL -> Color(0xFFCDD6F4)
 }
 
 internal val SwipeCallGreen = Color(0xFF2E7D32)
 internal val SwipeDeleteGray = Color(0xFF455A64)
 
-// 表格列宽（横屏下把宽度让给「信息」列）
-private val COL_SLOT = 26.dp
-private val COL_UTC = 58.dp
-private val COL_SNR = 40.dp
-private val COL_DT = 42.dp
-private val COL_DF = 50.dp
+// 表格列宽（竖屏窄：固定列尽量收，把宽度让给「信息」列）
+private val COL_SLOT = 22.dp
+private val COL_UTC = 54.dp
+private val COL_SNR = 36.dp
+private val COL_DT = 38.dp
+private val COL_DF = 46.dp
 
 /** 解码表格列头。 */
 @Composable
@@ -217,14 +237,9 @@ private fun DecodeTableRow(
     val style = row.style
     val from = row.parsed.from
     val callText = from ?: msg.text.substringBefore(' ')
-    val bar = barColor(style.role)
-    val txRow = style.role == HighlightRole.TX
-    val textColor = if (txRow) Color.Black else MaterialTheme.colorScheme.onSurface
-    val bg = when {
-        txRow -> BarTx
-        style.toMe -> BarToMe.copy(alpha = 0.18f)
-        else -> JtdxRow
-    }
+    val hl = highlightRowColor(style.role)
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val bg = hl?.copy(alpha = HL_ALPHA) ?: JtdxRow
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
     val workedDecoration = when (workedStyle) {
         WorkedStyle.STRIKE -> TextDecoration.LineThrough
@@ -313,9 +328,6 @@ private fun DecodeTableRow(
                     onLongClick = { menuOpen = true },
                 )
                 .background(bg)
-                .drawBehind {
-                    drawRect(color = bar, size = Size(4.dp.toPx(), size.height))
-                }
                 .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -339,8 +351,7 @@ private fun DecodeTableRow(
             Text(
                 String.format(Locale.US, "%+3d", msg.snr),
                 style = mono(labelSmallAlpha(alpha)),
-                color = if (txRow) Color.Black
-                else if (msg.snr >= 0) VoxRxGreen else textColor.copy(alpha = alpha),
+                color = if (msg.snr >= 0) VoxRxGreen else textColor.copy(alpha = alpha),
                 textAlign = TextAlign.End,
                 maxLines = 1,
                 modifier = Modifier.width(COL_SNR),

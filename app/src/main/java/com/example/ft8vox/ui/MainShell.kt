@@ -11,23 +11,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,24 +26,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.SessionService
-import com.example.ft8vox.ui.theme.JtdxBorder
-import com.example.ft8vox.ui.theme.JtdxButton
-import com.example.ft8vox.ui.theme.JtdxGreen
-import com.example.ft8vox.ui.theme.JtdxPanelHi
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 主壳的五个页面（docs/UI-JTDX.md §1）：**操作 / 频谱 / 地图 / 日志 / 设置**。
+ * 主壳的五个页面（docs/UI-MOBILE.md §1）：**操作 / 频谱 / 地图 / 日志 / 设置**。
  *
  * 频谱从操作页拆出来单独成页，是这一轮改造的核心诉求。
  */
@@ -66,9 +48,9 @@ enum class MainTab(val label: String) {
 }
 
 /**
- * 应用主壳（docs/UI-JTDX.md §2）：**菜单栏 + 信息头 + 控制行 + 左侧竖导航 + 状态条**。
+ * 应用主壳（docs/UI-MOBILE.md §2）：**竖屏，三行信息头 + 内容 + 底部导航 + 细状态条**。
  *
- * - 全局锁定横屏（`AndroidManifest` 的 `sensorLandscape`），所以这里按横版排布。
+ * - 全局锁定竖屏（`AndroidManifest` 的 `sensorPortrait`）。
  * - 三个 ViewModel 都是 Activity 作用域，切换页面不重建，接收与 QSO 流程不中断。
  * - **录音权限在此统一申请**：操作页的发射动作与频谱页的「开始接收」共用同一条授权链路。
  */
@@ -88,7 +70,7 @@ fun MainShell(
     var logFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
     var helpDialogOpen by rememberSaveable { mutableStateOf(false) }
-    // 过滤弹窗与关注列表弹窗由本壳持有，菜单栏的「解码 → 呼号过滤…」也能打开它
+    // 过滤弹窗与关注列表弹窗由本壳持有，操作页的过滤行也能打开它
     var filterOpen by rememberSaveable { mutableStateOf(false) }
     var followOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -128,7 +110,7 @@ fun MainShell(
         }
     }
 
-    /** 开始接收（操作页空态、频谱页空态、右控制列「监听」都走这里）。 */
+    /** 开始接收（操作页空态、频谱页空态、信息头都走这里）。 */
     val requestStart: () -> Unit = { request { session.start() } }
 
     // 已授权时自动开始接收（首次进入即可看到瀑布）
@@ -168,102 +150,81 @@ fun MainShell(
             .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding(),
     ) {
-        JtdxMenuBar(
-            status = status,
-            appSettings = appSettings,
-            onTab = { tab = it },
-            onProtocol = session::selectProtocol,
-            onUpdateSettings = settings::update,
-            onAutoProgram = { autoDialogOpen = true },
-            onClearDecodes = session::clearMessages,
-            onOpenFilter = {
-                filterOpen = true
-                tab = MainTab.OPERATE
-            },
-            onHelp = { helpDialogOpen = true },
-        )
-
-        JtdxInfoHeader(
-            status = status,
-            appSettings = appSettings,
-            nowMs = nowMs,
-        )
-
-        JtdxControlRow(
+        MobileInfoHeader(
             status = status,
             appSettings = appSettings,
             messages = messages,
+            nowMs = nowMs,
             onBandFreq = session::setBandFreq,
-            onSameFreqTx = session::setSameFreqTx,
+            onTxEnabledChange = session::setTxEnabled,
             onOpenSettings = { tab = MainTab.SETTINGS },
-            onManualCall = { call, grid -> request { session.answer(call, grid, null) } },
+            onHelp = { helpDialogOpen = true },
         )
 
-        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            LeftNavRail(tab = tab, onTab = { tab = it })
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                when (tab) {
-                    MainTab.OPERATE -> OperateScreen(
-                        viewModel = session,
-                        settings = appSettings,
-                        hasPermission = permissionGranted,
-                        request = request,
-                        onRequestStart = requestStart,
-                        onOpenSettings = { tab = MainTab.SETTINGS },
-                        onOpenMap = { call ->
-                            mapFocusCall = call
-                            mapFocusSeq += 1
-                            tab = MainTab.MAP
-                        },
-                        onOpenLog = { call ->
-                            logFocusCall = call
-                            logFocusSeq += 1
-                            tab = MainTab.LOG
-                        },
-                        onOpenAutoProgram = { autoDialogOpen = true },
-                        filterOpen = filterOpen,
-                        onFilterOpenChange = { filterOpen = it },
-                        followOpen = followOpen,
-                        onFollowOpenChange = { followOpen = it },
-                    )
+        Box(Modifier.weight(1f).fillMaxWidth().fillMaxHeight()) {
+            when (tab) {
+                MainTab.OPERATE -> OperateScreen(
+                    viewModel = session,
+                    settings = appSettings,
+                    hasPermission = permissionGranted,
+                    request = request,
+                    onRequestStart = requestStart,
+                    onOpenSettings = { tab = MainTab.SETTINGS },
+                    onOpenMap = { call ->
+                        mapFocusCall = call
+                        mapFocusSeq += 1
+                        tab = MainTab.MAP
+                    },
+                    onOpenLog = { call ->
+                        logFocusCall = call
+                        logFocusSeq += 1
+                        tab = MainTab.LOG
+                    },
+                    onOpenAutoProgram = { autoDialogOpen = true },
+                    filterOpen = filterOpen,
+                    onFilterOpenChange = { filterOpen = it },
+                    followOpen = followOpen,
+                    onFollowOpenChange = { followOpen = it },
+                )
 
-                    MainTab.SPECTRUM -> SpectrumScreen(
-                        viewModel = session,
-                        settings = appSettings,
-                        hasPermission = permissionGranted,
-                        onRequestStart = requestStart,
-                        onOpenLog = { call ->
-                            logFocusCall = call
-                            logFocusSeq += 1
-                            tab = MainTab.LOG
-                        },
-                    )
+                MainTab.SPECTRUM -> SpectrumScreen(
+                    viewModel = session,
+                    settings = appSettings,
+                    hasPermission = permissionGranted,
+                    onRequestStart = requestStart,
+                    onOpenLog = { call ->
+                        logFocusCall = call
+                        logFocusSeq += 1
+                        tab = MainTab.LOG
+                    },
+                )
 
-                    MainTab.MAP -> GridScreen(
-                        log = log,
-                        session = session,
-                        settings = appSettings,
-                        onUpdateSettings = settings::update,
-                        onOpenLog = { tab = MainTab.LOG },
-                        focusCall = mapFocusCall,
-                        focusSeq = mapFocusSeq,
-                    )
+                MainTab.MAP -> GridScreen(
+                    log = log,
+                    session = session,
+                    settings = appSettings,
+                    onUpdateSettings = settings::update,
+                    onOpenLog = { tab = MainTab.LOG },
+                    focusCall = mapFocusCall,
+                    focusSeq = mapFocusSeq,
+                )
 
-                    MainTab.LOG -> LogScreen(
-                        log = log,
-                        myCall = appSettings.myCall,
-                        myGrid = appSettings.myGrid.ifEmpty { null },
-                        onOpenSettings = { tab = MainTab.SETTINGS },
-                        focusCall = logFocusCall,
-                        focusSeq = logFocusSeq,
-                    )
+                MainTab.LOG -> LogScreen(
+                    log = log,
+                    myCall = appSettings.myCall,
+                    myGrid = appSettings.myGrid.ifEmpty { null },
+                    onOpenSettings = { tab = MainTab.SETTINGS },
+                    focusCall = logFocusCall,
+                    focusSeq = logFocusSeq,
+                )
 
-                    MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
-                }
+                MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
             }
         }
 
-        JtdxStatusBar(
+        MobileBottomNav(tab = tab, onTab = { tab = it })
+
+        MobileStatusBar(
             running = status.running,
             txing = status.txing,
             protocol = status.protocol,
@@ -271,8 +232,6 @@ fun MainShell(
             decodedTotal = status.decodedTotal,
             qsoCount = stats.total,
             queueCount = status.autoQueueSize + if (status.manualTxText != null) 1 else 0,
-            slotProgress = status.slotProgress,
-            slotMs = status.slotMs,
             slotParity = status.slotParity,
             timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
             dateText = dateText,
@@ -289,55 +248,6 @@ fun MainShell(
 
     if (helpDialogOpen) {
         JtdxHelpDialog(onDismiss = { helpDialogOpen = false })
-    }
-}
-
-/**
- * 左侧竖向窄导航栏（docs/UI-JTDX.md §2）：5 项等宽方块，选中项整块绿色高亮。
- *
- * 横屏下竖直空间紧张，所以导航占左侧而不是底部；这也更接近 JTDX 的竖排按钮观感。
- */
-@Composable
-private fun LeftNavRail(
-    tab: MainTab,
-    onTab: (MainTab) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .width(66.dp)
-            .fillMaxHeight()
-            .background(JtdxPanelHi)
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        for (t in MainTab.entries) {
-            val selected = t == tab
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp)
-                    .padding(horizontal = 5.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(if (selected) JtdxGreen else JtdxButton)
-                    .border(1.dp, if (selected) JtdxGreen else JtdxBorder, RoundedCornerShape(2.dp))
-                    .clickable { onTab(t) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    t.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        Text(
-            "JTDX 布局",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
