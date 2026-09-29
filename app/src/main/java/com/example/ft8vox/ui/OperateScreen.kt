@@ -376,26 +376,45 @@ private fun DecodeFilterDialog(
         title = { Text("过滤解码列表") },
         text = {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // 六个筛选项排成 3 列 × 2 行、列优先（1 3 5 / 2 4 6），一屏全见不用横滑
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    for (tag in DecodeFilterTag.entries) {
-                        FilterChip(
-                            selected = filter.isSelected(tag),
-                            onClick = { onToggle(tag) },
-                            label = {
-                                Text(
-                                    "${tag.label} ${counts[tag] ?: 0}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
-                        )
+                    val tags = DecodeFilterTag.entries
+                    val rowsN = 2
+                    val colsN = (tags.size + rowsN - 1) / rowsN
+                    for (r in 0 until rowsN) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            for (c in 0 until colsN) {
+                                val i = c * rowsN + r
+                                if (i < tags.size) {
+                                    val tag = tags[i]
+                                    FilterChip(
+                                        selected = filter.isSelected(tag),
+                                        onClick = { onToggle(tag) },
+                                        label = {
+                                            Text(
+                                                "${tag.label} ${counts[tag] ?: 0}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1,
+                                            )
+                                        },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                                        ),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
                     }
                 }
                 JtdxCaption("全部 之外为多选并集；一个都没选时列表为空", modifier = Modifier.padding(top = 6.dp))
