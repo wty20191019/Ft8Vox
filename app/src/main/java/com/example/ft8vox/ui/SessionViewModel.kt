@@ -31,6 +31,7 @@ import com.example.ft8vox.qso.AutoProgramSelector
 import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
+import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
 import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.FollowRoster
@@ -608,15 +609,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 保存 CQ 前缀格子（最多 8 个，**保留空格子**＝普通 CQ；全空则回落默认）。 */
-    fun setCqPrefixes(list: List<String>) {
-        val cleaned = list.map { it.trim().uppercase() }.take(8)
-        persist { it.copy(cqPrefixes = if (cleaned.any { p -> p.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES) }
-    }
-
-    /** 选中某个 CQ 前缀格子（所有 CQ 都用它）。 */
-    fun setCqPrefixIndex(index: Int) {
-        persist { it.copy(cqPrefixIndex = index.coerceIn(0, (it.cqPrefixes.size - 1).coerceAtLeast(0))) }
+    /**
+     * 保存 CQ 前缀格子**与选中项**（发射区「CQ 前缀」弹窗一次提交，docs/UI-MOBILE.md §28）。
+     *
+     * 一次写完：分两次 `persist` 会各自读一次设置快照，选中项可能落到旧格子表上。
+     */
+    fun setCqPrefix(slots: List<String>, index: Int) {
+        val (prefixes, selected) = cleanCqPrefixes(slots, index)
+        persist { it.copy(cqPrefixes = prefixes, cqPrefixIndex = selected) }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -2194,6 +2194,21 @@ internal fun effectiveTxParity(
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =
     if (parity == TX_PARITY_ODD) "奇数周期" else "偶数周期"
+
+/**
+ * 规整「CQ 前缀」格子与选中项（纯逻辑，便于单测；发射区「CQ 前缀」弹窗「确定」时提交）。
+ *
+ * - 固定 [CQ_PREFIX_SLOTS] 格、去首尾空格、转大写；**空格子保留**（空串＝普通 CQ），不能去空；
+ * - 全是空格子时回落 [DEFAULT_CQ_PREFIXES]（给出「恢复默认」的出口，也免得 CQ 报文没有前缀格可选）；
+ * - 选中下标按最终格子数夹住。
+ *
+ * @return `(格子表, 选中下标)`
+ */
+internal fun cleanCqPrefixes(slots: List<String>, index: Int): Pair<List<String>, Int> {
+    val cleaned = List(CQ_PREFIX_SLOTS) { slots.getOrElse(it) { "" }.trim().uppercase() }
+    val kept = if (cleaned.any { it.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES
+    return kept to index.coerceIn(0, (kept.size - 1).coerceAtLeast(0))
+}
 
 /**
  * 前台服务通知的副标题（纯函数，便于单测，阶段 9）。

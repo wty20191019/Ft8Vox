@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,16 +45,16 @@ import com.example.ft8vox.ui.theme.VoxTxRed
 /**
  * 底部发射区（docs/UI-MOBILE.md §3.4）：竖屏**常驻**，不再折叠。
  *
- * - 第 1 行：`生成信息 · 自定义报文 · CQ 前缀 · 发送`
+ * - 第 1 行：`自定义报文 · CQ 前缀 · 发送`（§28 去掉了「生成信息」键）
  * - 第 2 行：`停止发射 · 自动程序 · 正在发送`
  * - 第 3–4 行：**六个报文槽 3 列 × 2 行、列优先**（`1 3 5` / `2 4 6`），槽上直接写报文内容。
  *
  * 闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收），本组件不再自带开关。
  *
- * 「自定义报文」框**自动同步当前待发报文**（docs/UI-MOBILE.md §21）：待发一变就填进框，
- * 不用再点「生成信息」。**一打字就进入「手动优先」**（§27），不会被自动同步冲掉；点「发送」
- * 即把框里这条排到下一个我方时隙（**不打断正在跑的 QSO**，只是在原序列里插一条），
- * 编不出来 / 被拒时底部红字当场说明，发送成功后框回到自动同步。
+ * **标准报文不用生成**（§28）：点下面六格槽，就是 `TxCompose` 现算出来的六步标准报文，
+ * 点哪格发哪格。自定义报文框**平时是空的**（灰字占位回显当前待发报文），
+ * 在里面写一条 → 点「发送」→ 排到下一个（或最近可发的）我方时隙，**不打断正在跑的 QSO**；
+ * 发送成功后框清空、QSO 继续（见 `SessionViewModel.sendOnce`）。
  */
 @Composable
 fun TxPanel(
@@ -67,7 +65,7 @@ fun TxPanel(
     onSendOnce: (String) -> Unit,
     onStartCq: () -> Unit,
     onStopTx: () -> Unit,
-    onCqPrefixIndex: (Int) -> Unit,
+    onCqPrefix: (prefixes: List<String>, index: Int) -> Unit,
     onOpenAutoProgram: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -89,27 +87,20 @@ fun TxPanel(
             TxMessageKind.CQ to TxCompose.compose(TxMessageKind.CQ, null, myCall, myGrid, cqPrefix = cqPrefix),
         )
     }
-    val cqText = slots.firstOrNull { it.first == TxMessageKind.CQ }?.second
 
     var custom by remember { mutableStateOf("") }
-    // 是否手动改过框里的内容：改过就先按手动的，发送后 / 点「生成信息」回到自动同步
-    var customEdited by remember { mutableStateOf(false) }
-    var prefixOpen by remember { mutableStateOf(false) }
+    // 刚点「发送」的那条自定义报文：排程成功（status.manualTxText 正是它）时用来清空输入框
+    var lastSent by remember { mutableStateOf<String?>(null) }
+    var prefixDialog by remember { mutableStateOf(false) }
     val tone = status.displayTxText
     val pending = status.pendingTxText
-    // 「生成信息」＝把当前待发报文填进框（没有待发时退到 CQ 报文），并交回自动同步
-    val generate = {
-        customEdited = false
-        custom = pending ?: cqText ?: ""
-    }
-    // 待发报文一变就自动填进框（docs/UI-MOBILE.md §21）
-    LaunchedEffect(pending) {
-        if (!customEdited) custom = pending.orEmpty()
-    }
-    // 一次性报文排程成功（待发报文正是框里这条）→ 交回自动同步：发完跟着显示真正的待发报文
-    // （§27：点「发送」后框里清空 / 回到自动同步）
+    // 排程成功 → 清空自定义框（§28）；被拒 / 编不出来则保留，便于就地改（底部有红字说明原因）
     LaunchedEffect(status.manualTxText) {
-        if (status.manualTxText != null && status.manualTxText == custom.trim()) customEdited = false
+        val sent = lastSent
+        if (sent != null && status.manualTxText == sent && custom.trim() == sent) {
+            custom = ""
+            lastSent = null
+        }
     }
     // 竖屏窄，槽内文字最多两行
     val portrait = LocalConfiguration.current.screenWidthDp < 600
@@ -122,53 +113,34 @@ fun TxPanel(
             .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        // ---- 第 1 行：生成信息 / 自定义报文 / CQ 前缀 / 发送 ----
+        // ---- 第 1 行：自定义报文 / CQ 前缀 / 发送 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            JtdxButton(text = "生成信息", onClick = generate)
             JtdxTextField(
                 value = custom,
-                onValueChange = {
-                    custom = it
-                    // 手动输入即「手动优先」（§27）：不再被待发报文的自动同步冲掉。
-                    // 清空输入框则回到自动同步。
-                    customEdited = it.isNotBlank()
-                },
+                onValueChange = { custom = it },
                 modifier = Modifier.weight(1f),
+                // 框平时是空的：灰字回显当前待发报文，作为「待发」的唯一文字读数（§28）
                 placeholder = tone ?: "自定义报文",
                 textStyle = MaterialTheme.typography.labelSmall,
             )
-            Box {
-                JtdxButton(
-                    text = "CQ ${cqPrefix.ifEmpty { "无" }} ▾",
-                    onClick = { prefixOpen = true },
-                    active = cqPrefix.isNotEmpty(),
-                )
-                DropdownMenu(expanded = prefixOpen, onDismissRequest = { prefixOpen = false }) {
-                    for ((i, p) in settings.cqPrefixes.withIndex()) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (i == settings.cqPrefixIndex) "● ${p.ifEmpty { "无（普通 CQ）" }}"
-                                    else "　${p.ifEmpty { "无（普通 CQ）" }}",
-                                )
-                            },
-                            onClick = {
-                                prefixOpen = false
-                                onCqPrefixIndex(i)
-                            },
-                        )
-                    }
-                }
-            }
+            JtdxButton(
+                text = "CQ ${cqPrefix.ifEmpty { "无" }} ▾",
+                onClick = { prefixDialog = true },
+                active = cqPrefix.isNotEmpty(),
+            )
             JtdxButton(
                 text = "发送",
                 // 点「发送」＝发框里这条报文（不打断正在跑的 QSO，见 SessionViewModel.sendOnce）；
                 // 编不出来 / 被拒都会在底部红字说明，所以按钮保持可点、不置灰。
-                onClick = { onSendOnce(custom) },
+                onClick = {
+                    val m = custom.trim()
+                    lastSent = m
+                    onSendOnce(m)
+                },
                 enabled = custom.isNotBlank(),
                 active = status.txArmed && !status.txing,
             )
@@ -220,7 +192,6 @@ fun TxPanel(
                         led = slotLed(text, status.lastTxText, pending, status.txing),
                         maxLines = if (portrait) 2 else 3,
                         onClick = {
-                            customEdited = false
                             if (kind == TxMessageKind.CQ) onStartCq() else text?.let(onSendOnce)
                         },
                     )
@@ -246,6 +217,16 @@ fun TxPanel(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+
+    // 「CQ 前缀」编辑弹窗（§28）：格子里能改、能选，确定时一次性提交
+    if (prefixDialog) {
+        CqPrefixDialog(
+            prefixes = settings.cqPrefixes,
+            selectedIndex = settings.cqPrefixIndex,
+            onConfirm = { prefixes, index -> onCqPrefix(prefixes, index) },
+            onDismiss = { prefixDialog = false },
+        )
     }
 }
 

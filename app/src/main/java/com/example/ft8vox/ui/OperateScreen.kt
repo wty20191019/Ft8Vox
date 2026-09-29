@@ -250,7 +250,7 @@ fun OperateScreen(
             onSendOnce = { request { viewModel.sendOnce(it) } },
             onStartCq = { request { viewModel.startCq() } },
             onStopTx = { viewModel.stopTransmit() },
-            onCqPrefixIndex = { viewModel.setCqPrefixIndex(it) },
+            onCqPrefix = { prefixes, index -> viewModel.setCqPrefix(prefixes, index) },
             onOpenAutoProgram = onOpenAutoProgram,
         )
     }
