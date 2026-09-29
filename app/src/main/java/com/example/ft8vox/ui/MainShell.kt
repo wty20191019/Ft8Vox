@@ -240,6 +240,7 @@ fun MainShell(
             qsoCount = stats.total,
             queueCount = status.autoQueueSize + if (status.manualTxText != null) 1 else 0,
             slotParity = status.slotParity,
+            txParity = status.txParity,
             timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
             dateText = dateText,
         )

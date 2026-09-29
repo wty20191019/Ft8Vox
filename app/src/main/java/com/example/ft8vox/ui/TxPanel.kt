@@ -19,6 +19,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,10 +48,13 @@ import com.example.ft8vox.ui.theme.VoxTxRed
  * 底部发射区（docs/UI-MOBILE.md §3.4）：竖屏**常驻**，不再折叠。
  *
  * - 第 1 行：`生成信息 · 自定义报文 · CQ 前缀 · 发送`
- * - 第 2 行：`停止发射 · 自动程序 · 待发预览`
+ * - 第 2 行：`停止发射 · 自动程序 · 正在发送`
  * - 第 3–4 行：**六个报文槽 3×2**（网格 / 报告 / R报告 / RR73 / 73 / CQ），槽上直接写报文内容。
  *
  * 闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收），本组件不再自带开关。
+ *
+ * 「自定义报文」框**自动同步当前待发报文**（docs/UI-MOBILE.md §21）：待发一变就填进框，
+ * 不用再点「生成信息」；手动改过则先按手动的，发送后 / 点「生成信息」回到自动同步。
  */
 @Composable
 fun TxPanel(
@@ -86,9 +90,20 @@ fun TxPanel(
     val cqText = slots.firstOrNull { it.first == TxMessageKind.CQ }?.second
 
     var custom by remember { mutableStateOf("") }
+    // 是否手动改过框里的内容：改过就先按手动的，发送后 / 点「生成信息」回到自动同步
+    var customEdited by remember { mutableStateOf(false) }
     var prefixOpen by remember { mutableStateOf(false) }
     val tone = status.displayTxText
-    val generate = { custom = tone ?: cqText ?: "" }
+    val pending = status.pendingTxText
+    // 「生成信息」＝把当前待发报文填进框（没有待发时退到 CQ 报文），并交回自动同步
+    val generate = {
+        customEdited = false
+        custom = pending ?: cqText ?: ""
+    }
+    // 待发报文一变就自动填进框（docs/UI-MOBILE.md §21）
+    LaunchedEffect(pending) {
+        if (!customEdited) custom = pending.orEmpty()
+    }
     // 竖屏窄，槽内文字最多两行
     val portrait = LocalConfiguration.current.screenWidthDp < 600
 
@@ -139,13 +154,16 @@ fun TxPanel(
             }
             JtdxButton(
                 text = "发送",
-                onClick = { onSendOnce(custom) },
+                onClick = {
+                    customEdited = false
+                    onSendOnce(custom)
+                },
                 enabled = custom.isNotBlank(),
                 active = status.txArmed && !status.txing,
             )
         }
 
-        // ---- 第 2 行：停止发射 / 自动程序 / 待发预览 ----
+        // ---- 第 2 行：停止发射 / 自动程序 / 正在发送 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -163,8 +181,9 @@ fun TxPanel(
                 onClick = onOpenAutoProgram,
                 active = status.txEnabled,
             )
+            // 正在发送 = 本时隙实际在播的那条（没有播就是灰色「空闲」）
             Text(
-                text = "待发：${tone ?: "空闲"}",
+                text = if (status.txing) "正在发送：${status.lastTxText ?: tone ?: ""}" else "空闲",
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                 color = if (status.txing) VoxTxRed else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -189,7 +208,10 @@ fun TxPanel(
                         lit = text != null && tone == text,
                         txing = status.txing,
                         maxLines = if (portrait) 2 else 3,
-                        onClick = { if (kind == TxMessageKind.CQ) onStartCq() else text?.let(onSendOnce) },
+                        onClick = {
+                            customEdited = false
+                            if (kind == TxMessageKind.CQ) onStartCq() else text?.let(onSendOnce)
+                        },
                     )
                 }
             }

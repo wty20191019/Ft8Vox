@@ -414,8 +414,11 @@ private fun WaterfallTabIcon(selected: Boolean) {
 // ---------------------------------------------------------------- 细状态条
 
 /**
- * 底部细状态条（docs/UI-MOBILE.md §7）：
- * `[接收/发射] 协议 解码 x/min 总 n QSO n 队列 n 时隙 n 日期 时间不同步`。
+ * 底部细状态条（docs/UI-MOBILE.md §7、§21）：
+ * `[接收/发射] FT8 解码12/min 总123 QSO7 队列0 时隙1 [TX0] 时间同步 09-29`。
+ *
+ * `[TX0]` / `[TX1]` 是**我方发射时隙**（[txParity]）：轮到我方时隙或正在发射时红底黑字，
+ * 其余时刻深灰底灰字，用来一眼判断「现在是不是我发」。
  */
 @Composable
 fun MobileStatusBar(
@@ -427,6 +430,8 @@ fun MobileStatusBar(
     qsoCount: Int,
     queueCount: Int,
     slotParity: Int,
+    /** 我方发射时隙奇偶：0=偶数时隙，1=奇数时隙（自动锁定）。 */
+    txParity: Int,
     timeWarning: String?,
     dateText: String,
     modifier: Modifier = Modifier,
@@ -441,6 +446,8 @@ fun MobileStatusBar(
         running -> VoxRxGreen
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    // 现在轮到我方发射（或正在发射）
+    val mySlotNow = txing || (running && slotParity == txParity)
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -460,11 +467,12 @@ fun MobileStatusBar(
             Text(stateText, style = MaterialTheme.typography.labelSmall, color = Color.Black)
         }
         Text(protocol.name, style = MaterialTheme.typography.labelSmall, color = JtdxGreen)
-        JtdxCaption("解码 $decodePerMin/min")
-        JtdxCaption("总 $decodedTotal")
-        JtdxCaption("QSO $qsoCount")
-        JtdxCaption("队列 $queueCount")
-        JtdxCaption("时隙 $slotParity")
+        JtdxCaption("解码$decodePerMin/min")
+        JtdxCaption("总$decodedTotal")
+        JtdxCaption("QSO$qsoCount")
+        JtdxCaption("队列$queueCount")
+        JtdxCaption("时隙$slotParity")
+        TxParityBadge(parity = txParity, on = mySlotNow)
         Spacer(Modifier.weight(1f))
         if (timeWarning != null) {
             Text(timeWarning, style = MaterialTheme.typography.labelSmall, color = VoxError)
@@ -472,6 +480,29 @@ fun MobileStatusBar(
             JtdxCaption("时间同步")
         }
         JtdxCaption(dateText)
+    }
+}
+
+/**
+ * 状态条里的「我方发射时序」徽标（docs/UI-MOBILE.md §21）：`TX0` / `TX1`。
+ *
+ * @param parity 我方发射时隙奇偶
+ * @param on 现在轮到我方（或正在发射）时红底黑字，否则深灰底灰字
+ */
+@Composable
+private fun TxParityBadge(parity: Int, on: Boolean) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(2.dp))
+            .background(if (on) VoxTxRed else JtdxPanelHi)
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "TX$parity",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (on) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -493,7 +524,10 @@ fun JtdxHelpDialog(onDismiss: () -> Unit) {
                     "关注列表：左滑 = 呼叫；右滑 = 取消关注；右上「全部清除」清空整份名单",
                     "频谱页：按住水平拖动红线 = 设发射频率；瀑布上按频率位置叠加最近解码的报文（竖排、随瀑布上滚）",
                     "发射区：六个报文槽（网格 / 报告 / R报告 / RR73 / 73 / CQ），点一下即排到下一个我方时隙",
-                    "发射区：「生成信息」= 把当前该发的那条报文填进自定义框；CQ 前缀影响所有 CQ 报文",
+                    "发射区：自定义报文框会自动同步当前待发报文（手动改过就先按手动的，发送完自动回到同步）",
+                    "发射区：「生成信息」= 按当前待发报文重新生成（没有待发时退到 CQ 报文）；CQ 前缀影响所有 CQ 报文",
+                    "发射区：「正在发送」红字 = 本时隙实际在播的报文；灰字「空闲」= 没在发",
+                    "底部状态条：TX0 / TX1 = 我方发射时隙，红色表示现在就轮到我发",
                     "发射的唯一闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收）",
                     "返回键：接收中退到后台继续接收；有弹窗时先关弹窗",
                     "本应用不做 CAT 电台控制，发射依赖电台 VOX 或手动 PTT",
