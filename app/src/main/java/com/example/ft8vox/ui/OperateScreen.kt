@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -85,6 +86,8 @@ fun OperateScreen(
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 当前发射目标（点选解码行 / 左滑呼叫 / 详情「呼叫」设置）
     var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
+    // 「关注列表 → 全部清除」的二次确认
+    var clearFollowConfirm by remember { mutableStateOf(false) }
 
     fun copyToClipboard(text: String) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -247,7 +250,6 @@ fun OperateScreen(
                         onOpenLog = { onOpenLog(it.parsed.from) },
                         onSwipeDelete = { viewModel.removeMessage(it.msg) },
                         onCopy = { copyToClipboard(it.msg.text) },
-                        onIgnore = { it.parsed.from?.let { c -> viewModel.ignoreCall(c) } },
                         onToggleFollow = { it.parsed.from?.let { c -> viewModel.toggleFollow(c) } },
                         workedStyle = settings.workedStyle,
                         endMarkMyCall = settings.endMarkMyCall,
@@ -304,11 +306,31 @@ fun OperateScreen(
                             request { viewModel.answer(call, grid, df) }
                         },
                         onUnfollow = { viewModel.unfollowCall(it) },
+                        onClearAll = { clearFollowConfirm = true },
                         onClose = { onFollowOpenChange(false) },
                     )
                 }
             },
             confirmButton = { TextButton(onClick = { onFollowOpenChange(false) }) { Text("关闭") } },
+        )
+    }
+
+    if (clearFollowConfirm) {
+        AlertDialog(
+            onDismissRequest = { clearFollowConfirm = false },
+            title = { Text("清空关注名单") },
+            text = { Text("将移除全部 ${settings.followCalls.size} 个关注呼号（手动关注与自动收录的都会清掉），不可撤销。") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        clearFollowConfirm = false
+                        viewModel.clearFollowCalls()
+                    },
+                ) { Text("确认清空") }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearFollowConfirm = false }) { Text("取消") }
+            },
         )
     }
 

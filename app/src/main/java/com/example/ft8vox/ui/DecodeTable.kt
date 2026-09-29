@@ -186,7 +186,6 @@ fun DecodeTable(
     onOpenLog: (DecodeRow) -> Unit,
     onSwipeDelete: (DecodeRow) -> Unit,
     onCopy: (DecodeRow) -> Unit,
-    onIgnore: (DecodeRow) -> Unit,
     onToggleFollow: (DecodeRow) -> Unit,
     workedStyle: WorkedStyle,
     endMarkMyCall: Boolean,
@@ -215,7 +214,6 @@ fun DecodeTable(
                 onOpenLog = { onOpenLog(row) },
                 onSwipeDelete = { onSwipeDelete(row) },
                 onCopy = { onCopy(row) },
-                onIgnore = { onIgnore(row) },
                 onToggleFollow = { onToggleFollow(row) },
             )
         }
@@ -242,7 +240,6 @@ private fun DecodeTableRow(
     onOpenLog: () -> Unit,
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
-    onIgnore: () -> Unit,
     onToggleFollow: () -> Unit,
 ) {
     val msg = row.msg
@@ -454,14 +451,6 @@ private fun DecodeTableRow(
                 onClick = {
                     menuOpen = false
                     onToggleFollow()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("忽略 $callText") },
-                enabled = from != null,
-                onClick = {
-                    menuOpen = false
-                    onIgnore()
                 },
             )
         }

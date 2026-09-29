@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -60,6 +61,8 @@ fun FollowListPanel(
     onCall: (call: String, grid: String?, df: Int?) -> Unit,
     onUnfollow: (String) -> Unit,
     onClose: () -> Unit,
+    /** 点「全部清除」时回调（弹确认框的逻辑由调用方负责）。 */
+    onClearAll: () -> Unit,
     /** 由「自动收录 CQ 台」自动加入的呼号（行内显示「自动」标记）。 */
     autoFollowed: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
@@ -87,6 +90,9 @@ fun FollowListPanel(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (rows.isNotEmpty()) {
+                TextButton(onClick = onClearAll) { Text("全部清除") }
+            }
             IconButton(onClick = onClose) {
                 Icon(Icons.Filled.Close, contentDescription = "关闭关注呼号列表")
             }

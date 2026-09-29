@@ -574,6 +574,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 清空关注名单（关注列表里的「全部清除」，手动关注与自动收录一并清掉）。 */
+    fun clearFollowCalls() {
+        persist { it.copy(followCalls = emptySet(), autoFollowOrder = emptyList()) }
+    }
+
     /**
      * 「自动收录 CQ 台」：把本批解到的、**当前波段还没通联过**的**新** CQ 呼号并入关注名单
      * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动关注的永不被淘汰）。
