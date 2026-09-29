@@ -192,7 +192,7 @@ fun OperateScreen(
             }
         }
 
-        DecodeTableHeader()
+        // 表头已去掉（两行制里含义自明，省一行高度，docs/UI-MOBILE.md §14）
 
         // ---- 解码表格（竖屏整宽）----
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {

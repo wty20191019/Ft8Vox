@@ -128,39 +128,18 @@ fun highlightTextColor(role: HighlightRole): Color = when (role) {
 internal val SwipeCallGreen = Color(0xFF2E7D32)
 internal val SwipeDeleteGray = Color(0xFF455A64)
 
-// 表格列宽（竖屏窄：固定列尽量收，把宽度让给「信息」列）
+// 表格列宽（竖屏窄：固定列尽量收，把宽度让给「报文」列）
 private val COL_SLOT = 22.dp
 private val COL_UTC = 54.dp
 private val COL_SNR = 36.dp
 private val COL_DT = 38.dp
-private val COL_DF = 46.dp
-
-/** 解码表格列头。 */
-@Composable
-fun DecodeTableHeader(modifier: Modifier = Modifier) {
-    JtdxTableHeader(modifier) {
-        Text("时隙", style = headerStyle(), modifier = Modifier.width(COL_SLOT), textAlign = TextAlign.Center)
-        Text("UTC", style = headerStyle(), modifier = Modifier.width(COL_UTC))
-        Text("分贝", style = headerStyle(), modifier = Modifier.width(COL_SNR), textAlign = TextAlign.End)
-        Text("时差", style = headerStyle(), modifier = Modifier.width(COL_DT), textAlign = TextAlign.End)
-        Text("频率", style = headerStyle(), modifier = Modifier.width(COL_DF), textAlign = TextAlign.End)
-        Text("信息", style = headerStyle(), modifier = Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun headerStyle() = MaterialTheme.typography.labelSmall.copy(
-    fontFamily = FontFamily.Monospace,
-    fontWeight = FontWeight.Bold,
-    color = MaterialTheme.colorScheme.onSurfaceVariant,
-)
 
 /**
- * 「信息」列文本（docs/UI-MOBILE.md §3.3）。
+ * 「报文」列文本（docs/UI-MOBILE.md §14）。
  *
- * 竖屏宽，但一行仍放不下「呼号+网格+报告+实体+距离」：
- * **允许折到两行**；折两行仍放不下时**逐级缩小字号**（12sp → 8sp）塞进去，
- * 而不是省略号截断（长报文少见，缩一点比看不清好）。
+ * 两行制里报文固定占**第一行**：一行放不下「呼号+网格+报告」时**逐级缩小字号**
+ * （12sp → 9sp）塞进去，而不是省略号截断（长报文少见，缩一点比看不清好）。
+ * 第二行的「声音频率 · 国家 · 距离」由 [DecodeTableRow] 单独画。
  */
 @Composable
 private fun InfoText(
@@ -178,11 +157,11 @@ private fun InfoText(
         ),
         color = color,
         textDecoration = decoration,
-        maxLines = 2,
+        maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
         onTextLayout = { layout ->
-            if (layout.hasVisualOverflow && fontSize > 8) fontSize -= 1
+            if (layout.hasVisualOverflow && fontSize > 9) fontSize -= 1
         },
     )
 }
@@ -280,13 +259,14 @@ private fun DecodeTableRow(
         WorkedStyle.HIDE -> null
     }
     val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
-    // 「信息」列后缀：实体 · 距离（横屏信息列够宽，放得下）
-    val infoSuffix = remember(row, myGrid) {
+    // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/UI-MOBILE.md §14）
+    val metaLine = remember(row, myGrid) {
         val entity = from?.let { Dxcc.resolve(it)?.name }
         val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
         buildString {
-            entity?.takeIf { it.isNotEmpty() }?.let { append("  $it") }
-            distKm?.let { append(String.format(Locale.US, "  %.0fkm", it)) }
+            append("${msg.df}Hz")
+            entity?.takeIf { it.isNotEmpty() }?.let { append(" $it") }
+            distKm?.let { append(String.format(Locale.US, " %.0fkm", it)) }
         }
     }
 
@@ -364,65 +344,66 @@ private fun DecodeTableRow(
                 .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 时隙（0/1）
-            Text(
-                slotLabel,
-                style = mono(labelSmallAlpha(alpha)),
-                color = textColor.copy(alpha = alpha),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.width(COL_SLOT),
-            )
-            // UTC
-            Text(
-                QsoTime.isoTime(msg.slotUtcMs),
-                style = mono(labelSmallAlpha(alpha)),
-                color = textColor.copy(alpha = alpha),
-                maxLines = 1,
-                modifier = Modifier.width(COL_UTC),
-            )
-            // 分贝
-            Text(
-                String.format(Locale.US, "%+3d", msg.snr),
-                style = mono(labelSmallAlpha(alpha)),
-                color = if (msg.snr >= 0) VoxRxGreen else textColor.copy(alpha = alpha),
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                modifier = Modifier.width(COL_SNR),
-            )
-            // 时差
-            Text(
-                String.format(Locale.US, "%+.1f", msg.dt),
-                style = mono(labelSmallAlpha(alpha)),
-                color = textColor.copy(alpha = alpha),
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                modifier = Modifier.width(COL_DT),
-            )
-            // 频率
-            Text(
-                "${msg.df}",
-                style = mono(labelSmallAlpha(alpha)),
-                color = textColor.copy(alpha = alpha),
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                modifier = Modifier.width(COL_DF),
-            )
-            // 信息：竖屏窄，允许换行到两行；仍放不下则由 [InfoText] 逐级缩小字号
-            Row(
-                modifier = Modifier.weight(1f).padding(start = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                InfoText(
-                    text = annotatedMessage(msg.text, myCall) + AnnotatedString(infoSuffix),
-                    color = textColor.copy(alpha = alpha),
-                    decoration = if (style.worked) workedDecoration else null,
-                    modifier = Modifier.weight(1f),
+            // 两行：第一行＝时隙 / UTC / 信号 / dT / 报文；第二行＝声音频率 / 国家 / 距离
+            // （第二行从行首开始，单项之间只留一个空格；表头已去掉，见 docs/UI-MOBILE.md §14）
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 时隙（0/1）
+                    Text(
+                        slotLabel,
+                        style = mono(labelSmallAlpha(alpha)),
+                        color = textColor.copy(alpha = alpha),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(COL_SLOT),
+                    )
+                    // UTC
+                    Text(
+                        QsoTime.isoTime(msg.slotUtcMs),
+                        style = mono(labelSmallAlpha(alpha)),
+                        color = textColor.copy(alpha = alpha),
+                        maxLines = 1,
+                        modifier = Modifier.width(COL_UTC),
+                    )
+                    // 信号（dB）
+                    Text(
+                        String.format(Locale.US, "%+3d", msg.snr),
+                        style = mono(labelSmallAlpha(alpha)),
+                        color = if (msg.snr >= 0) VoxRxGreen else textColor.copy(alpha = alpha),
+                        textAlign = TextAlign.End,
+                        maxLines = 1,
+                        modifier = Modifier.width(COL_SNR),
+                    )
+                    // 时差
+                    Text(
+                        String.format(Locale.US, "%+.1f", msg.dt),
+                        style = mono(labelSmallAlpha(alpha)),
+                        color = textColor.copy(alpha = alpha),
+                        textAlign = TextAlign.End,
+                        maxLines = 1,
+                        modifier = Modifier.width(COL_DT),
+                    )
+                    // 报文（一行；放不下则逐级缩小字号）
+                    InfoText(
+                        text = annotatedMessage(msg.text, myCall),
+                        color = textColor.copy(alpha = alpha),
+                        decoration = if (style.worked) workedDecoration else null,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                    if (style.toMe && endMarkMyCall) Marker(VoxError)
+                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
+                    if (style.newGrid) Marker(BarNewGrid)
+                    if (style.hasNewEntityMark) Marker(BarNewEntity)
+                    if (followed) Marker(BarNewCall)
+                }
+                // 声音频率 · 国家 · 距离
+                Text(
+                    metaLine,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = textColor.copy(alpha = 0.6f * alpha),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 2.dp),
                 )
-                if (style.toMe && endMarkMyCall) Marker(VoxError)
-                if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
-                if (style.newGrid) Marker(BarNewGrid)
-                if (style.hasNewEntityMark) Marker(BarNewEntity)
-                if (followed) Marker(BarNewCall)
             }
         }
 

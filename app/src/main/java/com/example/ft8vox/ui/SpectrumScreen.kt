@@ -1,5 +1,6 @@
 package com.example.ft8vox.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,8 +25,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
@@ -62,6 +70,7 @@ fun SpectrumScreen(
     val messages by viewModel.messages.collectAsState()
     val worked by viewModel.workedIndex.collectAsState()
     var detailFor by remember { mutableStateOf<Pair<DecodeResult, ParsedMessage>?>(null) }
+    val textMeasurer = rememberTextMeasurer()
 
     // ---- 频谱上叠加的解码呼号：最近 2–3 个时隙，锚定在各自的时间位置上 ----
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
@@ -75,11 +84,13 @@ fun SpectrumScreen(
     )
     val labels = remember(
         messages, worked, status.myCall, status.qso.theirCall, status.txing,
-        status.lastTxText, status.slotMs, duplicateKeys, highlightPrefs,
+        status.lastTxText, status.slotMs, status.protocol, duplicateKeys, highlightPrefs,
     ) {
         val slotMs = status.slotMs.toLong().coerceAtLeast(1L)
         val newest = messages.maxOfOrNull { it.slotUtcMs } ?: 0L
         val txText = if (status.txing) status.lastTxText else null
+        // 信号实际结束时刻：FT8/FT4 都在时隙起点后 0.5 s 起播，波形长 protocol.messageMs
+        val signalEndOffsetMs = 500L + status.protocol.messageMs
         val recent = messages.filter { it.slotUtcMs > 0 && it.slotUtcMs >= newest - slotMs * 2 }
         recent.mapNotNull { m ->
             val p = MessageParser.parse(m.text)
@@ -88,7 +99,12 @@ fun SpectrumScreen(
                 DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys, txText, highlightPrefs,
             ).role
             val call = p.from ?: m.text.substringBefore(' ')
-            SpectrumLabel(call = call, df = m.df, role = role, slotEndMs = m.slotUtcMs + slotMs)
+            SpectrumLabel(
+                call = call,
+                df = m.df,
+                role = role,
+                signalEndMs = m.slotUtcMs + signalEndOffsetMs,
+            )
         }
     }
 
@@ -137,36 +153,45 @@ fun SpectrumScreen(
                 },
             )
 
-            // 解码呼号叠加：x 按频率定位、y 按「时隙结束时刻」锚定 —— 从底部随瀑布一起向上滚，
-            // 滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失（docs/UI-MOBILE.md §4）。颜色＝JTDX 类别色。
+            // 解码呼号叠加（**竖排**：横排会互相叠字，转 90° 后只占一条窄缝）：
+            // x 按频率定位、y 按「信号实际结束时刻」锚定 —— 底端压在信号结束处，随瀑布向上滚，
+            // 滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失（docs/UI-MOBILE.md §14）。颜色＝JTDX 类别色。
             val frame = waterfall
             val span = frame?.let { it.bins * it.binHz }
-            val maxW = maxWidth
-            val maxH = maxHeight
             val windowMs = (WF_ROWS * WF_ROW_MS).toFloat()
             val nowWallMs = System.currentTimeMillis()
-            labels.forEach { label ->
-                val age = (nowWallMs - label.slotEndMs).toFloat()
-                if (age < 0f || age > windowMs) return@forEach
-                val frac = if (frame != null && span != null && span > 0f) {
-                    ((label.df - frame.fMinHz) / span).coerceIn(0f, 1f)
-                } else {
-                    0f
+            val labelStyle = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+            )
+            Canvas(Modifier.fillMaxSize().clipToBounds()) {
+                val f = frame
+                if (f == null || span == null || span <= 0f) return@Canvas
+                labels.forEach { label ->
+                    val age = (nowWallMs - label.signalEndMs).toFloat()
+                    if (age < 0f || age > windowMs) return@forEach
+                    val layout = textMeasurer.measure(label.call, style = labelStyle)
+                    val tw = layout.size.width.toFloat()
+                    val th = layout.size.height.toFloat()
+                    val frac = ((label.df - f.fMinHz) / span).coerceIn(0f, 1f)
+                    val cx = frac * size.width
+                    val yAnchor = size.height * (1f - age / windowMs)
+                    if (yAnchor <= 0f || cx < 0f || cx > size.width) return@forEach
+                    // 逆时针转 90°：文字从下往上读，底端锚在信号结束时刻、向上延伸
+                    val left = cx - th / 2f
+                    rotate(degrees = -90f, pivot = Offset(left, yAnchor)) {
+                        drawRect(
+                            color = Color(0xCC000000),
+                            topLeft = Offset(left, yAnchor),
+                            size = Size(tw, th),
+                        )
+                        drawText(
+                            textLayoutResult = layout,
+                            color = highlightTextColor(label.role),
+                            topLeft = Offset(left, yAnchor),
+                        )
+                    }
                 }
-                val x = (maxW * frac - 22.dp).coerceIn(0.dp, (maxW - 46.dp).coerceAtLeast(0.dp))
-                // age=0（刚解码）贴底，越旧越往上
-                val y = (maxH * (1f - age / windowMs) - 13.dp)
-                    .coerceIn(0.dp, (maxH - 14.dp).coerceAtLeast(0.dp))
-                Text(
-                    label.call,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = highlightTextColor(label.role),
-                    maxLines = 1,
-                    modifier = Modifier
-                        .offset(x = x, y = y)
-                        .background(Color(0xCC000000))
-                        .padding(horizontal = 2.dp),
-                )
             }
 
             // 发射中角标
@@ -251,11 +276,11 @@ fun SpectrumScreen(
     }
 }
 
-/** 频谱叠加的一条解码标签（呼号 + 音频频率 + 高亮类别 + 时隙结束时刻）。 */
+/** 频谱叠加的一条解码标签（呼号 + 音频频率 + 高亮类别 + 信号结束时刻）。 */
 private data class SpectrumLabel(
     val call: String,
     val df: Int,
     val role: HighlightRole,
-    /** 该解码所在时隙的结束时刻（ms）：用来锚定它在瀑布上的竖向位置。 */
-    val slotEndMs: Long,
+    /** 该解码**信号实际结束**的时刻（ms）：用来锚定它在瀑布上的竖向位置。 */
+    val signalEndMs: Long,
 )
