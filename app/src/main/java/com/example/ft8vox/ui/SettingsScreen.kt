@@ -801,7 +801,7 @@ private fun HighlightLegend() {
         LegendRow(BarNewCall, "粉：已关注的呼号")
 
         LegendSection("地图")
-        LegendRow(MapLinkMine, "红线 / 红字：与我有关的信号连线（报告 / R报告 / 73 / RR73）")
+        LegendRow(MapLinkMine, "红线 / 红字：与我有关的信号连线（我发出的 / 发给我的）")
         LegendRow(MapLinkColor, "蓝线：其它台站之间的连线")
     }
 }

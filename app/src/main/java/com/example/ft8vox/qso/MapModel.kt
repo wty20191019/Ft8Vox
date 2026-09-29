@@ -191,10 +191,13 @@ object MapModel {
     /**
      * 信号连线：**只取最近一个时隙**的解码，且**只画收发双方都在的报文**（如 `A B -12`）。
      *
-     * 方向为 `发方 → 收方`；**CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用红旗表示，
-     * 见 [cqFlags]），所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
+     * 方向为 `发方 → 收方`，**两个方向都画**：对端发给我的（收方是我）与我发出去的（发方是我，
+     * 本地回采 / 对端转发时会解码到自己）都会出现在地图上。
+     * **CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用红旗表示，见 [cqFlags]），
+     * 所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
      * 端点位置优先用报文网格，其次 [gridCache]，最后呼号前缀归属地；
-     * 收方是「我」时用 [myGrid]（避免把「我」定位到呼号前缀归属地）。
+     * 任一端是「我」时一律用 [myGrid]（避免把「我」定位到呼号前缀归属地）。`myGrid` 为空又不认识
+     * 那一端时，这条线画不出来（宁可不画，也不把我摆到几百公里外）。
      *
      * 收发任一方是我方呼号的连线标记为 `mine = true`，地图上画成红色（docs/UI-MOBILE.md §29）。
      */
@@ -213,32 +216,31 @@ object MapModel {
             if (m.slotUtcMs != slot) continue
             val p = MessageParser.parse(m.text)
             val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
-            if (from == me) continue
-            val fromLoc = resolve(from, p.grid, gridCache) ?: continue
             // CQ：无收方，不画连线（CQ 位置另有红旗标记）
             val to = p.to?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
-            val toLat: Double
-            val toLon: Double
-            if (to == me && mine != null) {
-                // 收方是我：用我的网格，避免把「我」定位到呼号前缀归属地
-                toLat = mine.first
-                toLon = mine.second
+            val fromIsMe = me.isNotEmpty() && from == me
+            val toIsMe = me.isNotEmpty() && to == me
+            val fromPos = if (fromIsMe) {
+                mine
             } else {
-                val toLoc = resolve(to, null, gridCache) ?: continue
-                toLat = toLoc.lat
-                toLon = toLoc.lon
-            }
+                resolve(from, p.grid, gridCache)?.let { it.lat to it.lon }
+            } ?: continue
+            val toPos = if (toIsMe) {
+                mine
+            } else {
+                resolve(to, null, gridCache)?.let { it.lat to it.lon }
+            } ?: continue
             out.add(
                 SignalLink(
                     fromCall = from,
                     toCall = to,
-                    fromLat = fromLoc.lat,
-                    fromLon = fromLoc.lon,
-                    toLat = toLat,
-                    toLon = toLon,
+                    fromLat = fromPos.first,
+                    fromLon = fromPos.second,
+                    toLat = toPos.first,
+                    toLon = toPos.second,
                     label = labelOf(p),
                     utcMs = slot,
-                    mine = me.isNotEmpty() && (from == me || to == me),
+                    mine = fromIsMe || toIsMe,
                 ),
             )
             if (out.size >= maxLinks) break

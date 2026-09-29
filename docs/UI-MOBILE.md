@@ -175,7 +175,7 @@
 ### 5.1 地图页（重做外观，保留世界网格图）
 
 - 全屏深色底图 + 网格方块 + 呼号点 + CQ 旗 + 信号连线，沿用现有 `GridScreen` 数据与投影。
-  **与我有关的连线（发给我的报告 / R报告 / 73 / RR73）线身与文字标红**，其余台站之间仍是蓝线（§29）。
+  **与我有关的连线（我发出的 / 发给我的报告、R报告、73、RR73）线身与文字标红**，其余台站之间仍是蓝线（§29）。
 - 只重做外观与手势：去掉旧顶栏，底部浮层只留**图例 + 计数 + 详情**，
   右下角浮控（放大 / 缩小 / 回我的位置，54 dp）。
 - 单击呼号点/CQ 旗 → 底部浮层详情（应答 / 日志 / 清除）。
@@ -626,10 +626,11 @@ sendOnceInternal（改前）
   其余仍是 `MapLinkColor`（`#89B4FA`，1.4px）。关掉「连线显示文字」时的移动方块，`mine` 用浅红 `#FFC9C9`。
 - 颜色常量从 `GridMap` 的私有量提到 `ui/theme/Color.kt`（`MapLinkColor` / `MapLinkMine`），
   这样设置页的图例能直接引用同一份定义，不会各写一个红。
-
-> 口径说明：`signalLinks` 一直**只画收方是对方的报文**（`from == me` 的行会被跳过，因为本台发射的
-> 报文也会被本地回采解码，全画出来会有一堆线汇到自己身上）。所以现在变红的实际是「**发给我的**」连线。
-> 想让「我发出去的」也画线，需要另说（会改变地图的信息密度）。
+- **两个方向都画**：`signalLinks` 原来跳过 `from == me` 的行（本台发射的报文会被本地回采解码，
+  全画出来会有一堆线汇到自己身上）；按用户要求改为**照画**，于是地图上「我发出的」（`我 → 对方`）与
+  「发给我的」（`对方 → 我`）都是红线，中间夹的报文就是实际发出去/收到的报告或 `73`/`RR73`。
+- 端点定位：任一端是「我」时**一律用 `myGrid`**（用呼号前缀归属地会把我摆到几百公里外）；
+  `myGrid` 为空时这条线**画不出来就跳过**（`outboundLinkWithoutMyGridIsSkipped` 锁住这个行为）。
 
 ### 29.2 解码列表：报文列标红、色卡不动
 
@@ -668,11 +669,14 @@ sendOnceInternal（改前）
 
 ### 29.4 验收与遗留
 
-- 新增/改写单测：`MapModelTest` 加 `linkIsMineOnlyWhenItTouchesMyCall`（并在既有用例里断言 `mine`）、
+- 新增/改写单测：`MapModelTest` 加 `linkIsMineOnlyWhenItTouchesMyCall`、`outboundLinkFromMeIsDrawnAndAnchoredAtMyGrid`、
+  `outboundLinkWithoutMyGridIsSkipped`（并在既有用例里断言 `mine`）、
   `DecodeHighlightTest` 加 `newGridWinsOverNewEntityWhenBothHit`、`cqAndWorkedWinOverNewCategories`，
-  `workedEntitySuppressesNewItuAndCqZone` 改为不依赖 prefs；合计 **37 suite / 368 例 / 0 失败 0 错**，
+  `workedEntitySuppressesNewItuAndCqZone` 改为不依赖 prefs；合计 **37 suite / 370 例 / 0 失败 0 错**，
   `:app:assembleDebug` 通过。
 - 提醒：测试里的报文格式是「**收方 发方 内容**」（`F4FSY K1ABC RR73` = K1ABC 发给 F4FSY），
   写用例时别把 `from` / `to` 弄反。
-- 遗留（待用户确认）：① 设置页里 `末端标记：红=有我 / 蓝=正通联` 这两个**颜色标记**开关要不要也一起取消
-  （本轮按你确认的范围只动了 6 个高亮开关 + 已通联）；② 地图上「我发出去的」连线是否也要画出来（见 §29.1 说明）。
+- 补做（用户当场追加）：「我发出去的」连线也画出来 —— `signalLinks` 去掉 `from == me` 跳过、两端都用
+  `myGrid` 定位（§29.1 第 4/5 条）。
+- 遗留（待用户确认）：设置页里 `末端标记：红=有我 / 蓝=正通联` 这两个**颜色标记**开关要不要也一起取消
+  （本轮按你确认的范围只动了 6 个高亮开关 + 已通联）。

@@ -1,6 +1,7 @@
 package com.example.ft8vox.qso
 
 import com.example.ft8vox.engine.DecodeResult
+import com.example.ft8vox.grid.Maidenhead
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -189,6 +190,39 @@ class MapModelTest {
         assertFalse(links[0].mine) // 别人之间 → 蓝线
         assertEquals("K1ABC", links[1].fromCall)
         assertTrue(links[1].mine) // 发给我的 → 红线
+    }
+
+    @Test
+    fun outboundLinkFromMeIsDrawnAndAnchoredAtMyGrid() {
+        // `JA1ABC F4FSY -12` = F4FSY（我）发给 JA1ABC → 也要画，并且红色
+        val links = MapModel.signalLinks(
+            messages = listOf(decoded("JA1ABC F4FSY -12", slotUtcMs = 1000)),
+            myCall = "F4FSY",
+            myGrid = "JN25",
+            gridCache = mapOf("JA1ABC" to "PM95"),
+        )
+        assertEquals(1, links.size)
+        val l = links[0]
+        assertEquals("F4FSY", l.fromCall)
+        assertEquals("JA1ABC", l.toCall)
+        assertEquals("-12", l.label)
+        assertTrue(l.mine)
+        // 我的那一端用 myGrid 中心定位，不是呼号前缀归属地
+        val my = Maidenhead.center("JN25")!!
+        assertEquals(my.first, l.fromLat, 1e-9)
+        assertEquals(my.second, l.fromLon, 1e-9)
+    }
+
+    @Test
+    fun outboundLinkWithoutMyGridIsSkipped() {
+        // 不知道自己网格时宁可不画，也不把「我」摆到呼号前缀归属地
+        val links = MapModel.signalLinks(
+            messages = listOf(decoded("JA1ABC F4FSY -12", slotUtcMs = 1000)),
+            myCall = "F4FSY",
+            myGrid = null,
+            gridCache = mapOf("JA1ABC" to "PM95"),
+        )
+        assertEquals(0, links.size)
     }
 
     @Test
