@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
@@ -179,6 +180,13 @@ fun SpectrumScreen(
                     // 顺时针转 90°：文字自上而下读，底端锚在信号结束时刻、向上铺满信号的轨迹
                     val pivot = Offset(cx + th / 2f, yAnchor - tw)
                     rotate(degrees = 90f, pivot = pivot) {
+                        // 先描一圈黑边（弱信号区也读得清），再填 JTDX 类别色
+                        drawText(
+                            textLayoutResult = layout,
+                            color = Color.Black,
+                            topLeft = pivot,
+                            drawStyle = Stroke(width = 2.5f),
+                        )
                         drawText(
                             textLayoutResult = layout,
                             color = highlightTextColor(label.role),

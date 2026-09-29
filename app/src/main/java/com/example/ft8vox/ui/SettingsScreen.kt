@@ -119,11 +119,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(
-            "设置",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(start = 2.dp, top = 4.dp, bottom = 4.dp),
-        )
+        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/UI-MOBILE.md §15）
 
         // ---------- 台站（设计外补充：无 CAT，台站信息必填） ----------
         SettingsGroup("台站") {

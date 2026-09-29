@@ -102,8 +102,6 @@ fun LogScreen(
 
     Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("日志", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.width(8.dp))
             Text(
                 "共 ${stats.total} 条",
                 style = MaterialTheme.typography.labelSmall,
