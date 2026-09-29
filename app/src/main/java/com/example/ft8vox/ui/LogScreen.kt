@@ -101,6 +101,9 @@ fun LogScreen(
     val adif = rememberAdifActions(log, myCall, myGrid) { statusText = it }
 
     Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
+        // 统计卡在顶部（设计稿「统计卡 + 卡片列表」；docs/UI-MOBILE.md §16）
+        StatsPanel(stats)
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "共 ${stats.total} 条",
@@ -191,8 +194,6 @@ fun LogScreen(
                 }
             }
         }
-
-        StatsPanel(stats)
     }
 
     if (creating) {
@@ -565,13 +566,13 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
     }
 }
 
-/** 底部常驻统计：QSO / DXCC / 网格 / 确认 + 波段柱图。 */
+/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 波段柱图（docs/UI-MOBILE.md §16：从底部挪到顶部）。 */
 @Composable
 private fun StatsPanel(stats: LogStats) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth()) {
@@ -581,7 +582,7 @@ private fun StatsPanel(stats: LogStats) {
                 StatCell("确认", stats.confirmed.toString(), Modifier.weight(1f))
             }
             if (stats.byBand.isNotEmpty()) {
-                BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(64.dp).padding(top = 8.dp))
+                BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(52.dp).padding(top = 6.dp))
             }
             Text(
                 "DXCC 按呼号前缀映射实体表（常用实体精选子集）",

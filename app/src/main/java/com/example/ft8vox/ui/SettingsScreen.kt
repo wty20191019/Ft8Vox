@@ -81,7 +81,8 @@ import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 日志 / 地图 / 关于
+ * （「外观」组已随新竖屏外壳去掉，见 docs/UI-MOBILE.md §1）。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -89,6 +90,7 @@ fun SettingsScreen(
     settings: SettingsViewModel,
     log: LogViewModel,
     session: SessionViewModel,
+    onHelp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val app by settings.settings.collectAsState()
@@ -246,6 +248,9 @@ fun SettingsScreen(
 
         // ---------- 6.2 音频 ----------
         SettingsGroup("音频") {
+            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/UI-MOBILE.md §16）
+            AudioQuickPanel(sessionStatus, app)
+            PrefDivider()
             PrefDropdown(
                 title = "输入设备",
                 subtitle = "指定接收音频输入；USB 声卡插入后需重进本页刷新。运行中切换需重新「开始接收」",
@@ -561,8 +566,36 @@ fun SettingsScreen(
             )
         }
 
+        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/UI-MOBILE.md §16） ----------
+        SettingsGroup("地图") {
+            PrefSwitch(
+                title = "CQ 旗帜显示呼号",
+                checked = app.mapCqFlagShowCall,
+                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowCall = v) } },
+            )
+            PrefDivider()
+            PrefSwitch(
+                title = "CQ 旗帜显示强度",
+                checked = app.mapCqFlagShowSnr,
+                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowSnr = v) } },
+            )
+            PrefDivider()
+            PrefSwitch(
+                title = "连线显示文字",
+                checked = app.mapShowLinkText,
+                onCheckedChange = { v -> settings.update { it.copy(mapShowLinkText = v) } },
+            )
+        }
+
         // ---------- 关于 ----------
         SettingsGroup("关于") {
+            PrefAction(
+                title = "操作与手势",
+                subtitle = "解码行点按 / 长按 / 左右滑；频谱拖红线设发射频率；报文槽点击发射等",
+                buttonLabel = "查看",
+                onClick = onHelp,
+            )
+            PrefDivider()
             val version = rememberAppVersion()
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text("Ft8Vox $version", style = MaterialTheme.typography.bodySmall)

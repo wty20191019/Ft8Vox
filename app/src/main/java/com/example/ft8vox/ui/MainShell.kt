@@ -152,13 +152,11 @@ fun MainShell(
     ) {
         MobileInfoHeader(
             status = status,
-            appSettings = appSettings,
             messages = messages,
             nowMs = nowMs,
             onBandFreq = session::setBandFreq,
             onTxEnabledChange = session::setTxEnabled,
             onOpenSettings = { tab = MainTab.SETTINGS },
-            onHelp = { helpDialogOpen = true },
         )
 
         Box(Modifier.weight(1f).fillMaxWidth().fillMaxHeight()) {
@@ -203,7 +201,6 @@ fun MainShell(
                     log = log,
                     session = session,
                     settings = appSettings,
-                    onUpdateSettings = settings::update,
                     onOpenLog = { tab = MainTab.LOG },
                     focusCall = mapFocusCall,
                     focusSeq = mapFocusSeq,
@@ -218,7 +215,12 @@ fun MainShell(
                     focusSeq = logFocusSeq,
                 )
 
-                MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
+                MainTab.SETTINGS -> SettingsScreen(
+                    settings = settings,
+                    log = log,
+                    session = session,
+                    onHelp = { helpDialogOpen = true },
+                )
             }
         }
 

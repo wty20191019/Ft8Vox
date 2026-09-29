@@ -162,25 +162,25 @@ private fun mono(fontSize: Int) = MaterialTheme.typography.labelLarge.copy(
  * 竖屏信息头（docs/UI-MOBILE.md §3.1），三行紧凑：
  *
  * 1. 大频率 + 波段·模式 + **发送总开关**（唯一发射闸门）
- * 2. UTC 时钟 + 时隙进度 + 输入电平 + 收发状态点 + 音频速览
+ * 2. UTC 时钟 + 时隙进度 + 输入电平 + 收发状态点
  * 3. 我方呼号/网格 + DX 目标回显（未设呼号时红字「请到设置填写」）
+ *
+ * 第二行原先的「音频」「?」两个小按钮已收走（实机太挤，见 docs/UI-MOBILE.md §16）：
+ * 音频速览移进设置页「音频」组，手势速查移进设置页「关于」组。
  */
 @Composable
 fun MobileInfoHeader(
     status: ReceiverStatus,
-    appSettings: AppSettings,
     messages: List<DecodeResult>,
     nowMs: Long,
     onBandFreq: (String, Long) -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
-    onHelp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dialHz = status.dialHz.takeIf { it > 0 } ?: BandPlan.resolveDialHz(status.band, 0L)
     val freqText = if (dialHz > 0) String.format(Locale.US, "%.6f", dialHz / 1_000_000.0) else "--.------"
     var bandDialog by remember { mutableStateOf(false) }
-    var audioOpen by remember { mutableStateOf(false) }
 
     // DX 目标回显：目标呼号 + 最近一条该台的网格 + 报告
     val target = status.qso.theirCall?.takeIf { it.isNotBlank() }
@@ -245,8 +245,6 @@ fun MobileInfoHeader(
                 maxLines = 1,
             )
             TxRxDot(status.txing, status.running)
-            JtdxButton(text = "音频", onClick = { audioOpen = true })
-            JtdxButton(text = "?", onClick = onHelp, modifier = Modifier.width(28.dp))
         }
 
         // 行 3
@@ -306,14 +304,6 @@ fun MobileInfoHeader(
         )
     }
 
-    if (audioOpen) {
-        AlertDialog(
-            onDismissRequest = { audioOpen = false },
-            title = { Text("音频 / VOX 速览") },
-            text = { AudioQuickPanel(status, appSettings) },
-            confirmButton = { TextButton(onClick = { audioOpen = false }) { Text("关闭") } },
-        )
-    }
 }
 
 /**
@@ -624,9 +614,9 @@ fun BandFreqDialog(
     )
 }
 
-/** 音频 / VOX 速览（显示采样率、VOX 电平与判定配置）。 */
+/** 音频 / VOX 速览（显示采样率、VOX 电平与判定配置）；已从信息头收进设置页「音频」组。 */
 @Composable
-private fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
+fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
     val context = LocalContext.current
     val inputName = remember(appSettings.inputDevice) {
         AudioDevices.label(AudioDevices.inputs(context), appSettings.inputDevice)
