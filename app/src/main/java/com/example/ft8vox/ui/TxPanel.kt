@@ -206,8 +206,7 @@ fun TxPanel(
                         index = index + 1,
                         kind = kind,
                         text = text,
-                        lit = text != null && tone == text,
-                        txing = status.txing,
+                        led = slotLed(text, status.lastTxText, pending, status.txing),
                         maxLines = if (portrait) 2 else 3,
                         onClick = {
                             customEdited = false
@@ -238,36 +237,67 @@ fun TxPanel(
     }
 }
 
+/** 报文槽指示灯：正在发送（红）> 待发（绿）> 熄灭。 */
+internal enum class SlotLed { OFF, QUEUED, ON_AIR }
+
+/**
+ * 判定某一格报文槽的指示灯（实机反馈：**发送中的那格红点、待发的那格绿点**）。
+ *
+ * @param text 本格报文（`null`＝该步现在没有报文，不点灯）
+ * @param onAirText 本时隙**真正在播**的报文（`status.lastTxText`，只在 [txing] 时有意义）
+ * @param pendingText 下一次要发的报文（`status.pendingTxText`）
+ * @param txing 是否正在发射
+ *
+ * 「正在发送」优先级高于「待发」：收尾报文（RR73/73）已排定但上一条还在播时，
+ * 会同时出现「红点在播的那格 + 绿点下一格」，这正是真机想要的读法。
+ */
+internal fun slotLed(
+    text: String?,
+    onAirText: String?,
+    pendingText: String?,
+    txing: Boolean,
+): SlotLed = when {
+    text == null -> SlotLed.OFF
+    txing && text == onAirText -> SlotLed.ON_AIR
+    text == pendingText -> SlotLed.QUEUED
+    else -> SlotLed.OFF
+}
+
 /** 一个报文槽（3×2 网格中的一格）：编号 + 步骤名 + 报文内容，点一下即排程发射。 */
 @Composable
 private fun RowScope.TxSlot(
     index: Int,
     kind: TxMessageKind,
     text: String?,
-    lit: Boolean,
-    txing: Boolean,
+    led: SlotLed,
     maxLines: Int,
     onClick: () -> Unit,
 ) {
+    // 指示灯与边框同色：正在发送=红、待发=绿、其余=暗灰（实机反馈：发送中红点、待发绿点）
+    val accent = when (led) {
+        SlotLed.ON_AIR -> VoxTxRed
+        SlotLed.QUEUED -> JtdxGreen
+        SlotLed.OFF -> JtdxBorder
+    }
     Box(
         modifier = Modifier
             .weight(1f)
             .heightIn(min = 42.dp)
             .clip(RoundedCornerShape(2.dp))
             .background(JtdxPanelHi)
-            .border(1.dp, if (lit) (if (txing) VoxTxRed else JtdxGreen) else JtdxBorder, RoundedCornerShape(2.dp))
+            .border(1.dp, accent, RoundedCornerShape(2.dp))
             .clickable(enabled = text != null, onClick = onClick)
             .padding(horizontal = 3.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                JtdxLed(on = lit, color = if (txing) VoxTxRed else JtdxGreen)
+                JtdxLed(on = led != SlotLed.OFF, color = accent)
                 Spacer(Modifier.width(3.dp))
                 Text(
                     "$index ${kind.label}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (led == SlotLed.OFF) MaterialTheme.colorScheme.onSurfaceVariant else accent,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
