@@ -62,7 +62,6 @@ import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.DecodeResult
-import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.ui.theme.JtdxBorder
@@ -78,7 +77,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 /**
- * 手机竖屏外壳（docs/UI-MOBILE.md §2、§3.1、§7）：**三行信息头 / 底部导航 / 细状态条**。
+ * 手机竖屏外壳（docs/UI-MOBILE.md §2、§3.1、§7、§26）：**四行信息头 / 底部导航**。
  *
  * 取代旧 `docs/UI-JTDX.md` 的「菜单栏 + 控制行 + 左侧竖导航」横屏外壳。
  * 保留原有工具函数（[rememberUtcNowMs] / [decodesPerMinute] / [timeSyncWarning] /
@@ -182,17 +181,26 @@ private fun mono(fontSize: Int) = MaterialTheme.typography.labelLarge.copy(
  * 竖屏信息头（docs/UI-MOBILE.md §3.1），三行紧凑：
  *
  * 1. 大频率 + 波段·模式 + **发送总开关**（唯一发射闸门）
- * 2. UTC 时钟 + 时隙进度 + 输入电平 + 收发状态点
+ * 2. UTC 时钟 + 时隙进度 + **我方发射时序 `TX0/TX1`** + 输入电平 + 收发状态点
  * 3. 我方呼号/网格 + DX 目标回显（未设呼号时红字「请到设置填写」）
+ * 4. 统计读数（解码速率 / 解码总数 / 通联数 / 队列）+ 时间同步 + 日期
  *
  * 第二行原先的「音频」「?」两个小按钮已收走（实机太挤，见 docs/UI-MOBILE.md §16）：
  * 音频速览移进设置页「音频」组，手势速查移进设置页「关于」组。
+ *
+ * 第 4 行是**原底部细状态条**（§26）：整条搬到顶端，并去掉与上三行重复的
+ * 「模式」（行 1 已有 `波段 · 模式`）、「时隙 N」（行 2 已有）与「接收/发射/停止」文字块
+ * （行 2 的收发状态点即它）。这样全局状态只有一处，底部不再占一条。
  */
 @Composable
 fun MobileInfoHeader(
     status: ReceiverStatus,
     messages: List<DecodeResult>,
     nowMs: Long,
+    decodedTotal: Long,
+    qsoCount: Int,
+    queueCount: Int,
+    dateText: String,
     onBandFreq: (String, Long) -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
@@ -264,6 +272,11 @@ fun MobileInfoHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
+            // 我方发射时序徽标：与「时隙 N」同一语义，放同一行（原在底部细状态条，§26 搬上来）
+            TxParityBadge(
+                parity = status.txParity,
+                on = status.txing || (status.running && status.slotParity == status.txParity),
+            )
             TxRxDot(status.txing, status.running)
         }
 
@@ -309,6 +322,31 @@ fun MobileInfoHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+
+        // 行 4：统计读数 + 时间同步 + 日期（原底部细状态条整条搬上来，§26）
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            JtdxCaption("解码${decodesPerMinute(messages, nowMs)}/min")
+            JtdxCaption("总$decodedTotal")
+            JtdxCaption("QSO$qsoCount")
+            JtdxCaption("队列$queueCount")
+            Spacer(Modifier.weight(1f))
+            val syncWarning = timeSyncWarning(messages.firstOrNull()?.dt)
+            if (syncWarning != null) {
+                Text(
+                    syncWarning,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VoxError,
+                    maxLines = 1,
+                )
+            } else {
+                JtdxCaption("时间同步")
+            }
+            JtdxCaption(dateText)
         }
     }
 
@@ -431,80 +469,10 @@ private fun WaterfallTabIcon(selected: Boolean) {
     }
 }
 
-// ---------------------------------------------------------------- 细状态条
+// ---------------------------------------------------------------- 发射时序徽标
 
 /**
- * 底部细状态条（docs/UI-MOBILE.md §7、§21）：
- * `[接收/发射] FT8 解码12/min 总123 QSO7 队列0 时隙1 [TX0] 时间同步 09-29`。
- *
- * `[TX0]` / `[TX1]` 是**我方发射时隙**（[txParity]）：轮到我方时隙或正在发射时红底黑字，
- * 其余时刻深灰底灰字，用来一眼判断「现在是不是我发」。
- */
-@Composable
-fun MobileStatusBar(
-    running: Boolean,
-    txing: Boolean,
-    protocol: Protocol,
-    decodePerMin: Int,
-    decodedTotal: Long,
-    qsoCount: Int,
-    queueCount: Int,
-    slotParity: Int,
-    /** 我方发射时隙奇偶：0=偶数时隙，1=奇数时隙（自动锁定）。 */
-    txParity: Int,
-    timeWarning: String?,
-    dateText: String,
-    modifier: Modifier = Modifier,
-) {
-    val stateText = when {
-        txing -> "发射"
-        running -> "接收"
-        else -> "停止"
-    }
-    val stateColor = when {
-        txing -> VoxTxRed
-        running -> VoxRxGreen
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    // 现在轮到我方发射（或正在发射）
-    val mySlotNow = txing || (running && slotParity == txParity)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(JtdxPanel)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(38.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(stateColor)
-                .padding(vertical = 1.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(stateText, style = MaterialTheme.typography.labelSmall, color = Color.Black)
-        }
-        Text(protocol.name, style = MaterialTheme.typography.labelSmall, color = JtdxGreen)
-        JtdxCaption("解码$decodePerMin/min")
-        JtdxCaption("总$decodedTotal")
-        JtdxCaption("QSO$qsoCount")
-        JtdxCaption("队列$queueCount")
-        JtdxCaption("时隙$slotParity")
-        TxParityBadge(parity = txParity, on = mySlotNow)
-        Spacer(Modifier.weight(1f))
-        if (timeWarning != null) {
-            Text(timeWarning, style = MaterialTheme.typography.labelSmall, color = VoxError)
-        } else {
-            JtdxCaption("时间同步")
-        }
-        JtdxCaption(dateText)
-    }
-}
-
-/**
- * 状态条里的「我方发射时序」徽标（docs/UI-MOBILE.md §21）：`TX0` / `TX1`。
+ * 信息头第 2 行的「我方发射时序」徽标（docs/UI-MOBILE.md §21、§26）：`TX0` / `TX1`。
  *
  * @param parity 我方发射时隙奇偶
  * @param on 现在轮到我方（或正在发射）时红底黑字，否则深灰底灰字

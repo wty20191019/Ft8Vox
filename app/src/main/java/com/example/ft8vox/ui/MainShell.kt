@@ -49,7 +49,7 @@ enum class MainTab(val label: String) {
 }
 
 /**
- * 应用主壳（docs/UI-MOBILE.md §2）：**竖屏，三行信息头 + 内容 + 底部导航 + 细状态条**。
+ * 应用主壳（docs/UI-MOBILE.md §2）：**竖屏，四行信息头 + 内容 + 底部导航**。
  *
  * - 全局锁定竖屏（`AndroidManifest` 的 `sensorPortrait`）。
  * - 三个 ViewModel 都是 Activity 作用域，切换页面不重建，接收与 QSO 流程不中断。
@@ -154,6 +154,10 @@ fun MainShell(
             status = status,
             messages = messages,
             nowMs = nowMs,
+            decodedTotal = status.decodedTotal,
+            qsoCount = stats.total,
+            queueCount = status.autoQueueSize + if (status.manualTxText != null) 1 else 0,
+            dateText = dateText,
             onBandFreq = session::setBandFreq,
             onTxEnabledChange = session::setTxEnabled,
             onOpenSettings = { tab = MainTab.SETTINGS },
@@ -230,20 +234,6 @@ fun MainShell(
         }
 
         MobileBottomNav(tab = tab, onTab = { tab = it })
-
-        MobileStatusBar(
-            running = status.running,
-            txing = status.txing,
-            protocol = status.protocol,
-            decodePerMin = decodesPerMinute(messages, nowMs),
-            decodedTotal = status.decodedTotal,
-            qsoCount = stats.total,
-            queueCount = status.autoQueueSize + if (status.manualTxText != null) 1 else 0,
-            slotParity = status.slotParity,
-            txParity = status.txParity,
-            timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
-            dateText = dateText,
-        )
     }
 
     if (autoDialogOpen) {
