@@ -54,7 +54,9 @@ import com.example.ft8vox.ui.theme.VoxTxRed
  * 闸门是信息头右上角的「发射 / 只接收」总开关（默认只接收），本组件不再自带开关。
  *
  * 「自定义报文」框**自动同步当前待发报文**（docs/UI-MOBILE.md §21）：待发一变就填进框，
- * 不用再点「生成信息」；手动改过则先按手动的，发送后 / 点「生成信息」回到自动同步。
+ * 不用再点「生成信息」。**一打字就进入「手动优先」**（§27），不会被自动同步冲掉；点「发送」
+ * 即把框里这条排到下一个我方时隙（**不打断正在跑的 QSO**，只是在原序列里插一条），
+ * 编不出来 / 被拒时底部红字当场说明，发送成功后框回到自动同步。
  */
 @Composable
 fun TxPanel(
@@ -104,6 +106,11 @@ fun TxPanel(
     LaunchedEffect(pending) {
         if (!customEdited) custom = pending.orEmpty()
     }
+    // 一次性报文排程成功（待发报文正是框里这条）→ 交回自动同步：发完跟着显示真正的待发报文
+    // （§27：点「发送」后框里清空 / 回到自动同步）
+    LaunchedEffect(status.manualTxText) {
+        if (status.manualTxText != null && status.manualTxText == custom.trim()) customEdited = false
+    }
     // 竖屏窄，槽内文字最多两行
     val portrait = LocalConfiguration.current.screenWidthDp < 600
 
@@ -124,7 +131,12 @@ fun TxPanel(
             JtdxButton(text = "生成信息", onClick = generate)
             JtdxTextField(
                 value = custom,
-                onValueChange = { custom = it },
+                onValueChange = {
+                    custom = it
+                    // 手动输入即「手动优先」（§27）：不再被待发报文的自动同步冲掉。
+                    // 清空输入框则回到自动同步。
+                    customEdited = it.isNotBlank()
+                },
                 modifier = Modifier.weight(1f),
                 placeholder = tone ?: "自定义报文",
                 textStyle = MaterialTheme.typography.labelSmall,
@@ -154,10 +166,9 @@ fun TxPanel(
             }
             JtdxButton(
                 text = "发送",
-                onClick = {
-                    customEdited = false
-                    onSendOnce(custom)
-                },
+                // 点「发送」＝发框里这条报文（不打断正在跑的 QSO，见 SessionViewModel.sendOnce）；
+                // 编不出来 / 被拒都会在底部红字说明，所以按钮保持可点、不置灰。
+                onClick = { onSendOnce(custom) },
                 enabled = custom.isNotBlank(),
                 active = status.txArmed && !status.txing,
             )
@@ -217,19 +228,20 @@ fun TxPanel(
             }
         }
 
-        if (status.qso.active) {
+        // 底部提示一行（§27）：**一次性发射被拒 / 编不出来的原因（红）** 优先，
+        // 其次是常驻的「只接收」提醒（红），最后才是 QSO 进度（绿）。
+        val notice = status.txNotice
+        val hintText = when {
+            notice != null -> notice
+            !status.txEnabled -> "只接收：打开信息头右上角「发射」开关后才允许发射"
+            status.qso.active -> "QSO：${status.qso.description}"
+            else -> null
+        }
+        if (hintText != null) {
             Text(
-                "QSO：${status.qso.description}",
+                hintText,
                 style = MaterialTheme.typography.labelSmall,
-                color = JtdxGreen,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        } else if (!status.txEnabled) {
-            Text(
-                "只接收：打开信息头右上角「发射」开关后才允许发射",
-                style = MaterialTheme.typography.labelSmall,
-                color = VoxError,
+                color = if (notice != null || !status.txEnabled) VoxError else JtdxGreen,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
