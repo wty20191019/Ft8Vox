@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.DecodeResult
@@ -153,6 +154,38 @@ private fun headerStyle() = MaterialTheme.typography.labelSmall.copy(
     fontWeight = FontWeight.Bold,
     color = MaterialTheme.colorScheme.onSurfaceVariant,
 )
+
+/**
+ * 「信息」列文本（docs/UI-MOBILE.md §3.3）。
+ *
+ * 竖屏宽，但一行仍放不下「呼号+网格+报告+实体+距离」：
+ * **允许折到两行**；折两行仍放不下时**逐级缩小字号**（12sp → 8sp）塞进去，
+ * 而不是省略号截断（长报文少见，缩一点比看不清好）。
+ */
+@Composable
+private fun InfoText(
+    text: AnnotatedString,
+    color: Color,
+    decoration: TextDecoration?,
+    modifier: Modifier = Modifier,
+) {
+    var fontSize by remember(text) { mutableStateOf(12) }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium.copy(
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSize.sp,
+        ),
+        color = color,
+        textDecoration = decoration,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+        onTextLayout = { layout ->
+            if (layout.hasVisualOverflow && fontSize > 8) fontSize -= 1
+        },
+    )
+}
 
 /**
  * 解码表格主体（新→旧，最新在上）。
@@ -374,28 +407,17 @@ private fun DecodeTableRow(
                 maxLines = 1,
                 modifier = Modifier.width(COL_DF),
             )
-            // 信息
+            // 信息：竖屏窄，允许换行到两行；仍放不下则由 [InfoText] 逐级缩小字号
             Row(
                 modifier = Modifier.weight(1f).padding(start = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    annotatedMessage(msg.text, myCall),
-                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                InfoText(
+                    text = annotatedMessage(msg.text, myCall) + AnnotatedString(infoSuffix),
                     color = textColor.copy(alpha = alpha),
-                    textDecoration = if (style.worked) workedDecoration else null,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    decoration = if (style.worked) workedDecoration else null,
+                    modifier = Modifier.weight(1f),
                 )
-                if (infoSuffix.isNotEmpty()) {
-                    Text(
-                        infoSuffix,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = textColor.copy(alpha = 0.6f * alpha),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
                 if (style.toMe && endMarkMyCall) Marker(VoxError)
                 if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
                 if (style.newGrid) Marker(BarNewGrid)

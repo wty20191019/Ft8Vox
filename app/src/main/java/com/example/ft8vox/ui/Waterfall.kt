@@ -23,6 +23,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 const val WF_ROWS = 300
 
 /**
+ * 瀑布每一行对应的时间（毫秒）＝ 80 ms（native 侧 `K_WF_RING_ROWS=600 ≈ 48 s` 同源）。
+ *
+ * 频谱页据此把解码呼号**锚定到它在瀑布上的时间位置**，随瀑布向上滚动，而不是固定贴在某个高度。
+ */
+const val WF_ROW_MS = 80
+
+/**
  * 一帧瀑布快照。
  *
  * [pixels] 为 ARGB_8888 行主序，长度 = bins * rows，最早的行在前、最新的行在后。

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -362,16 +365,59 @@ fun MobileBottomNav(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
-                    Icon(
-                        imageVector = tabIcon(t),
-                        contentDescription = t.label,
-                        tint = color,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    TabIcon(tab = t, selected = selected, color = color)
                     Text(t.label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
                 }
             }
         }
+    }
+}
+
+/** 底部导航图标：频谱用自绘「瀑布 + 发射线」，其余用 `material-icons-core` 的 Material 图标。 */
+@Composable
+private fun TabIcon(tab: MainTab, selected: Boolean, color: Color) {
+    if (tab == MainTab.SPECTRUM) {
+        WaterfallTabIcon(selected)
+    } else {
+        Icon(
+            imageVector = tabIcon(tab),
+            contentDescription = tab.label,
+            tint = color,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/**
+ * 自绘「频谱」图标：4 条横向瀑布色带（蓝 → 青 → 绿 → 黄）+ 一条红色发射线。
+ *
+ * `material-icons-core` 里没有瀑布图标，所以这一项自己画（docs/UI-MOBILE.md §7）；
+ * 未选中时整体降透明度，跟其它 Material 图标观感一致。
+ */
+@Composable
+private fun WaterfallTabIcon(selected: Boolean) {
+    val a = if (selected) 1f else 0.5f
+    val bands = listOf(
+        Color(0xFF1E3A8A), // 深蓝
+        Color(0xFF00A2C7), // 青
+        Color(0xFF3FBF6F), // 绿
+        Color(0xFFE0D63C), // 黄
+    )
+    Canvas(Modifier.size(20.dp)) {
+        val h = size.height / bands.size
+        bands.forEachIndexed { i, c ->
+            drawRect(
+                color = c.copy(alpha = a),
+                topLeft = Offset(0f, i * h + 0.5f),
+                size = Size(size.width, (h - 1.2f).coerceAtLeast(1f)),
+            )
+        }
+        drawLine(
+            color = Color(0xFFFF5252).copy(alpha = if (selected) 1f else 0.75f),
+            start = Offset(size.width * 0.45f, 0f),
+            end = Offset(size.width * 0.45f, size.height),
+            strokeWidth = 2f,
+        )
     }
 }
 

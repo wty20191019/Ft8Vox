@@ -63,7 +63,7 @@ fun SpectrumScreen(
     val worked by viewModel.workedIndex.collectAsState()
     var detailFor by remember { mutableStateOf<Pair<DecodeResult, ParsedMessage>?>(null) }
 
-    // ---- 频谱上叠加的解码呼号：最近 2–3 个时隙（docs/UI-MOBILE.md §4）----
+    // ---- 频谱上叠加的解码呼号：最近 2–3 个时隙，锚定在各自的时间位置上 ----
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     val highlightPrefs = HighlightPrefs(
         newCall = settings.highlightNewCall,
@@ -88,7 +88,7 @@ fun SpectrumScreen(
                 DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys, txText, highlightPrefs,
             ).role
             val call = p.from ?: m.text.substringBefore(' ')
-            SpectrumLabel(call = call, df = m.df, role = role)
+            SpectrumLabel(call = call, df = m.df, role = role, slotEndMs = m.slotUtcMs + slotMs)
         }
     }
 
@@ -137,19 +137,26 @@ fun SpectrumScreen(
                 },
             )
 
-            // 解码呼号叠加：按频率位置贴在下半屏，颜色＝JTDX 类别色
+            // 解码呼号叠加：x 按频率定位、y 按「时隙结束时刻」锚定 —— 从底部随瀑布一起向上滚，
+            // 滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失（docs/UI-MOBILE.md §4）。颜色＝JTDX 类别色。
             val frame = waterfall
             val span = frame?.let { it.bins * it.binHz }
             val maxW = maxWidth
             val maxH = maxHeight
-            labels.forEachIndexed { i, label ->
+            val windowMs = (WF_ROWS * WF_ROW_MS).toFloat()
+            val nowWallMs = System.currentTimeMillis()
+            labels.forEach { label ->
+                val age = (nowWallMs - label.slotEndMs).toFloat()
+                if (age < 0f || age > windowMs) return@forEach
                 val frac = if (frame != null && span != null && span > 0f) {
                     ((label.df - frame.fMinHz) / span).coerceIn(0f, 1f)
                 } else {
                     0f
                 }
                 val x = (maxW * frac - 22.dp).coerceIn(0.dp, (maxW - 46.dp).coerceAtLeast(0.dp))
-                val y = (maxH - 18.dp - 13.dp * (i % 4)).coerceAtLeast(0.dp)
+                // age=0（刚解码）贴底，越旧越往上
+                val y = (maxH * (1f - age / windowMs) - 13.dp)
+                    .coerceIn(0.dp, (maxH - 14.dp).coerceAtLeast(0.dp))
                 Text(
                     label.call,
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
@@ -244,5 +251,11 @@ fun SpectrumScreen(
     }
 }
 
-/** 频谱叠加的一条解码标签（呼号 + 音频频率 + 高亮类别）。 */
-private data class SpectrumLabel(val call: String, val df: Int, val role: HighlightRole)
+/** 频谱叠加的一条解码标签（呼号 + 音频频率 + 高亮类别 + 时隙结束时刻）。 */
+private data class SpectrumLabel(
+    val call: String,
+    val df: Int,
+    val role: HighlightRole,
+    /** 该解码所在时隙的结束时刻（ms）：用来锚定它在瀑布上的竖向位置。 */
+    val slotEndMs: Long,
+)
