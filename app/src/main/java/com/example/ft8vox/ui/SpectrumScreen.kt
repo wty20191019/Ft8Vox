@@ -143,6 +143,9 @@ fun SpectrumScreen(
                 modifier = Modifier.fillMaxSize(),
                 txing = status.txing,
                 occupiedHz = status.protocol.occupiedHz,
+                // 还没有第一帧时也要画网格 / 刻度 / 红线，避免启动瞬间一片黑
+                fallbackFMinHz = settings.decode.fMinHz.toFloat(),
+                fallbackMaxHz = settings.decode.fMaxHz.toFloat(),
                 onLongPress = { hz ->
                     val near = messages.minByOrNull { abs(it.df - hz) }
                     if (near != null) {

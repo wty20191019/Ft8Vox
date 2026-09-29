@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -14,9 +15,14 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlin.math.ceil
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** 瀑布可见行数（约 300 * 0.08 s ≈ 24 s 的滚动窗口）。 */
@@ -105,6 +111,10 @@ object WaterfallColors {
  *
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
  * [txing] 为真时画红色边框表示正在发射。
+ *
+ * **基线常驻**（docs/UI-MOBILE.md §23）：频率网格 + 刻度 + 发射红线**不依赖瀑布帧**。
+ * 刚启动 / 还没收到第一帧时（[frame] == null）用 [fallbackFMinHz]–[fallbackMaxHz] 这套频率轴
+ * 照画，否则启动瞬间整片区域是黑的，连红线都看不到。
  */
 @Composable
 fun WaterfallView(
@@ -116,6 +126,10 @@ fun WaterfallView(
     txing: Boolean = false,
     occupiedHz: Int = 50,
     onLongPress: ((Int) -> Unit)? = null,
+    /** 还没有瀑布帧时的频率轴左端（Hz），一般取设置里的解码下边界。 */
+    fallbackFMinHz: Float = 0f,
+    /** 还没有瀑布帧时的频率轴右端（Hz），一般取设置里的解码上边界。 */
+    fallbackMaxHz: Float = 3000f,
 ) {
     val bitmap = remember(frame?.bins, frame?.rows) {
         Bitmap.createBitmap(
@@ -126,11 +140,30 @@ fun WaterfallView(
     }
     val image = remember(bitmap) { bitmap.asImageBitmap() }
 
-    // 频率轴固定铺满 fMin–fMax，不做缩放/平移
-    fun fracToHz(frac: Float): Int {
-        val f = frame ?: return selectedFreqHz
-        return (f.fMinHz + frac.coerceIn(0f, 1f) * f.bins * f.binHz).toInt()
+    // 频率轴固定铺满 fMin–fMax，不做缩放/平移；没有帧时用兜底轴，保证红线与刻度照画。
+    val fMinHz = frame?.fMinHz ?: fallbackFMinHz
+    val spanHz = frame?.let { it.bins * it.binHz }
+        ?: (fallbackMaxHz - fallbackFMinHz).coerceAtLeast(1f)
+
+    // 频率刻度（网格线 + 小字）：步长按总跨度挑，线数落在 4~8 条
+    val textMeasurer = rememberTextMeasurer()
+    val axisStyle = MaterialTheme.typography.labelSmall.copy(
+        fontFamily = FontFamily.Monospace,
+        fontSize = 9.sp,
+    )
+    val gridStep = remember(spanHz) { gridStepHz(spanHz) }
+    val axisMarks = remember(spanHz, fMinHz, gridStep) {
+        buildList {
+            var hz = ceil(fMinHz / gridStep) * gridStep
+            while (hz <= fMinHz + spanHz) {
+                add(((hz - fMinHz) / spanHz) to textMeasurer.measure(hz.toInt().toString(), style = axisStyle))
+                hz += gridStep
+            }
+        }
     }
+
+    fun fracToHz(frac: Float): Int =
+        (fMinHz + frac.coerceIn(0f, 1f) * spanHz).toInt()
 
     Canvas(
         modifier = modifier
@@ -190,17 +223,35 @@ fun WaterfallView(
             )
         }
 
+        // 频率网格 + 刻度（**不依赖瀑布帧**：启动瞬间也有东西可看）
+        if (size.width > 0f && spanHz > 0f) {
+            val labelTop = 5.dp.toPx()
+            axisMarks.forEach { (frac, layout) ->
+                val x = frac * size.width
+                drawLine(
+                    color = Color(0x1FFFFFFF),
+                    start = Offset(x, 0f),
+                    end = Offset(x, size.height),
+                    strokeWidth = 1f,
+                )
+                drawRect(
+                    color = Color(0x80000000),
+                    topLeft = Offset(x + 1f, labelTop - 1f),
+                    size = Size(layout.size.width + 4f, layout.size.height + 2f),
+                )
+                drawText(layout, color = Color(0xCCFFFFFF), topLeft = Offset(x + 3f, labelTop))
+            }
+        }
+
         // 偶/奇周期色条（顶部）
         drawRect(
             color = if (slotParity == 0) Color(0xFF2962FF) else Color(0xFFFF6D00),
             size = Size(size.width, 4.dp.toPx()),
         )
 
-        if (f != null && f.bins > 0 && size.width > 0f) {
-            val span = f.bins * f.binHz
-
+        if (spanHz > 0f && size.width > 0f) {
             // 发射频带：线＝下边频（可拖动调整），条＝整条报文占用的带宽（FT8 50 Hz / FT4 83 Hz）
-            val (xStart, xEnd) = txBandPx(selectedFreqHz, occupiedHz, f.fMinHz, span, size.width)
+            val (xStart, xEnd) = txBandPx(selectedFreqHz, occupiedHz, fMinHz, spanHz, size.width)
             if (xEnd > xStart) {
                 drawRect(
                     color = Color(0x40FF5252),
@@ -227,6 +278,18 @@ fun WaterfallView(
             )
         }
     }
+}
+
+/**
+ * 频率网格步长：按总跨度挑一个让网格线数量落在 4~8 条之间的步长（Hz）。
+ *
+ * 音频频率轴一般只覆盖 200–3000 Hz，所以 100/200/250/500/1000/2000 Hz 六档就够。
+ */
+internal fun gridStepHz(spanHz: Float): Float {
+    for (step in floatArrayOf(100f, 200f, 250f, 500f, 1000f, 2000f)) {
+        if (spanHz / step <= 8f) return step
+    }
+    return 5000f
 }
 
 /**
