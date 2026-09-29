@@ -10,20 +10,22 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,12 +41,14 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
@@ -66,10 +70,19 @@ import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarToMe
 import com.example.ft8vox.ui.theme.BarTx
 import com.example.ft8vox.ui.theme.BarWorked
+import com.example.ft8vox.ui.theme.JtdxRow
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 import java.util.Locale
 import kotlinx.coroutines.launch
+
+/**
+ * 解码表格（docs/UI-JTDX.md §4）：JTDX 风格的**紧凑表格**，
+ * 列头 `时隙 / UTC / 分贝 / 时差 / 频率 / 信息`。
+ *
+ * 行手势（docs/UI-JTDX.md §6）：
+ * 单击 = 设为目标并对频；双击 = 跳地图；长按 = 菜单；左滑 = 呼叫；右滑 = 删除。
+ */
 
 /** 解码行展示模型（报文 + 解析 + 高亮分类）。 */
 data class DecodeRow(
@@ -94,69 +107,150 @@ fun barColor(role: HighlightRole): Color = when (role) {
 internal val SwipeCallGreen = Color(0xFF2E7D32)
 internal val SwipeDeleteGray = Color(0xFF455A64)
 
+// 表格列宽（横屏下把宽度让给「信息」列）
+private val COL_SLOT = 26.dp
+private val COL_UTC = 58.dp
+private val COL_SNR = 40.dp
+private val COL_DT = 42.dp
+private val COL_DF = 50.dp
+
+/** 解码表格列头。 */
+@Composable
+fun DecodeTableHeader(modifier: Modifier = Modifier) {
+    JtdxTableHeader(modifier) {
+        Text("时隙", style = headerStyle(), modifier = Modifier.width(COL_SLOT), textAlign = TextAlign.Center)
+        Text("UTC", style = headerStyle(), modifier = Modifier.width(COL_UTC))
+        Text("分贝", style = headerStyle(), modifier = Modifier.width(COL_SNR), textAlign = TextAlign.End)
+        Text("时差", style = headerStyle(), modifier = Modifier.width(COL_DT), textAlign = TextAlign.End)
+        Text("频率", style = headerStyle(), modifier = Modifier.width(COL_DF), textAlign = TextAlign.End)
+        Text("信息", style = headerStyle(), modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun headerStyle() = MaterialTheme.typography.labelSmall.copy(
+    fontFamily = FontFamily.Monospace,
+    fontWeight = FontWeight.Bold,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+)
+
 /**
- * 解码卡片（docs/UI.md §3.1）：左侧色条；第一行「时隙(1/0) · 信号 · 时间差 · 信息文本」，
- * 第二行「发送方实体 · 距离 · 解析的 UTC 时间」。
+ * 解码表格主体（新→旧，最新在上）。
  *
- * 手势：单击 → 详情；双击 → 地图；长按 → 菜单；左滑 → 设为目标并呼叫；右滑 → 删除该条
- * （「关注」筛选视图里右滑＝取消关注该呼号）。
- *
- * 长按菜单（方案 §4 期 4）：呼叫（＝左滑）/ 回复（按报文类型自动决定发什么）/ 查看日志 /
- * 复制消息 / 关注（切换）/ 忽略；**不提供手动 73**（收尾由状态机与自动程序负责）。
+ * 空列表由调用方处理空态文案（[decodeEmptyHint]）。
  */
+@Composable
+fun DecodeTable(
+    rows: List<DecodeRow>,
+    myCall: String,
+    listState: LazyListState,
+    rowHeightMin: Int = 20,
+    followed: (String) -> Boolean,
+    onRowClick: (DecodeRow) -> Unit,
+    onRowDoubleClick: (DecodeRow) -> Unit,
+    onCall: (DecodeRow) -> Unit,
+    onReply: (DecodeRow) -> Unit,
+    onDetail: (DecodeRow) -> Unit,
+    onOpenLog: (DecodeRow) -> Unit,
+    onSwipeDelete: (DecodeRow) -> Unit,
+    onCopy: (DecodeRow) -> Unit,
+    onIgnore: (DecodeRow) -> Unit,
+    onToggleFollow: (DecodeRow) -> Unit,
+    workedStyle: WorkedStyle,
+    endMarkMyCall: Boolean,
+    endMarkActive: Boolean,
+    slotMs: Int,
+    myGrid: String,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(modifier = modifier.fillMaxSize()) {
+        items(rows) { row ->
+            DecodeTableRow(
+                row = row,
+                myCall = myCall,
+                slotMs = slotMs,
+                minHeightDp = rowHeightMin,
+                workedStyle = workedStyle,
+                endMarkMyCall = endMarkMyCall,
+                endMarkActive = endMarkActive,
+                myGrid = myGrid,
+                followed = row.parsed.from?.let(followed) ?: false,
+                onClick = { onRowClick(row) },
+                onDoubleClick = { onRowDoubleClick(row) },
+                onCall = { onCall(row) },
+                onReply = { onReply(row) },
+                onDetail = { onDetail(row) },
+                onOpenLog = { onOpenLog(row) },
+                onSwipeDelete = { onSwipeDelete(row) },
+                onCopy = { onCopy(row) },
+                onIgnore = { onIgnore(row) },
+                onToggleFollow = { onToggleFollow(row) },
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DecodeCard(
+private fun DecodeTableRow(
     row: DecodeRow,
     myCall: String,
+    slotMs: Int,
+    minHeightDp: Int,
+    workedStyle: WorkedStyle,
+    endMarkMyCall: Boolean,
+    endMarkActive: Boolean,
+    myGrid: String,
+    followed: Boolean,
     onClick: () -> Unit,
     onDoubleClick: () -> Unit,
     onCall: () -> Unit,
     onReply: () -> Unit,
+    onDetail: () -> Unit,
     onOpenLog: () -> Unit,
     onSwipeDelete: () -> Unit,
     onCopy: () -> Unit,
     onIgnore: () -> Unit,
-    /** 发信人是否已在关注名单里（决定长按菜单显示「关注」还是「取消关注」）。 */
-    followed: Boolean = false,
-    onToggleFollow: () -> Unit = {},
-    modifier: Modifier = Modifier,
-    workedStyle: WorkedStyle = WorkedStyle.STRIKE,
-    endMarkMyCall: Boolean = true,
-    endMarkActive: Boolean = true,
-    /** 当前协议的时隙长度（ms），用于换算行首「时隙（1/0）」。 */
-    slotMs: Int = 15000,
-    /** 我方网格，用于第二行距离；为空则不显示距离。 */
-    myGrid: String = "",
+    onToggleFollow: () -> Unit,
 ) {
     val msg = row.msg
     val style = row.style
     val from = row.parsed.from
     val callText = from ?: msg.text.substringBefore(' ')
     val bar = barColor(style.role)
-    val textColor = if (style.role == HighlightRole.TX) Color.Black else MaterialTheme.colorScheme.onSurface
-    val cardBg = if (style.role == HighlightRole.TX) BarTx else MaterialTheme.colorScheme.surface
+    val txRow = style.role == HighlightRole.TX
+    val textColor = if (txRow) Color.Black else MaterialTheme.colorScheme.onSurface
+    val bg = when {
+        txRow -> BarTx
+        style.toMe -> BarToMe.copy(alpha = 0.18f)
+        else -> JtdxRow
+    }
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
     val workedDecoration = when (workedStyle) {
         WorkedStyle.STRIKE -> TextDecoration.LineThrough
         WorkedStyle.UNDERLINE -> TextDecoration.Underline
         WorkedStyle.HIDE -> null
     }
-    // 时隙（1/0）：按解码时隙起点落在第几个槽位取奇偶（第 1/3 个为 0，第 2/4 个为 1）；离线（无时间）显示 --
     val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
-    // 发送方实体（DXCC）与距离
-    val entity = from?.let { Dxcc.resolve(it)?.name }
-    val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
+    // 「信息」列后缀：实体 · 距离（横屏信息列够宽，放得下）
+    val infoSuffix = remember(row, myGrid) {
+        val entity = from?.let { Dxcc.resolve(it)?.name }
+        val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
+        buildString {
+            entity?.takeIf { it.isNotEmpty() }?.let { append("  $it") }
+            distKm?.let { append(String.format(Locale.US, "  %.0fkm", it)) }
+        }
+    }
 
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    val density = LocalDensity.current
     val maxSwipe = with(density) { 140.dp.toPx() }
     val threshold = with(density) { 76.dp.toPx() }
     val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
 
-    Box(modifier.fillMaxWidth()) {
-        // 滑动背景提示（内容左移露出右侧「呼叫」，右移露出左侧「忽略」）
+    Box(Modifier.fillMaxWidth()) {
+        // 滑动背景提示（左移露出右侧「呼叫」，右移露出左侧「删除」）
         Row(Modifier.matchParentSize()) {
             Box(
                 modifier = Modifier
@@ -166,7 +260,7 @@ fun DecodeCard(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (offsetX.value > 4f) {
-                    Text("删除", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Text("删除", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
             }
             Box(
@@ -177,7 +271,7 @@ fun DecodeCard(
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 if (offsetX.value < -4f) {
-                    Text("呼叫", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Text("呼叫", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -185,8 +279,8 @@ fun DecodeCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .offsetX(offsetX.value)
+                .heightIn(min = minHeightDp.dp)
+                .offset { IntOffset(offsetX.value.toInt(), 0) }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onDragEnd = {
@@ -218,94 +312,84 @@ fun DecodeCard(
                     onDoubleClick = onDoubleClick,
                     onLongClick = { menuOpen = true },
                 )
-                .background(cardBg)
+                .background(bg)
                 .drawBehind {
                     drawRect(color = bar, size = Size(4.dp.toPx(), size.height))
                 }
-                .padding(start = 9.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                // 第一行：时隙（1/0）· 信号 · 时间差 · 信息文本
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            // 时隙（0/1）
+            Text(
+                slotLabel,
+                style = mono(labelSmallAlpha(alpha)),
+                color = textColor.copy(alpha = alpha),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(COL_SLOT),
+            )
+            // UTC
+            Text(
+                QsoTime.isoTime(msg.slotUtcMs),
+                style = mono(labelSmallAlpha(alpha)),
+                color = textColor.copy(alpha = alpha),
+                maxLines = 1,
+                modifier = Modifier.width(COL_UTC),
+            )
+            // 分贝
+            Text(
+                String.format(Locale.US, "%+3d", msg.snr),
+                style = mono(labelSmallAlpha(alpha)),
+                color = if (txRow) Color.Black
+                else if (msg.snr >= 0) VoxRxGreen else textColor.copy(alpha = alpha),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.width(COL_SNR),
+            )
+            // 时差
+            Text(
+                String.format(Locale.US, "%+.1f", msg.dt),
+                style = mono(labelSmallAlpha(alpha)),
+                color = textColor.copy(alpha = alpha),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.width(COL_DT),
+            )
+            // 频率
+            Text(
+                "${msg.df}",
+                style = mono(labelSmallAlpha(alpha)),
+                color = textColor.copy(alpha = alpha),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.width(COL_DF),
+            )
+            // 信息
+            Row(
+                modifier = Modifier.weight(1f).padding(start = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    annotatedMessage(msg.text, myCall),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                    color = textColor.copy(alpha = alpha),
+                    textDecoration = if (style.worked) workedDecoration else null,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (infoSuffix.isNotEmpty()) {
                     Text(
-                        slotLabel,
+                        infoSuffix,
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(horizontal = 4.dp, vertical = 1.dp),
-                    )
-                    Text(
-                        String.format(Locale.US, "%+3d dB", msg.snr),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (msg.snr >= 0) VoxRxGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                    Text(
-                        String.format(Locale.US, "%+.1fs", msg.dt),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                    Text(
-                        annotatedMessage(msg.text, myCall),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        color = textColor.copy(alpha = alpha),
-                        textDecoration = if (style.worked) workedDecoration else null,
+                        color = textColor.copy(alpha = 0.6f * alpha),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 8.dp).weight(1f),
-                    )
-                    // 次级标记：与我有关 ▎ / 正通联 ▎ / 新网格 ● / 新实体 ●
-                    if (style.toMe && endMarkMyCall) Marker(VoxError)
-                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
-                    if (style.newGrid) Marker(BarNewGrid)
-                    if (style.hasNewEntityMark) Marker(BarNewEntity)
-                }
-                // 第二行：发送方实体 · 距离 · 解析的 UTC 时间
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            callText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (style.toMe) VoxError else textColor,
-                            maxLines = 1,
-                        )
-                        if (!entity.isNullOrEmpty()) {
-                            Text(
-                                "  $entity",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (distKm != null) {
-                            Text(
-                                String.format(Locale.US, "  %.0f km", distKm),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Text(
-                        QsoTime.isoTime(msg.slotUtcMs),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (style.toMe && endMarkMyCall) Marker(VoxError)
+                if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
+                if (style.newGrid) Marker(BarNewGrid)
+                if (style.hasNewEntityMark) Marker(BarNewEntity)
+                if (followed) Marker(BarNewCall)
             }
         }
 
@@ -324,6 +408,14 @@ fun DecodeCard(
                 onClick = {
                     menuOpen = false
                     onReply()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("详情…") },
+                enabled = from != null,
+                onClick = {
+                    menuOpen = false
+                    onDetail()
                 },
             )
             DropdownMenuItem(
@@ -362,9 +454,17 @@ fun DecodeCard(
     }
 }
 
-/** 用 [Modifier.offset] 实现滑动位移（避免每帧重组）。 */
-private fun Modifier.offsetX(x: Float): Modifier =
-    this.offset { IntOffset(x.toInt(), 0) }
+/** 表格单元格等宽小字。 */
+@Composable
+private fun mono(style: androidx.compose.ui.text.TextStyle) =
+    style.copy(fontFamily = FontFamily.Monospace)
+
+@Composable
+private fun labelSmallAlpha(alpha: Float) =
+    MaterialTheme.typography.labelSmall.copy(
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
+    )
 
 /** 小圆点标记。 */
 @Composable
@@ -372,7 +472,7 @@ private fun Marker(color: Color) {
     Box(
         modifier = Modifier
             .padding(start = 4.dp)
-            .size(7.dp)
+            .size(6.dp)
             .clip(CircleShape)
             .background(color),
     )
@@ -402,71 +502,57 @@ fun annotatedMessage(text: String, myCall: String): AnnotatedString {
 }
 
 /**
- * 解码详情半屏（docs/UI.md §3.1）：距离、方位、网格、强度、快捷按钮。
+ * 解码详情对话框（原底部半屏改为 JTDX 式居中对话框）：距离、方位、网格、强度、快捷按钮。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DecodeDetailSheet(
-    row: DecodeRow,
+fun DecodeDetailDialog(
+    msg: DecodeResult,
+    parsed: ParsedMessage,
     myCall: String,
     myGrid: String?,
     onCall: () -> Unit,
     onOpenLog: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val msg = row.msg
-    val parsed = row.parsed
     val dist = Geo.betweenGrids(myGrid, parsed.grid)
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                parsed.from ?: "未知呼号",
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(msg.text, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
-
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            DetailLine("网格", parsed.grid ?: "--")
-            DetailLine("类型", parsed.kind)
-            DetailLine("信噪比", String.format(Locale.US, "%+d dB", msg.snr))
-            DetailLine("时间偏差", String.format(Locale.US, "%+.1f s", msg.dt))
-            DetailLine("音频频率", "${msg.df} Hz")
-            DetailLine("时隙时间", QsoTime.isoDateTime(msg.slotUtcMs))
-            if (dist != null) {
-                DetailLine(
-                    "距离 / 方位",
-                    String.format(Locale.US, "%.0f km / %.0f° %s", dist.first, dist.second, Geo.compass(dist.second)),
-                )
-            } else {
-                DetailLine("距离 / 方位", "网格未知")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(parsed.from ?: "未知呼号") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(msg.text, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                DetailLine("网格", parsed.grid ?: "--")
+                DetailLine("类型", parsed.kind)
+                DetailLine("信噪比", String.format(Locale.US, "%+d dB", msg.snr))
+                DetailLine("时间偏差", String.format(Locale.US, "%+.1f s", msg.dt))
+                DetailLine("音频频率", "${msg.df} Hz")
+                DetailLine("时隙时间", QsoTime.isoDateTime(msg.slotUtcMs))
+                if (dist != null) {
+                    DetailLine(
+                        "距离 / 方位",
+                        String.format(Locale.US, "%.0f km / %.0f° %s", dist.first, dist.second, Geo.compass(dist.second)),
+                    )
+                } else {
+                    DetailLine("距离 / 方位", "网格未知")
+                }
+                DetailLine("呼号", myCall)
             }
-            DetailLine("强度曲线", "U4 地图页接入")
-
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onCall, enabled = parsed.from != null) { Text("呼叫") }
-                OutlinedButton(onClick = onOpenLog, enabled = parsed.from != null) { Text("日志") }
-                OutlinedButton(onClick = {}, enabled = false) { Text("备注") }
-            }
-            Text(
-                "呼号 $myCall",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onCall, enabled = parsed.from != null) { Text("呼叫") } },
+        dismissButton = { TextButton(onClick = onOpenLog, enabled = parsed.from != null) { Text("日志") } },
+    )
 }
 
 @Composable
 private fun DetailLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.4f))
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(0.6f))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(96.dp),
+        )
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
     }
 }

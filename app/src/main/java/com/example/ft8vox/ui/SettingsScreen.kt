@@ -57,7 +57,6 @@ import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
-import com.example.ft8vox.data.settings.WaterfallHeight
 import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
@@ -542,26 +541,13 @@ fun SettingsScreen(
                 label = { it.label },
             )
             PrefDivider()
-            PrefChoice(
-                title = "瀑布高度",
-                subtitle = "按屏高百分比：15% / 24%（默认）/ 45%，改动回到操作页立即生效" +
-                    "（占用解码列表的可视高度；实际高度下限 150dp，很矮的屏幕上 15% 会被抬到 150dp）",
-                options = WaterfallHeight.entries,
-                selected = app.waterfallHeight,
-                onSelect = { v -> settings.update { it.copy(waterfallHeight = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
             PrefAction(
                 title = "恢复布局",
-                subtitle = "瀑布高度 / 字体回到默认",
+                subtitle = "字体回到默认（瀑布已单独成页，不再有「瀑布高度」设置）",
                 buttonLabel = "恢复",
                 onClick = {
                     settings.update {
-                        it.copy(
-                            waterfallHeight = WaterfallHeight.PCT24,
-                            fontSize = FontSize.MEDIUM,
-                        )
+                        it.copy(fontSize = FontSize.MEDIUM)
                     }
                 },
             )
