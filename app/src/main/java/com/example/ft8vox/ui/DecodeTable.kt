@@ -55,7 +55,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.QsoTime
-import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Geo
 import com.example.ft8vox.qso.DecodeStyle
@@ -65,6 +64,7 @@ import com.example.ft8vox.qso.ParsedMessage
 import com.example.ft8vox.ui.theme.BarNewCall
 import com.example.ft8vox.ui.theme.BarNewEntity
 import com.example.ft8vox.ui.theme.BarNewGrid
+import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCall
 import com.example.ft8vox.ui.theme.HlCq
 import com.example.ft8vox.ui.theme.HlDxcc
@@ -111,6 +111,23 @@ fun highlightRowColor(role: HighlightRole): Color? = when (role) {
     HighlightRole.DUPLICATE -> null
     HighlightRole.NORMAL -> null
 }
+
+/**
+ * 「报文」列的文字颜色（docs/UI-MOBILE.md §29）。
+ *
+ * - **与我有关**（发给我的报文，含网格应答 / 报告 / R报告 / 73 / RR73）→ **整列文字标红**，
+ *   一眼看出哪几条是冲我来的（整行底色仍按「色卡」规则走，不受影响）。
+ * - **已通联** → 红字 + 删除线（呈现方式固定，不再有设置开关）。
+ * - 其余按行底色的明暗（重复行整体弱化）。
+ */
+fun decodeMessageColor(style: DecodeStyle, base: Color): Color = when {
+    style.toMe -> ToMeRed
+    style.worked -> BarWorked
+    else -> base
+}
+
+/** 「与我有关」的报文文字红（比行底色更亮，浅底上也读得清）。 */
+val ToMeRed = Color(0xFFFF5252)
 
 /** 高亮类别 → 单色（供频谱页叠加的解码呼号文字用）。 */
 fun highlightTextColor(role: HighlightRole): Color = when (role) {
@@ -187,7 +204,6 @@ fun DecodeTable(
     onSwipeDelete: (DecodeRow) -> Unit,
     onCopy: (DecodeRow) -> Unit,
     onToggleFollow: (DecodeRow) -> Unit,
-    workedStyle: WorkedStyle,
     endMarkMyCall: Boolean,
     endMarkActive: Boolean,
     slotMs: Int,
@@ -201,7 +217,6 @@ fun DecodeTable(
                 myCall = myCall,
                 slotMs = slotMs,
                 minHeightDp = rowHeightMin,
-                workedStyle = workedStyle,
                 endMarkMyCall = endMarkMyCall,
                 endMarkActive = endMarkActive,
                 myGrid = myGrid,
@@ -227,7 +242,6 @@ private fun DecodeTableRow(
     myCall: String,
     slotMs: Int,
     minHeightDp: Int,
-    workedStyle: WorkedStyle,
     endMarkMyCall: Boolean,
     endMarkActive: Boolean,
     myGrid: String,
@@ -250,12 +264,13 @@ private fun DecodeTableRow(
     val textColor = MaterialTheme.colorScheme.onSurface
     val bg = hl?.copy(alpha = HL_ALPHA) ?: JtdxRow
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
-    val workedDecoration = when (workedStyle) {
-        WorkedStyle.STRIKE -> TextDecoration.LineThrough
-        WorkedStyle.UNDERLINE -> TextDecoration.Underline
-        WorkedStyle.HIDE -> null
-    }
+    // 已通联＝红字 + 删除线（固定，不再有「高亮/下划线/隐藏」三选一，§29）
+    val workedDecoration = TextDecoration.LineThrough
     val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
+    // 报文列颜色（§29）：与我有关＝整体标红；已通联＝红字；其余按「色卡」明暗
+    val msgBase = textColor.copy(alpha = alpha)
+    val msgColor = decodeMessageColor(style, msgBase)
+    val msgCallColor = if (style.toMe) msgColor else VoxError
     // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/UI-MOBILE.md §14）
     val metaLine = remember(row, myGrid) {
         val entity = from?.let { Dxcc.resolve(it)?.name }
@@ -380,9 +395,10 @@ private fun DecodeTableRow(
                         modifier = Modifier.width(COL_DT),
                     )
                     // 报文（一行；放不下则逐级缩小字号）
+                    // 与我有关 → 整列标红（我的呼号同色加粗）；已通联 → 红字 + 删除线（§29）
                     InfoText(
-                        text = annotatedMessage(msg.text, myCall),
-                        color = textColor.copy(alpha = alpha),
+                        text = annotatedMessage(msg.text, myCall, msgCallColor),
+                        color = msgColor,
                         decoration = if (style.worked) workedDecoration else null,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
@@ -481,8 +497,13 @@ private fun Marker(color: Color) {
     )
 }
 
-/** 高亮报文中的「我的呼号」为红字。 */
-fun annotatedMessage(text: String, myCall: String): AnnotatedString {
+/**
+ * 高亮报文中的「我的呼号」为 [myCallColor]（默认红，docs/UI-MOBILE.md §29）。
+ *
+ * 「与我有关」的行整列都是红的，此时把呼号也用同一色（只保留加粗）—— 免得一条红报文里
+ * 嵌着另一种红。
+ */
+fun annotatedMessage(text: String, myCall: String, myCallColor: Color = VoxError): AnnotatedString {
     val my = myCall.trim().uppercase()
     if (my.isEmpty()) return AnnotatedString(text)
     val up = text.uppercase()
@@ -496,7 +517,7 @@ fun annotatedMessage(text: String, myCall: String): AnnotatedString {
                 break
             }
             append(text.substring(i, idx))
-            withStyle(SpanStyle(color = VoxError, fontWeight = FontWeight.Bold)) {
+            withStyle(SpanStyle(color = myCallColor, fontWeight = FontWeight.Bold)) {
                 append(text.substring(idx, idx + my.length))
             }
             i = idx + my.length

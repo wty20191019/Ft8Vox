@@ -58,6 +58,12 @@ data class SignalLink(
     /** 连线内容：报告数字 / `RR73` / `73`；null 表示只画一个移动方块。 */
     val label: String?,
     val utcMs: Long,
+    /**
+     * 是否**与我有关**（收发任一方是我方呼号，docs/UI-MOBILE.md §29）。
+     *
+     * 地图上把这类连线的**线身与文字都画成红色**，一眼看出哪条是本台正在进行的 QSO。
+     */
+    val mine: Boolean = false,
 )
 
 /**
@@ -189,6 +195,8 @@ object MapModel {
      * 见 [cqFlags]），所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
      * 端点位置优先用报文网格，其次 [gridCache]，最后呼号前缀归属地；
      * 收方是「我」时用 [myGrid]（避免把「我」定位到呼号前缀归属地）。
+     *
+     * 收发任一方是我方呼号的连线标记为 `mine = true`，地图上画成红色（docs/UI-MOBILE.md §29）。
      */
     fun signalLinks(
         messages: List<DecodeResult>,
@@ -230,6 +238,7 @@ object MapModel {
                     toLon = toLon,
                     label = labelOf(p),
                     utcMs = slot,
+                    mine = me.isNotEmpty() && (from == me || to == me),
                 ),
             )
             if (out.size >= maxLinks) break

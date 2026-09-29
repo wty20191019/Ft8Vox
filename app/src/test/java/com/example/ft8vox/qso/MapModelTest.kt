@@ -2,6 +2,7 @@ package com.example.ft8vox.qso
 
 import com.example.ft8vox.engine.DecodeResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -168,6 +169,26 @@ class MapModelTest {
         assertEquals("JA1ABC", l.fromCall)
         assertEquals("F4FSY", l.toCall)
         assertEquals("-12", l.label)
+        assertTrue(l.mine) // 发给我的连线 → 地图上标红
+    }
+
+    @Test
+    fun linkIsMineOnlyWhenItTouchesMyCall() {
+        // 报文格式为「收方 发方 内容」：`F4FSY K1ABC RR73` = K1ABC 发给 F4FSY
+        val links = MapModel.signalLinks(
+            messages = listOf(
+                decoded("JA1ABC DL1ABC -12", slotUtcMs = 1000),
+                decoded("F4FSY K1ABC RR73", slotUtcMs = 1000),
+            ),
+            myCall = "F4FSY",
+            myGrid = "JN25",
+            gridCache = mapOf("JA1ABC" to "PM95", "DL1ABC" to "JN48", "K1ABC" to "FN42"),
+        )
+        assertEquals(2, links.size)
+        assertEquals("DL1ABC", links[0].fromCall)
+        assertFalse(links[0].mine) // 别人之间 → 蓝线
+        assertEquals("K1ABC", links[1].fromCall)
+        assertTrue(links[1].mine) // 发给我的 → 红线
     }
 
     @Test

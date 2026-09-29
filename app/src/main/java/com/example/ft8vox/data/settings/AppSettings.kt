@@ -19,13 +19,6 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** 已通联呼号的呈现方式（docs/UI.md §2.6）。 */
-enum class WorkedStyle(val label: String) {
-    STRIKE("删除线"),
-    UNDERLINE("下划线"),
-    HIDE("隐藏"),
-}
-
 /** 外观主题（docs/UI.md §2.6）。 */
 enum class ThemeMode(val label: String) {
     DARK("暗"),
@@ -269,21 +262,7 @@ data class AppSettings(
      */
     val slotOffsetMs: Int = 0,
 
-    // ---- 高亮与提醒（docs/UI.md §2.6） ----
-    /** 新 CQ 区域（按呼号前缀映射实体表）。 */
-    val highlightNewCqZone: Boolean = true,
-    /** 新 ITU 区域（按呼号前缀映射实体表）。 */
-    val highlightNewItu: Boolean = true,
-    /** 新 DXCC 实体（按呼号前缀映射实体表）。 */
-    val highlightNewEntity: Boolean = true,
-    /** 新网格。 */
-    val highlightNewGrid: Boolean = true,
-    /** 新前缀（粗略口径，取首个数字前的连续字母）。 */
-    val highlightNewPrefix: Boolean = true,
-    /** 新呼号。 */
-    val highlightNewCall: Boolean = true,
-    /** 已通联呼号的呈现方式。 */
-    val workedStyle: WorkedStyle = WorkedStyle.STRIKE,
+    // ---- 高亮与提醒（docs/UI-MOBILE.md §29：颜色恒启用，不再提供开关） ----
     /** 含我呼号时哔声提醒（依赖音频，U7）。 */
     val beepOnMyCall: Boolean = false,
     /** 末端红标记：报文含我呼号。 */

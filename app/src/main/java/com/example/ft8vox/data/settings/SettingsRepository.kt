@@ -112,13 +112,7 @@ private object Keys {
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
-    val hlNewCqZone = booleanPreferencesKey("hl_new_cq_zone")
-    val hlNewItu = booleanPreferencesKey("hl_new_itu")
-    val hlNewEntity = booleanPreferencesKey("hl_new_entity")
-    val hlNewGrid = booleanPreferencesKey("hl_new_grid")
-    val hlNewPrefix = booleanPreferencesKey("hl_new_prefix")
-    val hlNewCall = booleanPreferencesKey("hl_new_call")
-    val workedStyle = stringPreferencesKey("worked_style")
+    // 解码高亮开关与「已通联呈现方式」不再持久化（docs/UI-MOBILE.md §29：颜色恒启用）
     val beepOnMyCall = booleanPreferencesKey("beep_on_my_call")
     val endMarkMyCall = booleanPreferencesKey("end_mark_my_call")
     val endMarkActive = booleanPreferencesKey("end_mark_active")
@@ -223,13 +217,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
         slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
             .coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS),
-        highlightNewCqZone = this[Keys.hlNewCqZone] ?: defaults.highlightNewCqZone,
-        highlightNewItu = this[Keys.hlNewItu] ?: defaults.highlightNewItu,
-        highlightNewEntity = this[Keys.hlNewEntity] ?: defaults.highlightNewEntity,
-        highlightNewGrid = this[Keys.hlNewGrid] ?: defaults.highlightNewGrid,
-        highlightNewPrefix = this[Keys.hlNewPrefix] ?: defaults.highlightNewPrefix,
-        highlightNewCall = this[Keys.hlNewCall] ?: defaults.highlightNewCall,
-        workedStyle = enumOr(Keys.workedStyle, defaults.workedStyle),
         beepOnMyCall = this[Keys.beepOnMyCall] ?: defaults.beepOnMyCall,
         endMarkMyCall = this[Keys.endMarkMyCall] ?: defaults.endMarkMyCall,
         endMarkActive = this[Keys.endMarkActive] ?: defaults.endMarkActive,
@@ -283,13 +270,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
     prefs[Keys.slotOffsetMs] = slotOffsetMs
-    prefs[Keys.hlNewCqZone] = highlightNewCqZone
-    prefs[Keys.hlNewItu] = highlightNewItu
-    prefs[Keys.hlNewEntity] = highlightNewEntity
-    prefs[Keys.hlNewGrid] = highlightNewGrid
-    prefs[Keys.hlNewPrefix] = highlightNewPrefix
-    prefs[Keys.hlNewCall] = highlightNewCall
-    prefs[Keys.workedStyle] = workedStyle.name
     prefs[Keys.beepOnMyCall] = beepOnMyCall
     prefs[Keys.endMarkMyCall] = endMarkMyCall
     prefs[Keys.endMarkActive] = endMarkActive

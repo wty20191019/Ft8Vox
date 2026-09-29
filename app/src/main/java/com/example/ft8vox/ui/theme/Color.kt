@@ -52,6 +52,13 @@ val JtdxValue = Color(0xFF7FE3FF)
 /** 表格行底色（比卡片略深，贴近 JTDX 列表）。 */
 val JtdxRow = Color(0xFF1A1A26)
 
+// ---- 地图页信号连线（docs/UI-MOBILE.md §29） ----
+/** 台站之间的信号连线（蓝）。 */
+val MapLinkColor = Color(0x9989B4FA)
+
+/** 「与我有关」的连线与连线文字（红）。 */
+val MapLinkMine = Color(0xFFFF5252)
+
 // ---- JTDX/WSJT-X 默认解码高亮底色（docs/UI-MOBILE.md §6） ----
 // 取 WSJT-X `DecodeHighlightingModel::defaults_` 的原值；深色板上按 alpha 铺整行底。
 /** 自己发的（Transmitted）。 */

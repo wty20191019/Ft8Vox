@@ -41,12 +41,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.interaction.DragInteraction
 import com.example.ft8vox.data.settings.AppSettings
-import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.qso.DecodeFilter
 import com.example.ft8vox.qso.DecodeFilterState
 import com.example.ft8vox.qso.DecodeHighlight
-import com.example.ft8vox.qso.HighlightPrefs
-import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.ui.theme.JtdxPanelHi
 import com.example.ft8vox.ui.theme.VoxError
@@ -96,17 +93,9 @@ fun OperateScreen(
         followedCalls = settings.followCalls,
     )
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
-    val highlightPrefs = HighlightPrefs(
-        newCall = settings.highlightNewCall,
-        newGrid = settings.highlightNewGrid,
-        newEntity = settings.highlightNewEntity,
-        newItu = settings.highlightNewItu,
-        newCqZone = settings.highlightNewCqZone,
-        newPrefix = settings.highlightNewPrefix,
-    )
     val rows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,
-        status.txing, status.lastTxText, duplicateKeys, highlightPrefs, settings.workedStyle,
+        status.txing, status.lastTxText, duplicateKeys,
     ) {
         val txText = if (status.txing) status.lastTxText else null
         messages.mapNotNull { m ->
@@ -114,11 +103,8 @@ fun OperateScreen(
             if (!DecodeFilter.matches(p, filter, worked, status.myCall)) return@mapNotNull null
             val dup = DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys
             val style = DecodeHighlight.classify(
-                p, worked, status.qso.theirCall, status.myCall, dup, txText, highlightPrefs,
+                p, worked, status.qso.theirCall, status.myCall, dup, txText,
             )
-            if (settings.workedStyle == WorkedStyle.HIDE && style.role == HighlightRole.WORKED) {
-                return@mapNotNull null
-            }
             DecodeRow(m, p, style)
         }
     }
@@ -229,7 +215,6 @@ fun OperateScreen(
                         onSwipeDelete = { viewModel.removeMessage(it.msg) },
                         onCopy = { copyToClipboard(it.msg.text) },
                         onToggleFollow = { it.parsed.from?.let { c -> viewModel.toggleFollow(c) } },
-                        workedStyle = settings.workedStyle,
                         endMarkMyCall = settings.endMarkMyCall,
                         endMarkActive = settings.endMarkActive,
                         slotMs = status.slotMs,

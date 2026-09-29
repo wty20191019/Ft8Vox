@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.DecodeHighlight
-import com.example.ft8vox.qso.HighlightPrefs
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.ParsedMessage
@@ -74,17 +73,9 @@ fun SpectrumScreen(
 
     // ---- 频谱上叠加的解码呼号：最近 2–3 个时隙，锚定在各自的时间位置上 ----
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
-    val highlightPrefs = HighlightPrefs(
-        newCall = settings.highlightNewCall,
-        newGrid = settings.highlightNewGrid,
-        newEntity = settings.highlightNewEntity,
-        newItu = settings.highlightNewItu,
-        newCqZone = settings.highlightNewCqZone,
-        newPrefix = settings.highlightNewPrefix,
-    )
     val labels = remember(
         messages, worked, status.myCall, status.qso.theirCall, status.txing,
-        status.lastTxText, status.slotMs, status.protocol, duplicateKeys, highlightPrefs,
+        status.lastTxText, status.slotMs, status.protocol, duplicateKeys,
     ) {
         val slotMs = status.slotMs.toLong().coerceAtLeast(1L)
         val newest = messages.maxOfOrNull { it.slotUtcMs } ?: 0L
@@ -96,7 +87,7 @@ fun SpectrumScreen(
             val p = MessageParser.parse(m.text)
             val role = DecodeHighlight.classify(
                 p, worked, status.qso.theirCall, status.myCall,
-                DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys, txText, highlightPrefs,
+                DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys, txText,
             ).role
             SpectrumLabel(
                 text = m.text,
