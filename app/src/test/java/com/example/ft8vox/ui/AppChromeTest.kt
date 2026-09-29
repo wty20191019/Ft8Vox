@@ -54,4 +54,25 @@ class AppChromeTest {
         assertEquals("解码 118ms", decodeTimeLabel(118L, running = true))
         assertEquals("解码 1500ms", decodeTimeLabel(1500L, running = true))
     }
+
+    // ---- 信息头 DX 栏（实机反馈：不能与「CQ 已发出」自相矛盾）----
+
+    @Test
+    fun dxLabelShowsTargetWhenSet() {
+        assertEquals("DX→ JA1ABC PM95 -08", dxTargetLabel("JA1ABC", "PM95", -8, awaitingResponders = false))
+        // 网格未知时用占位符
+        assertEquals("DX→ JA1ABC -- +05", dxTargetLabel("JA1ABC", null, 5, awaitingResponders = false))
+    }
+
+    @Test
+    fun dxLabelSaysCallingCqInsteadOfNoTarget() {
+        // 正在叫 CQ 且还没人回应：不能再只说「未设目标」，否则和发射区「CQ 已发出，等待回应」打架
+        val text = dxTargetLabel(null, null, -8, awaitingResponders = true)
+        assertEquals("CQ 呼叫中，暂无目标", text)
+    }
+
+    @Test
+    fun dxLabelFallsBackToNoTargetWhenIdle() {
+        assertEquals("DX→ 未设目标", dxTargetLabel(null, null, -8, awaitingResponders = false))
+    }
 }

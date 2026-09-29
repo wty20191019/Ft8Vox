@@ -57,26 +57,29 @@ import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
-import com.example.ft8vox.data.settings.WaterfallHeight
-import com.example.ft8vox.data.settings.WorkedStyle
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.ui.theme.BarCq
-import com.example.ft8vox.ui.theme.BarDuplicate
 import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewDecode
 import com.example.ft8vox.ui.theme.BarNewEntity
 import com.example.ft8vox.ui.theme.BarNewGrid
-import com.example.ft8vox.ui.theme.BarToMe
-import com.example.ft8vox.ui.theme.BarTx
 import com.example.ft8vox.ui.theme.BarWorked
+import com.example.ft8vox.ui.theme.HlCall
+import com.example.ft8vox.ui.theme.HlCq
+import com.example.ft8vox.ui.theme.HlDxcc
+import com.example.ft8vox.ui.theme.HlGrid
+import com.example.ft8vox.ui.theme.HlMyCall
+import com.example.ft8vox.ui.theme.HlTx
+import com.example.ft8vox.ui.theme.MapLinkColor
+import com.example.ft8vox.ui.theme.MapLinkMine
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
+
 /**
  * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 外观 / 日志 / 关于。
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 日志 / 地图 / 关于
+ * （「外观」组已随新竖屏外壳去掉，见 docs/UI-MOBILE.md §1）。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -84,6 +87,7 @@ fun SettingsScreen(
     settings: SettingsViewModel,
     log: LogViewModel,
     session: SessionViewModel,
+    onHelp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val app by settings.settings.collectAsState()
@@ -114,11 +118,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(
-            "设置",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(start = 2.dp, top = 4.dp, bottom = 4.dp),
-        )
+        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/UI-MOBILE.md §15）
 
         // ---------- 台站（设计外补充：无 CAT，台站信息必填） ----------
         SettingsGroup("台站") {
@@ -167,6 +167,8 @@ fun SettingsScreen(
                 },
                 supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
             )
+            PrefDivider()
+            ManualCallBlock(session = session, myCall = app.myCall)
         }
 
         // ---------- 6.1 电台（仅 VOX） ----------
@@ -243,6 +245,9 @@ fun SettingsScreen(
 
         // ---------- 6.2 音频 ----------
         SettingsGroup("音频") {
+            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/UI-MOBILE.md §16）
+            AudioQuickPanel(sessionStatus, app)
+            PrefDivider()
             PrefDropdown(
                 title = "输入设备",
                 subtitle = "指定接收音频输入；USB 声卡插入后需重进本页刷新。运行中切换需重新「开始接收」",
@@ -438,67 +443,14 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.4 高亮与提醒 ----------
+        // ---------- 6.4 高亮与提醒（docs/UI-MOBILE.md §29：颜色恒启用，开关全部取消） ----------
         SettingsGroup("高亮与提醒") {
             PrefNote(
-                "每行只有一条色条，取命中的最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > " +
-                    "重复 > 新网格 > 新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码（绿）。" +
-                    "关闭某类后它不再参与竞争，行尾圆点也随之消失。开关右侧圆点 = 该类对应的色条颜色。",
+                "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
+                    "最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > 重复 > 新网格 > " +
+                    "新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码。下方列出每种颜色的含义。",
             )
-            PrefSwitch(
-                title = "新 CQ 区域",
-                subtitle = "未通联过的 CQ 区域",
-                checked = app.highlightNewCqZone,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewCqZone = v) } },
-                dotColor = BarNewEntity,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "新 ITU 区域",
-                subtitle = "未通联过的 ITU 区域",
-                checked = app.highlightNewItu,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewItu = v) } },
-                dotColor = BarNewEntity,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "新 DXCC",
-                subtitle = "未通联过的 DXCC 实体（按呼号前缀映射）",
-                checked = app.highlightNewEntity,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewEntity = v) } },
-                dotColor = BarNewEntity,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "新网格",
-                checked = app.highlightNewGrid,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewGrid = v) } },
-                dotColor = BarNewGrid,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "新前缀",
-                checked = app.highlightNewPrefix,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewPrefix = v) } },
-                dotColor = BarNewEntity,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "新呼号",
-                checked = app.highlightNewCall,
-                onCheckedChange = { v -> settings.update { it.copy(highlightNewCall = v) } },
-                dotColor = BarNewCall,
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "已通联",
-                subtitle = "已通联呼号在解码列表中的呈现方式（红条 + 删除线/下划线/隐藏）",
-                options = WorkedStyle.entries,
-                selected = app.workedStyle,
-                onSelect = { v -> settings.update { it.copy(workedStyle = v) } },
-                label = { it.label },
-                dotColor = BarWorked,
-            )
+            HighlightLegend()
             PrefDivider()
             PrefSwitch(
                 title = "含我呼号哔声",
@@ -520,52 +472,9 @@ fun SettingsScreen(
                 onCheckedChange = { v -> settings.update { it.copy(endMarkActive = v) } },
                 dotColor = MaterialTheme.colorScheme.primary,
             )
-            PrefDivider()
-            HighlightLegend()
         }
 
-        // ---------- 6.5 外观 ----------
-        SettingsGroup("外观") {
-            PrefChoice(
-                title = "主题",
-                options = ThemeMode.entries,
-                selected = app.themeMode,
-                onSelect = { v -> settings.update { it.copy(themeMode = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "字体",
-                options = FontSize.entries,
-                selected = app.fontSize,
-                onSelect = { v -> settings.update { it.copy(fontSize = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "瀑布高度",
-                subtitle = "按屏高百分比：15% / 24%（默认）/ 45%，改动回到操作页立即生效" +
-                    "（占用解码列表的可视高度；实际高度下限 150dp，很矮的屏幕上 15% 会被抬到 150dp）",
-                options = WaterfallHeight.entries,
-                selected = app.waterfallHeight,
-                onSelect = { v -> settings.update { it.copy(waterfallHeight = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefAction(
-                title = "恢复布局",
-                subtitle = "瀑布高度 / 字体回到默认",
-                buttonLabel = "恢复",
-                onClick = {
-                    settings.update {
-                        it.copy(
-                            waterfallHeight = WaterfallHeight.PCT24,
-                            fontSize = FontSize.MEDIUM,
-                        )
-                    }
-                },
-            )
-        }
+        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/UI-MOBILE.md §1：无亮/暗主题、无字体档位） ----------
 
         // ---------- 6.6 日志 ----------
         SettingsGroup("日志") {
@@ -599,8 +508,36 @@ fun SettingsScreen(
             )
         }
 
+        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/UI-MOBILE.md §16） ----------
+        SettingsGroup("地图") {
+            PrefSwitch(
+                title = "CQ 旗帜显示呼号",
+                checked = app.mapCqFlagShowCall,
+                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowCall = v) } },
+            )
+            PrefDivider()
+            PrefSwitch(
+                title = "CQ 旗帜显示强度",
+                checked = app.mapCqFlagShowSnr,
+                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowSnr = v) } },
+            )
+            PrefDivider()
+            PrefSwitch(
+                title = "连线显示文字",
+                checked = app.mapShowLinkText,
+                onCheckedChange = { v -> settings.update { it.copy(mapShowLinkText = v) } },
+            )
+        }
+
         // ---------- 关于 ----------
         SettingsGroup("关于") {
+            PrefAction(
+                title = "操作与手势",
+                subtitle = "解码行点按 / 长按 / 左右滑；频谱拖红线设发射频率；报文槽点击发射等",
+                buttonLabel = "查看",
+                onClick = onHelp,
+            )
+            PrefDivider()
             val version = rememberAppVersion()
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text("Ft8Vox $version", style = MaterialTheme.typography.bodySmall)
@@ -781,6 +718,48 @@ private fun PrefSwitch(
     })
 }
 
+/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/UI-MOBILE.md §12：从旧操作页控制行搬来）。 */
+@Composable
+private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
+    var dxCall by remember { mutableStateOf("") }
+    var dxGrid by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = dxCall,
+                onValueChange = { dxCall = it.trim().uppercase().take(12) },
+                label = { Text("DX 呼号") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = dxGrid,
+                onValueChange = { dxGrid = it.trim().uppercase().take(6) },
+                label = { Text("DX 网格") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OutlinedButton(
+            onClick = {
+                session.answer(dxCall.trim().uppercase(), dxGrid.trim().uppercase().ifEmpty { null })
+            },
+            enabled = myCall.isNotBlank() && dxCall.isNotBlank(),
+            modifier = Modifier.padding(top = 8.dp),
+        ) { Text("呼叫") }
+        Text(
+            "手动输入呼号/网格并立即呼叫（竖屏操作页不放输入框，避免占高度）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
 /** 高亮色小圆点（带一圈淡描边，亮色主题下也看得清）。 */
 @Composable
 private fun ColorDot(color: Color) {
@@ -794,23 +773,48 @@ private fun ColorDot(color: Color) {
 }
 
 /**
- * 固定高亮色图例：这些颜色**不受**「高亮与提醒」里的开关控制，恒生效（docs/UI.md §3.1）。
+ * 「颜色说明」图例（docs/UI-MOBILE.md §29）：列出每个颜色的含义。
+ *
+ * 这些颜色**全部固定启用**（原来的逐个开关已取消），所以这里既是说明、也是唯一的口径来源。
  */
 @Composable
 private fun HighlightLegend() {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(
-            "固定颜色（不受上面开关影响）",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(4.dp))
-        LegendRow(BarTx, "正在发射（整行黄底黑字）")
-        LegendRow(BarToMe, "与我有关 / 当前 QSO 对手（呼号同时显示为红字）")
-        LegendRow(BarCq, "CQ")
-        LegendRow(BarDuplicate, "重复解码（同一文本在更早时隙出现过；整行变淡）")
-        LegendRow(BarNewDecode, "其余新解码（兜底）")
+        LegendSection("解码列表 · 整行底色（色卡）")
+        LegendRow(HlTx, "黄底：自己发的报文 / 正在发射的那条")
+        LegendRow(HlMyCall, "红底：发给我的报文（叫我）")
+        LegendRow(HlCq, "绿底：CQ")
+        LegendRow(HlGrid, "橙底：新网格")
+        LegendRow(HlDxcc, "品红底：新 DXCC / 新 ITU / 新 CQ 区域 / 新前缀")
+        LegendRow(HlCall, "青底：新呼号")
+
+        LegendSection("解码列表 · 文字")
+        LegendRow(ToMeRed, "红字：发给我的报文（只标「报文」那一列）")
+        LegendRow(BarWorked, "红字 + 删除线：已通联")
+        LegendRow(Color(0xFF9AA0B5), "灰字弱化：重复解码（同一条报文又解到一次）")
+
+        LegendSection("解码列表 · 行尾小圆点")
+        LegendRow(VoxError, "红：报文里有我的呼号")
+        LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
+        LegendRow(BarNewGrid, "紫：新网格")
+        LegendRow(BarNewEntity, "棕：新 DXCC / ITU / CQ 区域 / 新前缀")
+        LegendRow(BarNewCall, "粉：已关注的呼号")
+
+        LegendSection("地图")
+        LegendRow(MapLinkMine, "红线 / 红字：与我有关的信号连线（我发出的 / 发给我的）")
+        LegendRow(MapLinkColor, "蓝线：其它台站之间的连线")
     }
+}
+
+/** 图例里的小标题。 */
+@Composable
+private fun LegendSection(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+    )
 }
 
 /** 图例中的一行：色点 + 说明。 */

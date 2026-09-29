@@ -85,6 +85,11 @@ object TxCompose {
 }
 
 /**
+ * CQ 前缀格子数（`AppSettings.cqPrefixes` 恒为这个长度的可编辑格子，见 [DEFAULT_CQ_PREFIXES]）。
+ */
+const val CQ_PREFIX_SLOTS = 8
+
+/**
  * CQ 前缀默认值（4×2 = 8 个可编辑格子，抽屉里可改）。
  *
  * 前缀插在 `CQ` 与我方呼号之间（如 `CQ DX K1ABC FN42`）；**空串＝普通 CQ**（`CQ K1ABC FN42`）。

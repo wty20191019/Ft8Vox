@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -86,7 +87,6 @@ fun GridScreen(
     log: LogViewModel,
     session: SessionViewModel,
     settings: AppSettings,
-    onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
     onOpenLog: () -> Unit,
     focusCall: String? = null,
     focusSeq: Int = 0,
@@ -292,16 +292,16 @@ fun GridScreen(
             ) {
                 MapFab(onClick = {
                     projection?.let { projection = it.zoomBy(1.6, it.viewWidth / 2, it.viewHeight / 2) }
-                }) { Text("+", style = MaterialTheme.typography.titleLarge) }
+                }) { Text("+", style = MaterialTheme.typography.headlineSmall) }
                 MapFab(onClick = {
                     projection?.let { projection = it.zoomBy(1 / 1.6, it.viewWidth / 2, it.viewHeight / 2) }
-                }) { Text("−", style = MaterialTheme.typography.titleLarge) }
+                }) { Text("−", style = MaterialTheme.typography.headlineSmall) }
                 MapFab(onClick = {
                     val p2 = projection ?: return@MapFab
                     val c = status.myGrid.ifEmpty { null }?.let { com.example.ft8vox.grid.Maidenhead.center(it) }
                         ?: return@MapFab
                     projection = centeredOn(p2, c.first, c.second)
-                }) { Icon(Icons.Filled.Place, contentDescription = "回我的位置") }
+                }) { Icon(Icons.Filled.Place, contentDescription = "回我的位置", modifier = Modifier.size(26.dp)) }
             }
         }
 
@@ -311,8 +311,6 @@ fun GridScreen(
             cqFlags = cqFlags,
             links = links,
             selectedCall = selectedCall,
-            settings = settings,
-            onUpdateSettings = onUpdateSettings,
             onReply = { call, grid, df -> replyTo(call, grid, df) },
             onOpenLog = { call ->
                 log.setFilter(LogFilter(query = call))
@@ -366,9 +364,9 @@ private fun hitTest(
 private fun MapFab(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(54.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -383,8 +381,6 @@ private fun MapOverlay(
     cqFlags: List<CqFlag>,
     links: List<SignalLink>,
     selectedCall: String?,
-    settings: AppSettings,
-    onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
     onReply: (String, String?, Int) -> Unit,
     onOpenLog: (String) -> Unit,
     onClearSelection: () -> Unit,
@@ -413,10 +409,10 @@ private fun MapOverlay(
                 )
             }
 
-            // 图例
+            // 图例 + 计数并成一行（docs/UI-MOBILE.md §18）
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LegendDot(LegendDecoded, "解码")
@@ -428,36 +424,21 @@ private fun MapOverlay(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text(
+                    "网格 $decoded/$worked/$confirmed｜呼号 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
-            Text(
-                "网格 蓝 $decoded · 黄 $worked · 红 $confirmed｜呼号 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-
-            // 显示开关
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(
-                    selected = settings.mapCqFlagShowCall,
-                    onClick = { onUpdateSettings { it.copy(mapCqFlagShowCall = !it.mapCqFlagShowCall) } },
-                    label = { Text("CQ 呼号") },
-                )
-                FilterChip(
-                    selected = settings.mapCqFlagShowSnr,
-                    onClick = { onUpdateSettings { it.copy(mapCqFlagShowSnr = !it.mapCqFlagShowSnr) } },
-                    label = { Text("CQ 强度") },
-                )
-                FilterChip(
-                    selected = settings.mapShowLinkText,
-                    onClick = { onUpdateSettings { it.copy(mapShowLinkText = !it.mapShowLinkText) } },
-                    label = { Text("连线文字") },
+            // 显示开关已收进设置页「地图」组（少层级，docs/UI-MOBILE.md §16）
+            if (selectedCall == null) {
+                Text(
+                    "点标记查看台站；单指拖动平移、双指捏合缩放",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.dp),
                 )
             }
         }
@@ -492,9 +473,9 @@ private fun SelectionInfo(
             color = VoxAccent,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(onClick = onReply) { Text("应答") }
-            OutlinedButton(onClick = onOpenLog) { Text("日志") }
-            TextButton(onClick = onClear) { Text("清除") }
+            Button(onClick = onReply, modifier = Modifier.weight(1f).height(42.dp)) { Text("应答") }
+            OutlinedButton(onClick = onOpenLog, modifier = Modifier.height(42.dp)) { Text("日志") }
+            TextButton(onClick = onClear, modifier = Modifier.height(42.dp)) { Text("清除") }
         }
     }
 }

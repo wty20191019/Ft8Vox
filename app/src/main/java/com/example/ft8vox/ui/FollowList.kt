@@ -19,13 +19,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,10 +46,11 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 /**
- * 「关注呼号列表」面板（操作页筛选条最右 ⭐ 打开，与最左的垃圾桶图标对称）。
+ * 「关注呼号列表」面板（操作页控制行的「关注 N」按钮打开）。
  *
  * 与**解码列表**是两回事：这里列的是**呼号**（[follows] 名单），每行带入本会话最近一次听到的
- * 网格 / 信号 / 时间；手势 **左滑 = 呼叫该呼号**、**右滑 = 取消关注（从名单移除）**。
+ * 网格 / 信号 / 时间；手势 **左滑 = 呼叫该呼号**、**右滑 = 取消关注（从名单移除）**，
+ * 标题栏右侧「全部清除」可一次清空（带二次确认）。
  */
 @Composable
 fun FollowListPanel(
@@ -59,7 +59,8 @@ fun FollowListPanel(
     myGrid: String,
     onCall: (call: String, grid: String?, df: Int?) -> Unit,
     onUnfollow: (String) -> Unit,
-    onClose: () -> Unit,
+    /** 点「全部清除」时回调（弹确认框的逻辑由调用方负责）。 */
+    onClearAll: () -> Unit,
     /** 由「自动收录 CQ 台」自动加入的呼号（行内显示「自动」标记）。 */
     autoFollowed: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
@@ -87,8 +88,8 @@ fun FollowListPanel(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            IconButton(onClick = onClose) {
-                Icon(Icons.Filled.Close, contentDescription = "关闭关注呼号列表")
+            if (rows.isNotEmpty()) {
+                TextButton(onClick = onClearAll) { Text("全部清除") }
             }
         }
         HorizontalDivider()

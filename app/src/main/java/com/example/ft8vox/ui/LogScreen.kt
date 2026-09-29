@@ -101,9 +101,10 @@ fun LogScreen(
     val adif = rememberAdifActions(log, myCall, myGrid) { statusText = it }
 
     Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
+        // 统计卡在顶部（设计稿「统计卡 + 卡片列表」；docs/UI-MOBILE.md §16）
+        StatsPanel(stats)
+
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("日志", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.width(8.dp))
             Text(
                 "共 ${stats.total} 条",
                 style = MaterialTheme.typography.labelSmall,
@@ -193,8 +194,6 @@ fun LogScreen(
                 }
             }
         }
-
-        StatsPanel(stats)
     }
 
     if (creating) {
@@ -567,13 +566,13 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
     }
 }
 
-/** 底部常驻统计：QSO / DXCC / 网格 / 确认 + 波段柱图。 */
+/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 一行波段分布（docs/UI-MOBILE.md §17：去掉柱图省高度）。 */
 @Composable
 private fun StatsPanel(stats: LogStats) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth()) {
@@ -583,7 +582,12 @@ private fun StatsPanel(stats: LogStats) {
                 StatCell("确认", stats.confirmed.toString(), Modifier.weight(1f))
             }
             if (stats.byBand.isNotEmpty()) {
-                BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(64.dp).padding(top = 8.dp))
+                Text(
+                    "波段分布  " + stats.byBand.joinToString("  ") { "${it.first} ${it.second}" },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(
                 "DXCC 按呼号前缀映射实体表（常用实体精选子集）",
@@ -604,39 +608,6 @@ private fun StatCell(label: String, value: String, modifier: Modifier = Modifier
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(value, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-/** 波段柱图：每根柱高按条数比例，可横向滚动。 */
-@Composable
-private fun BandBarChart(bands: List<Pair<String, Int>>, modifier: Modifier = Modifier) {
-    val max = bands.maxOf { it.second }.coerceAtLeast(1)
-    Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        for ((name, count) in bands) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    "$count",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Box(
-                    modifier = Modifier
-                        .width(18.dp)
-                        .height((6 + 26 * count / max).dp)
-                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                        .background(VoxAccent),
-                )
-                Text(
-                    name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
     }
 }
 

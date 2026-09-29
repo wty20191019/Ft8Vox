@@ -161,27 +161,11 @@ data class DecodeStyle(
 }
 
 /**
- * 「高亮与提醒」开关（docs/UI.md §2.6）。
+ * 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。
  *
- * 关闭某类后，该类不再作为**最高优先级角色**（顺序回退到下一类）；
- * 对应的数据标记点也随之隐藏。默认全开，保持既有行为。
+ * 「高亮与提醒」的开关已取消（docs/UI-MOBILE.md §29）：所有高亮类别**恒启用**，颜色含义改由
+ * 设置页的「颜色说明」图例统一解释。
  */
-data class HighlightPrefs(
-    /** 新呼号。 */
-    val newCall: Boolean = true,
-    /** 新网格。 */
-    val newGrid: Boolean = true,
-    /** 新 DXCC 实体。 */
-    val newEntity: Boolean = true,
-    /** 新 ITU 区域。 */
-    val newItu: Boolean = true,
-    /** 新 CQ 区域。 */
-    val newCqZone: Boolean = true,
-    /** 新前缀（粗略口径）。 */
-    val newPrefix: Boolean = true,
-)
-
-/** 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。 */
 object DecodeHighlight {
 
     /** 解码行的稳定键：同一文本 + 同一时隙视为同一行。 */
@@ -208,16 +192,15 @@ object DecodeHighlight {
         myCall: String = "",
         duplicate: Boolean = false,
         currentTxText: String? = null,
-        prefs: HighlightPrefs = HighlightPrefs(),
     ): DecodeStyle {
         val from = parsed.from
         val toMe = parsed.addressedTo(myCall)
         val entity = from?.let { Dxcc.resolve(it) }
-        val rawNewGrid = parsed.grid != null && !worked.hasWorkedGrid(parsed.grid)
-        val rawNewPrefix = from != null && !worked.hasWorkedPrefix(from)
-        val rawNewEntity = entity != null && entity.name !in worked.entities
-        val rawNewItu = entity != null && entity.ituZone !in worked.ituZones
-        val rawNewCqZone = entity != null && entity.cqZone !in worked.cqZones
+        val newGrid = parsed.grid != null && !worked.hasWorkedGrid(parsed.grid)
+        val newPrefix = from != null && !worked.hasWorkedPrefix(from)
+        val newEntity = entity != null && entity.name !in worked.entities
+        val newItu = entity != null && entity.ituZone !in worked.ituZones
+        val newCqZone = entity != null && entity.cqZone !in worked.cqZones
         val workedCall = worked.hasWorkedCall(from)
         val current = from != null &&
             currentQsoCall != null &&
@@ -228,13 +211,7 @@ object DecodeHighlight {
         // 按「正在发射」同一档高亮（黄底黑字，最高优先级）；用 CallMatch 比较以兼容复合呼号（`/P`）。
         val fromMe = CallMatch.isFrom(parsed.from, myCall)
 
-        // 被关闭的高亮类别不参与角色判定，也不显示标记点
-        val newGrid = rawNewGrid && prefs.newGrid
-        val newPrefix = rawNewPrefix && prefs.newPrefix
-        val newEntity = rawNewEntity && prefs.newEntity
-        val newItu = rawNewItu && prefs.newItu
-        val newCqZone = rawNewCqZone && prefs.newCqZone
-        val newCall = from != null && !workedCall && prefs.newCall
+        val newCall = from != null && !workedCall
 
         val role = when {
             transmitting || fromMe -> HighlightRole.TX

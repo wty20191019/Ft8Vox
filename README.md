@@ -18,7 +18,7 @@ Ft8Vox 目标是把手机变成一台可用的 FT8 / FT4 终端：
 - **日志**：通联记录自动落库（含 `Distance: xxx km, QSO by Ft8Vox` 备注），ADIF **合并**导入 / 导出；
 - **地图**：网格、CQ 分区、解码台站的距离与方位。
 
-音频 I/O 基于 **AAudio**，DSP 在 native 层复用开源的 [ft8_lib](app/src/main/cpp/ft8_lib)（含 kissfft）；界面使用 **Jetpack Compose**（Material 3），底部 4 个 Tab：操作 / 地图 / 日志 / 设置。音频接入支持**声学耦合**与 **USB 声卡 / OTG** 两种。
+音频 I/O 基于 **AAudio**，DSP 在 native 层复用开源的 [ft8_lib](app/src/main/cpp/ft8_lib)（含 kissfft）；界面使用 **Jetpack Compose**（Material 3），**JTDX 风格横屏外壳**：顶部菜单栏 + 信息头 + 控制行，左侧竖导航 5 项：操作 / **频谱** / 地图 / 日志 / 设置（频谱独立成页），底部常驻发射区与状态条（见 [docs/UI-JTDX.md](docs/UI-JTDX.md)）。音频接入支持**声学耦合**与 **USB 声卡 / OTG** 两种。
 
 **本项目不做 CAT 电台控制**：发射依赖电台 **VOX** 或手动 PTT，频率/模式/PTT 均不自动控制。
 
@@ -102,7 +102,7 @@ app/src/main/
 │   ├── engine/                             # Ft8Engine / AudioEngine（JNI 封装）、设备枚举、提示音
 │   ├── grid/                               # Maidenhead 网格、大圆几何、地图投影
 │   ├── qso/                                # 报文解析/组装、DXCC、QSO 状态机、自动程序、筛选与高亮
-│   └── ui/                                 # Compose 页面与组件（四页 + 顶栏/状态条 + theme/）
+│   └── ui/                                 # Compose 页面与组件（五页：操作/频谱/地图/日志/设置 + JTDX 外壳 + theme/）
 ├── cpp/                                    # native：jni_bridge.c、audio_engine.c、ftx_session.c + ft8_lib
 └── res/                                    # 资源
 docs/                                       # 用户手册、QSO 设计、UI/路线图/JNI/回归
@@ -114,7 +114,8 @@ docs/                                       # 用户手册、QSO 设计、UI/路
 | --- | --- |
 | [docs/How2use.md](docs/How2use.md) | **用户手册**：装机 / 接线 / 首次设置 / 通联 / 自动程序 / 日志 / 地图 / 全部设置项 / 排错 / **构建与开发（工具链、命令、原生库、CI、贡献）** |
 | [docs/QSO.md](docs/QSO.md) | **QSO 自动系统设计**（对标 FT8CN）：六步序列与状态机、FT8CN 机制要点、本机实现、设置项与参数、与 FT8CN 对照表、有意偏离清单、明确不做 |
-| [docs/UI.md](docs/UI.md) | **UI 设计 + 路线图 + JNI 契约 + 回归验收清单**：配色/字号/外壳、页面与组件、交互约定、阶段 0–10 与决策、Kotlin ↔ native 契约、真机回归 A–U 组 |
+| [docs/UI.md](docs/UI.md) | **UI 设计 + 路线图 + JNI 契约 + 回归验收清单**：配色/字号、页面与组件、交互约定、阶段 0–10 与决策、Kotlin ↔ native 契约、真机回归 A–U 组 |
+| [docs/UI-JTDX.md](docs/UI-JTDX.md) | **JTDX 风格横屏外壳设计**（当前生效的外壳）：菜单栏 / 信息头 / 控制行 / 左侧竖导航 / 六个报文槽 / 控件映射与取舍 |
 
 ## 许可证
 

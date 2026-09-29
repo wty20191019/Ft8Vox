@@ -1,25 +1,25 @@
 package com.example.ft8vox.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,30 +27,33 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.example.ft8vox.SessionService
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * 底部导航的四个页面（docs/UI.md §2.2：操作 / 地图 / 日志 / 设置）。
+ * 主壳的五个页面（docs/UI-MOBILE.md §1）：**操作 / 频谱 / 地图 / 日志 / 设置**。
+ *
+ * 频谱从操作页拆出来单独成页，是这一轮改造的核心诉求。
  */
 enum class MainTab(val label: String) {
     OPERATE("操作"),
+    SPECTRUM("频谱"),
     MAP("地图"),
     LOG("日志"),
     SETTINGS("设置"),
 }
 
-private fun MainTab.icon(): ImageVector = when (this) {
-    MainTab.OPERATE -> Icons.Filled.Home
-    MainTab.MAP -> Icons.Filled.Place
-    MainTab.LOG -> Icons.AutoMirrored.Filled.List
-    MainTab.SETTINGS -> Icons.Filled.Settings
-}
-
 /**
- * 应用主壳（docs/UI.md §1.3、§2.1、§2.2）：固定顶栏 + 底部状态条 + 底部四页导航。
+ * 应用主壳（docs/UI-MOBILE.md §2）：**竖屏，四行信息头 + 内容 + 底部导航**。
  *
- * 三个 ViewModel 都是 Activity 作用域，切换页面不会重建，因此接收与 QSO 流程不中断。
+ * - 全局锁定竖屏（`AndroidManifest` 的 `sensorPortrait`）。
+ * - 三个 ViewModel 都是 Activity 作用域，切换页面不重建，接收与 QSO 流程不中断。
+ * - **录音权限在此统一申请**：操作页的发射动作与频谱页的「开始接收」共用同一条授权链路。
  */
 @Composable
 fun MainShell(
@@ -67,6 +70,10 @@ fun MainShell(
     var logFocusCall by rememberSaveable { mutableStateOf<String?>(null) }
     var logFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
+    var helpDialogOpen by rememberSaveable { mutableStateOf(false) }
+    // 关注列表弹窗由本壳持有（跨页跳转时保持状态）
+    var followOpen by rememberSaveable { mutableStateOf(false) }
+
     val appSettings by settings.settings.collectAsState()
     val status by session.status.collectAsState()
     val messages by session.messages.collectAsState()
@@ -75,57 +82,102 @@ fun MainShell(
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
 
+    // ---- 录音权限：操作页与频谱页共用 ----
+    var permissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    // 录音权限申请期间暂存的待执行动作（点了就直接发，不再有确认弹窗）
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        permissionGranted = granted
+        val action = afterPermission
+        afterPermission = null
+        if (granted) action?.invoke()
+    }
+
+    /** 执行一个需要录音权限的动作：已授权直接执行，否则先申请、授权后补执行。 */
+    val request: (action: () -> Unit) -> Unit = { action ->
+        if (permissionGranted) {
+            action()
+        } else {
+            afterPermission = action
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    /** 开始接收（操作页空态、频谱页空态、信息头都走这里）。 */
+    val requestStart: () -> Unit = { request { session.start() } }
+
+    // 已授权时自动开始接收（首次进入即可看到瀑布）
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted && !status.running) session.start()
+    }
+
+    // 通知权限（Android 13+）：前台服务通知需要它才可见；拒绝时服务照常运行，只是不显示通知
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) SessionService.refresh(context)
+    }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     // 返回键：接收中「退到后台继续接收」（由前台服务保活），未接收时保持默认行为（退出）。
-    // Compose 的 BackHandler 按「后注册者优先」生效：操作页的发射抽屉（页内覆盖层，非独立窗口）
-    // 与解码详情弹窗（ModalBottomSheet）都在本组件之后注册，所以它们露出时返回键先收起它们。
+    // 各对话框打开时返回键先关对话框（Compose 按「后注册者优先」处理）。
     BackHandler(enabled = status.running) {
         activity?.moveTaskToBack(true)
         Toast.makeText(context, "已退到后台继续接收，可在通知栏「停止接收」", Toast.LENGTH_SHORT).show()
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            Ft8VoxTopBar(
-                status = status,
-                appSettings = appSettings,
-                nowMs = nowMs,
-                onBandFreq = session::setBandFreq,
-                onProtocol = session::selectProtocol,
-                onOpenSettings = { tab = MainTab.SETTINGS },
-                onAutoProgram = { autoDialogOpen = true },
-            )
-        },
-        bottomBar = {
-            Column {
-                BottomStatusBar(
-                    running = status.running,
-                    txing = status.txing,
-                    decodePerMin = decodesPerMinute(messages, nowMs),
-                    decodedTotal = status.decodedTotal,
-                    qsoCount = stats.total,
-                    queueCount = if (status.manualTxText != null) 1 else 0,
-                    timeWarning = timeSyncWarning(messages.firstOrNull()?.dt),
-                    voxLevelDb = status.voxLevelDb,
-                )
-                NavigationBar {
-                    for (t in MainTab.entries) {
-                        NavigationBarItem(
-                            selected = tab == t,
-                            onClick = { tab = t },
-                            icon = { Icon(t.icon(), contentDescription = t.label) },
-                            label = { Text(t.label) },
-                        )
-                    }
-                }
-            }
-        },
-    ) { innerPadding ->
-        Box(Modifier.fillMaxSize().padding(innerPadding)) {
+    val dateText = remember(nowMs / 1000L) {
+        SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(nowMs))
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .safeDrawingPadding(),
+    ) {
+        MobileInfoHeader(
+            status = status,
+            messages = messages,
+            nowMs = nowMs,
+            decodedTotal = status.decodedTotal,
+            qsoCount = stats.total,
+            queueCount = status.autoQueueSize + if (status.manualTxText != null) 1 else 0,
+            dateText = dateText,
+            onBandFreq = session::setBandFreq,
+            onTxEnabledChange = session::setTxEnabled,
+            onOpenSettings = { tab = MainTab.SETTINGS },
+        )
+
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .fillMaxHeight()
+                // 内容页自绘（地图平移/缩放、瀑布）不裁剪会画到上方信息头上
+                .clipToBounds(),
+        ) {
             when (tab) {
                 MainTab.OPERATE -> OperateScreen(
                     viewModel = session,
                     settings = appSettings,
+                    hasPermission = permissionGranted,
+                    request = request,
+                    onRequestStart = requestStart,
                     onOpenSettings = { tab = MainTab.SETTINGS },
                     onOpenMap = { call ->
                         mapFocusCall = call
@@ -138,16 +190,31 @@ fun MainShell(
                         tab = MainTab.LOG
                     },
                     onOpenAutoProgram = { autoDialogOpen = true },
+                    followOpen = followOpen,
+                    onFollowOpenChange = { followOpen = it },
                 )
+
+                MainTab.SPECTRUM -> SpectrumScreen(
+                    viewModel = session,
+                    settings = appSettings,
+                    hasPermission = permissionGranted,
+                    onRequestStart = requestStart,
+                    onOpenLog = { call ->
+                        logFocusCall = call
+                        logFocusSeq += 1
+                        tab = MainTab.LOG
+                    },
+                )
+
                 MainTab.MAP -> GridScreen(
                     log = log,
                     session = session,
                     settings = appSettings,
-                    onUpdateSettings = settings::update,
                     onOpenLog = { tab = MainTab.LOG },
                     focusCall = mapFocusCall,
                     focusSeq = mapFocusSeq,
                 )
+
                 MainTab.LOG -> LogScreen(
                     log = log,
                     myCall = appSettings.myCall,
@@ -156,9 +223,17 @@ fun MainShell(
                     focusCall = logFocusCall,
                     focusSeq = logFocusSeq,
                 )
-                MainTab.SETTINGS -> SettingsScreen(settings = settings, log = log, session = session)
+
+                MainTab.SETTINGS -> SettingsScreen(
+                    settings = settings,
+                    log = log,
+                    session = session,
+                    onHelp = { helpDialogOpen = true },
+                )
             }
         }
+
+        MobileBottomNav(tab = tab, onTab = { tab = it })
     }
 
     if (autoDialogOpen) {
@@ -167,6 +242,10 @@ fun MainShell(
             onOption = session::setAutoOption,
             onDismiss = { autoDialogOpen = false },
         )
+    }
+
+    if (helpDialogOpen) {
+        JtdxHelpDialog(onDismiss = { helpDialogOpen = false })
     }
 }
 

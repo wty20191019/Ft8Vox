@@ -1,5 +1,12 @@
 # Ft8Vox · UI 设计、路线图、JNI 契约与回归清单
 
+> ⚠️ **外壳已改版（2026-09-29，第二轮）**：竖屏手机外壳已定稿，权威设计见
+> **[docs/UI-MOBILE.md](UI-MOBILE.md)**（四行信息头 + 底部 5 页导航 + 操作页解码表/发射区；底部状态条已并入信息头，见 §26）。
+> 本文 §2.1–§2.3 的「顶栏 + 底部 4 页导航 + 发射抽屉」与其后的「JTDX 风格横屏外壳」
+> （[docs/UI-JTDX.md](UI-JTDX.md)，已废弃）均不再使用。
+> 本文其余部分（配色板 §1.1、解码逻辑与高亮、日志 / 地图 / 设置、JNI 契约、路线图、回归清单）仍然有效；
+> 其中「解码卡片左侧色条」已改为 **JTDX 默认整行底色**（见 UI-MOBILE.md §6）。
+
 > 本文件由 `docs/new_ui.md`、`docs/NEW-UI-PLAN.md`、`docs/ROADMAP.md`、`docs/JNI-CONTRACT.md`、`docs/REGRESSION.md` 合并精简而来
 > （**这些源文件已删除，历史版本见 git 记录**）；原阶段 7 的 `docs/UI-DESIGN.md`（旧四页设计）已废弃。
 

@@ -31,9 +31,9 @@ import com.example.ft8vox.qso.AutoProgramSelector
 import com.example.ft8vox.qso.AutoScheduler
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
+import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
 import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
-import com.example.ft8vox.qso.DecodeFilterTag
 import com.example.ft8vox.qso.FollowRoster
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * 发射/试音「写入 0 帧」时的统一提示。
@@ -133,6 +134,13 @@ data class ReceiverStatus(
     val autoQueueSize: Int = 0,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
+    /**
+     * 一次性发射（自定义报文框 / 长按解码行「逐条发送」）的**拒绝原因**（红字，几秒后自动消失）。
+     *
+     * 以前这些拒绝只写进 [status] 字符串，而竖屏外壳里没有显示它的位置 —— 用户点「发送」
+     * 看上去什么都没发生（真机反馈）。现在统一显示在发射区底部，见 `docs/UI-MOBILE.md` §27。
+     */
+    val txNotice: String? = null,
     // ---- PTT / 输入电平（U7b） ----
     /** 平滑后的输入电平（dBFS，下限约 -100）；纯显示用。 */
     val voxLevelDb: Float = -100f,
@@ -525,10 +533,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(auto = transform(it.auto)) }
     }
 
-    fun setFilterTags(tags: Set<DecodeFilterTag>) {
-        persist { it.copy(filterTags = tags) }
-    }
-
     /** 忽略一个呼号（不再显示其解码，也不参与自动程序选台）。 */
     fun ignoreCall(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
@@ -574,6 +578,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 清空关注名单（关注列表里的「全部清除」，手动关注与自动收录一并清掉）。 */
+    fun clearFollowCalls() {
+        persist { it.copy(followCalls = emptySet(), autoFollowOrder = emptyList()) }
+    }
+
     /**
      * 「自动收录 CQ 台」：把本批解到的、**当前波段还没通联过**的**新** CQ 呼号并入关注名单
      * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动关注的永不被淘汰）。
@@ -600,19 +609,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setCallFilter(value: String) {
-        persist { it.copy(callFilter = value) }
-    }
-
-    /** 保存 CQ 前缀格子（最多 8 个，**保留空格子**＝普通 CQ；全空则回落默认）。 */
-    fun setCqPrefixes(list: List<String>) {
-        val cleaned = list.map { it.trim().uppercase() }.take(8)
-        persist { it.copy(cqPrefixes = if (cleaned.any { p -> p.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES) }
-    }
-
-    /** 选中某个 CQ 前缀格子（所有 CQ 都用它）。 */
-    fun setCqPrefixIndex(index: Int) {
-        persist { it.copy(cqPrefixIndex = index.coerceIn(0, (it.cqPrefixes.size - 1).coerceAtLeast(0))) }
+    /**
+     * 保存 CQ 前缀格子**与选中项**（发射区「CQ 前缀」弹窗一次提交，docs/UI-MOBILE.md §28）。
+     *
+     * 一次写完：分两次 `persist` 会各自读一次设置快照，选中项可能落到旧格子表上。
+     */
+    fun setCqPrefix(slots: List<String>, index: Int) {
+        val (prefixes, selected) = cleanCqPrefixes(slots, index)
+        persist { it.copy(cqPrefixes = prefixes, cqPrefixIndex = selected) }
     }
 
     /** 选择「波段 + 刻度频率」（顶栏弹窗 / 设置页）。[hz]<=0 表示用该波段默认频率。 */
@@ -968,39 +972,97 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 一次性发射一条报文（长按解码行的「逐条发送」）。
+     * 一次性发射一条报文（自定义报文框的「发送」/ 长按解码行的「逐条发送」）。
      *
-     * 不进入 QSO 自动序列，发完即解除武装；QSO 进行中不允许（避免打断自动序列）。
-     * 人工操作不暂停自动程序，只复位发射监管计时。
+     * **前置编码校验**（§27）：`nativeEncode` 编不出来的文本（非法报文）当场红字拒绝，不排程 ——
+     * 否则要白等一个发射时隙才在编码里报「发射异常」。校验放后台线程（一次完整编码约十几毫秒，
+     * 不该占 UI 线程）。
+     *
+     * 通过后走 [sendOnceInternal]：报文排到**下一个我方时隙**发出（不打断正在跑的 QSO，
+     * 见那里的说明）。人工操作不暂停自动程序，只复位发射监管计时。
      */
     fun sendOnce(text: String) {
         scheduler.resetSupervision(AudioEngine.utcNowMs())
-        sendOnceInternal(text)
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        txBlockReason(_status.value.myCall, _status.value.txEnabled)?.let {
+            showTxNotice(it)
+            return
+        }
+        val st = _status.value
+        viewModelScope.launch {
+            // 编码校验放后台线程（一次完整编码约十几毫秒），**排程仍回到主线程**——
+            // 所有发射入口（发送 / 呼号 / 六槽）保持单入口、顺序执行。
+            val encodable = withContext(Dispatchers.Default) { canEncodeMessage(trimmed, st) }
+            if (!encodable) {
+                showTxNotice("FT8 编不出这条报文：$trimmed")
+                return@launch
+            }
+            _status.update { it.copy(txNotice = null) }
+            sendOnceInternal(trimmed)
+        }
     }
 
+    /**
+     * 试编码一次，只判断「这条报文能不能发」（前置校验用，结果丢弃）。
+     *
+     * `nativeEncode` 在 native 侧**无状态**（不碰解码 handle），可在任意线程安全调用 ——
+     * 排程后的正式发射本来也在 IO 线程里调它。
+     */
+    private fun canEncodeMessage(text: String, st: ReceiverStatus): Boolean = try {
+        Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000).isNotEmpty()
+    } catch (e: Exception) {
+        Log.w(TAG_QSO, "报文无法编码：$text", e)
+        false
+    }
+
+    /**
+     * 在发射区底部显示一条红字提示（一次性发射被拒 / 编不出来的原因），[TX_NOTICE_MS] 后自动消失。
+     *
+     * 用文本比对作废旧定时器：期间又冒出新提示时，旧定时器不会把新提示清掉。
+     */
+    private fun showTxNotice(message: String) {
+        _status.update { it.copy(txNotice = message) }
+        viewModelScope.launch {
+            delay(TX_NOTICE_MS)
+            _status.update { if (it.txNotice == message) it.copy(txNotice = null) else it }
+        }
+    }
+
+    /**
+     * 排程一条一次性报文（已通过前置校验）。
+     *
+     * **QSO 进行中也允许**（§27 真机反馈：「插一条、不打断」）：本条报文在 [txTick] 里优先级高于
+     * `qso.txText`（`manualTxText ?: qso.txText`），而且发完不推进 QSO 状态机
+     * （[txTick] 的 `manualInFlight` 分支），所以原 QSO 只是**暂停一个周期**、接着往下跑。
+     * 对方可能因此多等一个周期（真机可接受，也是手动优先的代价）。
+     */
     private fun sendOnceInternal(text: String) {
-        if (!canOperate) {
-            _status.update { it.copy(status = "请先填写呼号") }
-            return
-        }
-        if (!_status.value.txEnabled) {
-            _status.update { it.copy(status = "请先打开「发射」开关") }
-            return
-        }
-        if (_status.value.qso.active) {
-            _status.update { it.copy(status = "QSO 进行中，暂不逐条发送") }
+        txBlockReason(_status.value.myCall, _status.value.txEnabled)?.let {
+            showTxNotice(it)
             return
         }
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         if (!_status.value.running) start()
-        if (!_status.value.running) return
+        if (!_status.value.running) {
+            showTxNotice("音频未启动，无法发射")
+            return
+        }
 
         relockAutoParityIfNeeded()
-        if (!armPlayback()) return
+        if (!armPlayback()) {
+            showTxNotice("音频输出未就绪，无法发射")
+            return
+        }
         lastTxSlotIndex = -1L
         _status.update {
-            it.copy(manualTxText = trimmed, txArmed = true, status = "待发（一次性）：$trimmed")
+            it.copy(
+                manualTxText = trimmed,
+                txArmed = true,
+                txNotice = null,
+                status = "待发（一次性）：$trimmed",
+            )
         }
         tryRetargetNow(trimmed, manual = true)
     }
@@ -1541,12 +1603,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** 由设置构造显示过滤条件（操作页与自动程序共用）。 */
+    /**
+     * 显示 / 自动程序共用的呼号名单（docs/UI-MOBILE.md §20）。
+     *
+     * 操作页的筛选与搜索已整体删除，因此这里**不再带 tags / query**（恒为 `ALL` + 空搜索），
+     * 只保留忽略名单（隐藏）与关注名单（自动程序例外）。`AppSettings.filterTags` / `callFilter`
+     * 两个字段仅为兼容旧设置保留，界面已无入口。
+     */
     private fun currentFilter(): DecodeFilterState {
         val s = latestSettings
         return DecodeFilterState(
-            tags = s.filterTags,
-            query = s.callFilter,
             ignoredCalls = s.ignoredCalls,
             followedCalls = s.followCalls,
         )
@@ -1592,13 +1658,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (txJustFinished) {
             txJustFinished = false
             if (manualInFlight) {
-                // 一次性发射：不推进 QSO 状态机，发完即解除武装
+                // 一次性发射：**不推进 QSO 状态机**（真机语义：自定义报文只是「插一条」）
                 manualInFlight = false
+                val p = qsoEngine.progress()
+                val stillRunning = qsoStillNeedsTx(p)
                 _status.update {
+                    val done = "一次性发射完成：${it.lastTxText ?: ""}"
                     it.copy(
                         manualTxText = null,
-                        txArmed = false,
-                        status = "一次性发射完成：${it.lastTxText ?: ""}",
+                        // 「插一条」不打断 QSO（§27）：QSO 还没走完（含收尾报文待发）→ 保留武装，
+                        // 下一周期接着发原序列；空闲时的一次性发射则发完即解除武装。
+                        txArmed = stillRunning && it.txEnabled,
+                        qso = p,
+                        status = if (p.active) "$done｜QSO 继续" else done,
                     )
                 }
             } else {
@@ -1618,7 +1690,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     pinnedTxParity = null
                 }
                 _status.update {
-                    it.copy(qso = p, txArmed = if (finished && !finalPending) false else it.txArmed)
+                    it.copy(qso = p, txArmed = if (qsoStillNeedsTx(p)) it.txArmed else false)
                 }
                 if (finalPending) {
                     Log.i(TAG_QSO, "收尾报文未发完：${p.txText}，保持发射、暂不启动新 QSO")
@@ -2017,6 +2089,31 @@ internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
 
 /**
+ * 一次性发射（自定义报文框的「发送」/ 长按解码行的「逐条发送」）**不能发的原因**（纯逻辑，便于单测）。
+ *
+ * 返回 null 表示可以发。原来这些拒绝只写进 `ReceiverStatus.status`，而竖屏外壳里没有显示它的
+ * 位置，用户点「发送」就像什么都没发生（真机反馈）—— 现在统一走红字提示 `ReceiverStatus.txNotice`。
+ */
+internal fun txBlockReason(myCall: String, txEnabled: Boolean): String? = when {
+    myCall.isEmpty() -> "请先到设置填写呼号与网格"
+    !txEnabled -> "只接收：先打开信息头右上角的「发射」开关"
+    else -> null
+}
+
+/**
+ * QSO 后面**还有报文要发**：状态机还在进行（`active`），或者已经 DONE/FAILED、但收尾的
+ * RR73/73 还没播出去（`txText != null`）。
+ *
+ * 发射武装（`ReceiverStatus.txArmed`）在一条报文发完后要不要保留、以及「自定义报文插一条」发完
+ * 要不要接着发原序列，都看它 —— 两处判据本来各写一遍，统一到这里。纯逻辑便于单测。
+ */
+internal fun qsoStillNeedsTx(p: QsoProgress): Boolean =
+    p.active || ((p.state == QsoState.DONE || p.state == QsoState.FAILED) && p.txText != null)
+
+/** 发射区一次性提示（红字）的显示时长：够看清一句短句，又不至于长时间盖住 QSO 进度那一行。 */
+internal const val TX_NOTICE_MS = 6000L
+
+/**
  * 「发射排定」是否要停下来等上一时隙的解码（`txTick` 的闸门；纯函数便于单测）。
  *
  * QSO 进行中时，本时隙该发什么取决于**上一时隙**（[targetSlotIndex] − 1）的解码：它可能把
@@ -2097,6 +2194,21 @@ internal fun effectiveTxParity(
 /** 周期文案（用于状态提示）。 */
 internal fun parityLabel(parity: Int): String =
     if (parity == TX_PARITY_ODD) "奇数周期" else "偶数周期"
+
+/**
+ * 规整「CQ 前缀」格子与选中项（纯逻辑，便于单测；发射区「CQ 前缀」弹窗「确定」时提交）。
+ *
+ * - 固定 [CQ_PREFIX_SLOTS] 格、去首尾空格、转大写；**空格子保留**（空串＝普通 CQ），不能去空；
+ * - 全是空格子时回落 [DEFAULT_CQ_PREFIXES]（给出「恢复默认」的出口，也免得 CQ 报文没有前缀格可选）；
+ * - 选中下标按最终格子数夹住。
+ *
+ * @return `(格子表, 选中下标)`
+ */
+internal fun cleanCqPrefixes(slots: List<String>, index: Int): Pair<List<String>, Int> {
+    val cleaned = List(CQ_PREFIX_SLOTS) { slots.getOrElse(it) { "" }.trim().uppercase() }
+    val kept = if (cleaned.any { it.isNotEmpty() }) cleaned else DEFAULT_CQ_PREFIXES
+    return kept to index.coerceIn(0, (kept.size - 1).coerceAtLeast(0))
+}
 
 /**
  * 前台服务通知的副标题（纯函数，便于单测，阶段 9）。

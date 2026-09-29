@@ -419,14 +419,16 @@ class QsoEngineTest {
     }
 
     @Test
-    fun staleGridAfterReportIsIgnoredButReportRefreshes() {
+    fun staleGridAfterReportIsIgnoredAndReportKeepsFirstSnr() {
         // 我已发出报告（等 R）后，对方又（重复/滞后地）发来网格：不应退回「发报告」阶段；
-        // 但报告值按「每次重测最新」刷新为本次解码的 SNR（默认 -10）。
+        // 报告值也**不再**跟着最新 SNR 刷新——固定为第一次测到的 -11（JTDX 口径）。
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
         assertEquals(QsoState.WAIT_REPORT, s.state)
-        assertEquals("GJ0KYZ F4FSY -10", s.txText)
+        assertEquals("GJ0KYZ F4FSY -11", s.txText)
+        // 再来一批（SNR -18）：仍是第一次的 -11
+        assertEquals("GJ0KYZ F4FSY -11", q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -18))).txText)
     }
 
     // ---- 六步指令序列（FT8CN functionOrder） ----
@@ -461,21 +463,21 @@ class QsoEngineTest {
     }
 
     @Test
-    fun reportRefreshesToLatestSnrButRReusesTransmittedTx2Value() {
+    fun reportKeepsFirstSnrAndRReusesTransmittedTx2Value() {
         val q = engine()
         val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertEquals("GJ0KYZ F4FSY -11", s0.txText)
-        // 未推进时用最新 SNR 刷新（-18）
+        // 对方重发/滞后报文（本批 SNR -18）：待发报告固定为第一次的 -11，不跟着刷新
         val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -18)))
-        assertEquals("GJ0KYZ F4FSY -18", s1.txText)
-        // 实际发出 Tx2（快照 -18）
+        assertEquals("GJ0KYZ F4FSY -11", s1.txText)
+        // 实际发出 Tx2（快照 -11）
         q.onTransmitted()
-        // 对方 R 报告（本批 SNR -9）：回 RR73 完成，落库 reportSent 用 Tx2 的 -18（不是 -9）
+        // 对方 R 报告（本批 SNR -9）：回 RR73 完成，落库 reportSent 用 Tx2 的 -11（不是 -9）
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
         assertEquals(QsoState.DONE, s2.state)
         val log = q.consumeCompleted()
         assertNotNull(log)
-        assertEquals(-18, log!!.reportSent)
+        assertEquals(-11, log!!.reportSent)
         assertEquals(-5, log.reportReceived)
     }
 
@@ -497,5 +499,48 @@ class QsoEngineTest {
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertTrue(q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))).advanced)
+    }
+
+    // ---- 「待发 / 已发出」措辞（实机反馈：没发出去就说「已发出」有误导性）----
+
+    @Test
+    fun cqDescriptionSaysPendingUntilActuallyTransmitted() {
+        val q = engine()
+        val armed = q.startCq()
+        // 刚点 CQ：只是排定，还没轮到我方时隙 → 不能说「已发出」
+        assertFalse(armed.txSent)
+        assertEquals("CQ 待发（等我的发射时隙）", armed.description)
+
+        // 真正发出这一条之后，才允许说「已发出」
+        q.onTransmitted(armed.txText)
+        val sent = q.progress()
+        assertTrue(sent.txSent)
+        assertEquals("CQ 已发出，等待回应", sent.description)
+    }
+
+    @Test
+    fun pendingReportDoesNotClaimSentBeforeTransmission() {
+        val q = engine()
+        val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertFalse(s0.txSent)
+        assertEquals("报告 -11 待发（等我的发射时隙）", s0.description)
+
+        q.onTransmitted(s0.txText)
+        val s1 = q.progress()
+        assertTrue(s1.txSent)
+        assertEquals("已发报告 -11，等待 GJ0KYZ 的 R 报告", s1.description)
+    }
+
+    @Test
+    fun newPendingMessageResetsSentFlag() {
+        val q = engine()
+        val s0 = q.startResponderQso("GJ0KYZ", "IO90")
+        q.onTransmitted(s0.txText)
+        assertTrue(q.progress().txSent)
+
+        // 对方回报告 → 待发报文换成 R 报告（新的一条）→ 又回到「待发」
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertFalse(s1.txSent)
+        assertTrue("应提示等我的发射时隙：${s1.description}", s1.description.contains("待发"))
     }
 }

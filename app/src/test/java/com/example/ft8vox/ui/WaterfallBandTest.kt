@@ -63,4 +63,21 @@ class WaterfallBandTest {
     fun zeroSpanIsSafe() {
         assertEquals(0f to 0f, txBandPx(1000, 50, fMinHz = 200f, spanHz = 0f, width = width))
     }
+
+    @Test
+    fun gridStepKeepsLineCountBetweenFourAndEight() {
+        // 常见音频轴跨度：从 200 Hz 到 3000 Hz 之间
+        for (span in listOf(500f, 1000f, 2400f, 2800f, 2900f, 3000f)) {
+            val step = gridStepHz(span)
+            val lines = span / step
+            assertTrue("跨度 $span Hz 的网格线数 $lines 应在 4~8 之间", lines >= 4f && lines <= 8f)
+        }
+    }
+
+    @Test
+    fun gridStepPrefersRoundNumbers() {
+        assertEquals(500f, gridStepHz(2800f), 0.001f) // 2800/500 = 5.6 条
+        assertEquals(1000f, gridStepHz(6000f), 0.001f) // 6000/500 = 12 太密，退到 1000
+        assertEquals(100f, gridStepHz(600f), 0.001f) // 窄轴用细网格
+    }
 }

@@ -36,6 +36,8 @@ import com.example.ft8vox.qso.CqFlag
 import com.example.ft8vox.qso.GridMarker
 import com.example.ft8vox.qso.MapTier
 import com.example.ft8vox.qso.SignalLink
+import com.example.ft8vox.ui.theme.MapLinkColor
+import com.example.ft8vox.ui.theme.MapLinkMine
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +50,6 @@ private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
 private val TierWorked = Color(0xFFF9E2AF) // 黄：日志已通联
 private val TierConfirmed = Color(0xFFE64553) // 红：日志已确认
 private val CqRed = Color(0xFFE64553)
-private val LinkColor = Color(0x9989B4FA)
 private val MyColor = Color(0xFF00E5FF)
 
 /** 底图暗化：卫星影像偏亮，乘 0.7 让它退到 UI 之后（不透明度不变）。 */
@@ -120,6 +121,8 @@ fun GridMap(
             fontWeight = FontWeight.Bold,
         )
     }
+    /** 「与我有关」的连线文字：红色（§29）。 */
+    val linkMineStyle = remember { linkStyle.copy(color = MapLinkMine) }
     val myLabelStyle = remember {
         TextStyle(color = MyColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
@@ -214,6 +217,7 @@ fun GridMap(
             }
 
             // ---- 信号连线（只画最近一个时隙；跨 180° 走短弧） ----
+            // 「与我有关」的连线（报告 / R报告 / 73 / RR73）线身与文字都标红（§29）
             val phase = linkPhase().coerceIn(0f, 1f)
             for (l in links) {
                 val (fa, tb) = p.linkEnds(l.fromLat, l.fromLon, l.toLat, l.toLon)
@@ -225,16 +229,17 @@ fun GridMap(
                 if ((fy < -40f && ty < -40f) || (fy > size.height + 40f && ty > size.height + 40f)) continue
 
                 drawLine(
-                    color = LinkColor,
+                    color = if (l.mine) MapLinkMine.copy(alpha = 0.8f) else MapLinkColor,
                     start = Offset(fx, fy),
                     end = Offset(tx, ty),
-                    strokeWidth = 1.4.dp.toPx(),
+                    strokeWidth = if (l.mine) 2f else 1.4.dp.toPx(),
                 )
                 val mx = fx + (tx - fx) * phase
                 val my = fy + (ty - fy) * phase
                 val label = l.label
                 if (showLinkText && label != null) {
-                    val laid = measurer.measure(AnnotatedString(label), linkStyle)
+                    val style = if (l.mine) linkMineStyle else linkStyle
+                    val laid = measurer.measure(AnnotatedString(label), style)
                     drawText(
                         textLayoutResult = laid,
                         topLeft = Offset(mx - laid.size.width / 2f, my - laid.size.height / 2f),
@@ -242,7 +247,7 @@ fun GridMap(
                 } else {
                     val half = 3.dp.toPx()
                     drawRect(
-                        color = Color.White.copy(alpha = 0.9f),
+                        color = if (l.mine) Color(0xFFFFC9C9) else Color.White.copy(alpha = 0.9f),
                         topLeft = Offset(mx - half, my - half),
                         size = Size(half * 2, half * 2),
                     )
