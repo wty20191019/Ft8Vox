@@ -27,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.drawText
@@ -98,9 +97,8 @@ fun SpectrumScreen(
                 p, worked, status.qso.theirCall, status.myCall,
                 DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys, txText, highlightPrefs,
             ).role
-            val call = p.from ?: m.text.substringBefore(' ')
             SpectrumLabel(
-                call = call,
+                text = m.text,
                 df = m.df,
                 role = role,
                 signalEndMs = m.slotUtcMs + signalEndOffsetMs,
@@ -153,9 +151,10 @@ fun SpectrumScreen(
                 },
             )
 
-            // 解码呼号叠加（**竖排**：横排会互相叠字，转 90° 后只占一条窄缝）：
-            // x 按频率定位、y 按「信号实际结束时刻」锚定 —— 底端压在信号结束处，随瀑布向上滚，
-            // 滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失（docs/UI-MOBILE.md §14）。颜色＝JTDX 类别色。
+            // 解码报文叠加（**竖排**：横排会互相叠字，顺转 90° 后只占一条窄缝）：
+            // x 按频率定位、y 按「信号实际结束时刻」锚定 —— 文字底端压在信号结束处、
+            // 自上而下读，随瀑布向上滚，滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失。
+            // 颜色＝JTDX 类别色；不垫底块（docs/UI-MOBILE.md §15）。
             val frame = waterfall
             val span = frame?.let { it.bins * it.binHz }
             val windowMs = (WF_ROWS * WF_ROW_MS).toFloat()
@@ -170,25 +169,20 @@ fun SpectrumScreen(
                 labels.forEach { label ->
                     val age = (nowWallMs - label.signalEndMs).toFloat()
                     if (age < 0f || age > windowMs) return@forEach
-                    val layout = textMeasurer.measure(label.call, style = labelStyle)
+                    val layout = textMeasurer.measure(label.text, style = labelStyle)
                     val tw = layout.size.width.toFloat()
                     val th = layout.size.height.toFloat()
                     val frac = ((label.df - f.fMinHz) / span).coerceIn(0f, 1f)
                     val cx = frac * size.width
                     val yAnchor = size.height * (1f - age / windowMs)
                     if (yAnchor <= 0f || cx < 0f || cx > size.width) return@forEach
-                    // 逆时针转 90°：文字从下往上读，底端锚在信号结束时刻、向上延伸
-                    val left = cx - th / 2f
-                    rotate(degrees = -90f, pivot = Offset(left, yAnchor)) {
-                        drawRect(
-                            color = Color(0xCC000000),
-                            topLeft = Offset(left, yAnchor),
-                            size = Size(tw, th),
-                        )
+                    // 顺时针转 90°：文字自上而下读，底端锚在信号结束时刻、向上铺满信号的轨迹
+                    val pivot = Offset(cx + th / 2f, yAnchor - tw)
+                    rotate(degrees = 90f, pivot = pivot) {
                         drawText(
                             textLayoutResult = layout,
                             color = highlightTextColor(label.role),
-                            topLeft = Offset(left, yAnchor),
+                            topLeft = pivot,
                         )
                     }
                 }
@@ -276,9 +270,9 @@ fun SpectrumScreen(
     }
 }
 
-/** 频谱叠加的一条解码标签（呼号 + 音频频率 + 高亮类别 + 信号结束时刻）。 */
+/** 频谱叠加的一条解码标签（报文 + 音频频率 + 高亮类别 + 信号结束时刻）。 */
 private data class SpectrumLabel(
-    val call: String,
+    val text: String,
     val df: Int,
     val role: HighlightRole,
     /** 该解码**信号实际结束**的时刻（ms）：用来锚定它在瀑布上的竖向位置。 */
