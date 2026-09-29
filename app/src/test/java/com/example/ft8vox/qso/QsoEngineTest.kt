@@ -498,4 +498,47 @@ class QsoEngineTest {
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertTrue(q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))).advanced)
     }
+
+    // ---- 「待发 / 已发出」措辞（实机反馈：没发出去就说「已发出」有误导性）----
+
+    @Test
+    fun cqDescriptionSaysPendingUntilActuallyTransmitted() {
+        val q = engine()
+        val armed = q.startCq()
+        // 刚点 CQ：只是排定，还没轮到我方时隙 → 不能说「已发出」
+        assertFalse(armed.txSent)
+        assertEquals("CQ 待发（等我的发射时隙）", armed.description)
+
+        // 真正发出这一条之后，才允许说「已发出」
+        q.onTransmitted(armed.txText)
+        val sent = q.progress()
+        assertTrue(sent.txSent)
+        assertEquals("CQ 已发出，等待回应", sent.description)
+    }
+
+    @Test
+    fun pendingReportDoesNotClaimSentBeforeTransmission() {
+        val q = engine()
+        val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertFalse(s0.txSent)
+        assertEquals("报告 -11 待发（等我的发射时隙）", s0.description)
+
+        q.onTransmitted(s0.txText)
+        val s1 = q.progress()
+        assertTrue(s1.txSent)
+        assertEquals("已发报告 -11，等待 GJ0KYZ 的 R 报告", s1.description)
+    }
+
+    @Test
+    fun newPendingMessageResetsSentFlag() {
+        val q = engine()
+        val s0 = q.startResponderQso("GJ0KYZ", "IO90")
+        q.onTransmitted(s0.txText)
+        assertTrue(q.progress().txSent)
+
+        // 对方回报告 → 待发报文换成 R 报告（新的一条）→ 又回到「待发」
+        val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
+        assertFalse(s1.txSent)
+        assertTrue("应提示等我的发射时隙：${s1.description}", s1.description.contains("待发"))
+    }
 }

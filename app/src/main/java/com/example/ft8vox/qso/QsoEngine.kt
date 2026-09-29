@@ -67,10 +67,21 @@ data class QsoProgress(
      * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/QSO.md` §3.1）。
      */
     val advanced: Boolean = false,
+    /**
+     * 当前 [txText] 是否**已经真正发出去**过。
+     *
+     * 状态机一收到对方报文就把 [txText] 排定为下一跳，但**要等到我方时隙才会真的播出去**；
+     * 若 UI 直接说「已发出」，就会出现「其实还没发」的误导（真机反馈）。
+     * 这里由 [QsoEngine.onTransmitted] 记录真正播出去的文本，[QsoProgress.txText] 与之一致时为 `true`。
+     */
+    val txSent: Boolean = false,
 ) {
     /** 是否处于进行中的 QSO。 */
     val active: Boolean
         get() = state != QsoState.IDLE && state != QsoState.DONE && state != QsoState.FAILED
+
+    /** 本阶段还没轮到我方时隙发射时的提示后缀。 */
+    private val pendingHint: String get() = "待发（等我的发射时隙）"
 
     val description: String
         get() = when (state) {
@@ -78,10 +89,20 @@ data class QsoProgress(
             QsoState.DONE -> "已完成"
             QsoState.FAILED -> "已放弃（对方无响应）"
             QsoState.WAIT_REPLY ->
-                if (awaitingResponders) "CQ 已发出，等待回应"
-                else "等待 $theirCall 回复"
-            QsoState.WAIT_REPORT -> "已发报告 ${reportSent?.let { MessageParser.formatReport(it) } ?: ""}，等待 $theirCall 的 R 报告"
-            QsoState.WAIT_RR73 -> "等待 $theirCall 的 RR73"
+                when {
+                    awaitingResponders && txSent -> "CQ 已发出，等待回应"
+                    awaitingResponders -> "CQ $pendingHint"
+                    txSent -> "已呼叫 $theirCall，等待回复"
+                    else -> "呼叫 $theirCall $pendingHint"
+                }
+            QsoState.WAIT_REPORT -> {
+                val r = reportSent?.let { MessageParser.formatReport(it) } ?: ""
+                if (txSent) "已发报告 $r，等待 $theirCall 的 R 报告"
+                else "报告 $r $pendingHint"
+            }
+            QsoState.WAIT_RR73 ->
+                if (txSent) "已发 R 报告，等待 $theirCall 的 RR73"
+                else "R 报告 $pendingHint"
         }
 }
 
@@ -154,6 +175,8 @@ class QsoEngine {
     private var noReplyCount = 0
     /** 最近一次 [onDecoded] 是否推进（供第 2 层识别「目标本批沉默」，见 [QsoProgress.advanced]）。 */
     private var lastAdvanced = false
+    /** **真正发出去**的那条报文文本（[onTransmitted] 记录，用于 [QsoProgress.txSent] 判定）。 */
+    private var lastSentText: String? = null
     private var logEntry: QsoLogEntry? = null
 
     /** 是否处于「已发 CQ、等回应者」阶段（见 [QsoProgress.awaitingResponders]）。 */
@@ -183,6 +206,7 @@ class QsoEngine {
         noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
         advanced = lastAdvanced,
+        txSent = txText != null && txText == lastSentText,
     )
 
     /** 取走刚完成的通联记录（一次性，取走后清空）。 */
@@ -205,6 +229,8 @@ class QsoEngine {
      * 由第 2 层在下一次我方时隙把它发出去（见 `SessionViewModel.txTick`）。
      */
     fun onTransmitted(sentText: String? = null) {
+        // 记录「真正发出去的是哪条」，供 QsoProgress.txSent / description 区分「待发」与「已发出」
+        if (sentText != null) lastSentText = sentText
         if (state == QsoState.DONE || state == QsoState.FAILED) {
             if (sentText == null || txText == null || sentText == txText) txText = null
         }
@@ -532,6 +558,7 @@ class QsoEngine {
         startedUtcMs = 0L
         noReplyCount = 0
         lastAdvanced = false
+        lastSentText = null
         logEntry = null
         awaitingResponders = false
     }

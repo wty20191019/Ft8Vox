@@ -125,6 +125,26 @@ internal fun voxLabel(levelDb: Float, running: Boolean): String {
 internal fun slotOffsetLabel(ms: Int): String =
     String.format(Locale.US, "%+.1f 秒", ms / 1000.0)
 
+/**
+ * 信息头第 3 行右侧 DX 栏文案（实机反馈：不能再自相矛盾）。
+ *
+ * - 有目标：`DX→ 呼号 网格 报告`
+ * - 没目标但**正在呼叫 CQ（等回应）**：不能只写「未设目标」——否则与发射区那句
+ *   「CQ 已发出 / CQ 待发，等待回应」互相打架，看起来像「没设目标却在通联」。
+ *   此时如实说明「在叫 CQ、还没人回应」。
+ * - 其余：`DX→ 未设目标`。
+ */
+internal fun dxTargetLabel(
+    target: String?,
+    targetGrid: String?,
+    report: Int,
+    awaitingResponders: Boolean,
+): String = when {
+    target != null -> "DX→ $target ${targetGrid ?: "--"} ${MessageParser.formatReport(report)}"
+    awaitingResponders -> "CQ 呼叫中，暂无目标"
+    else -> "DX→ 未设目标"
+}
+
 /** RX/TX 圆点；TX 时红色脉动。 */
 @Composable
 fun TxRxDot(txing: Boolean, running: Boolean, modifier: Modifier = Modifier) {
@@ -279,13 +299,13 @@ fun MobileInfoHeader(
                 )
             }
             Text(
-                if (target != null) {
-                    "DX→ $target ${targetGrid ?: "--"} ${MessageParser.formatReport(report)}"
-                } else {
-                    "DX→ 未设目标"
-                },
+                dxTargetLabel(target, targetGrid, report, status.qso.awaitingResponders),
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                color = if (target != null) JtdxGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (target != null || status.qso.awaitingResponders) {
+                    JtdxGreen
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
