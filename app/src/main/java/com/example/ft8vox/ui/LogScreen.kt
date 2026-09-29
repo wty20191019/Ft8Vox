@@ -566,7 +566,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
     }
 }
 
-/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 波段柱图（docs/UI-MOBILE.md §16：从底部挪到顶部）。 */
+/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 一行波段分布（docs/UI-MOBILE.md §17：去掉柱图省高度）。 */
 @Composable
 private fun StatsPanel(stats: LogStats) {
     Surface(
@@ -582,7 +582,12 @@ private fun StatsPanel(stats: LogStats) {
                 StatCell("确认", stats.confirmed.toString(), Modifier.weight(1f))
             }
             if (stats.byBand.isNotEmpty()) {
-                BandBarChart(stats.byBand, Modifier.fillMaxWidth().height(52.dp).padding(top = 6.dp))
+                Text(
+                    "波段分布  " + stats.byBand.joinToString("  ") { "${it.first} ${it.second}" },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(
                 "DXCC 按呼号前缀映射实体表（常用实体精选子集）",
@@ -603,39 +608,6 @@ private fun StatCell(label: String, value: String, modifier: Modifier = Modifier
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(value, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-/** 波段柱图：每根柱高按条数比例，可横向滚动。 */
-@Composable
-private fun BandBarChart(bands: List<Pair<String, Int>>, modifier: Modifier = Modifier) {
-    val max = bands.maxOf { it.second }.coerceAtLeast(1)
-    Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        for ((name, count) in bands) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    "$count",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Box(
-                    modifier = Modifier
-                        .width(18.dp)
-                        .height((6 + 26 * count / max).dp)
-                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                        .background(VoxAccent),
-                )
-                Text(
-                    name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
     }
 }
 

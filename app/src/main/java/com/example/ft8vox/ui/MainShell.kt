@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.SessionService
@@ -159,7 +160,14 @@ fun MainShell(
             onOpenSettings = { tab = MainTab.SETTINGS },
         )
 
-        Box(Modifier.weight(1f).fillMaxWidth().fillMaxHeight()) {
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .fillMaxHeight()
+                // 内容页自绘（地图平移/缩放、瀑布）不裁剪会画到上方信息头上
+                .clipToBounds(),
+        ) {
             when (tab) {
                 MainTab.OPERATE -> OperateScreen(
                     viewModel = session,
