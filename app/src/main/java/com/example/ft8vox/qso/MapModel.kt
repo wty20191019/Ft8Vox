@@ -38,13 +38,34 @@ data class CallMarker(
     val fromPrefix: Boolean,
 )
 
-/** CQ 旗（docs/UI.md §2.4）：形状=旗表示「在 CQ」，旗面颜色在绘制时取该台的类别色（§31）。 */
+/**
+ * CQ 旗的「通联状态」三档（照 FT8CN `tracker_cq_marker_*`，docs/UI-MOBILE.md §34）。
+ *
+ * 旗面颜色回答的是「**这个台我还要不要通联**」，与网格方块的类别色（解码/通联/确认）
+ * **语义不同**：网格色描述「这一格是什么状态」，旗色描述「这个 CQ 台的呼号做过没有」。
+ */
+enum class CqWorked(val label: String) {
+    /** 从未通联（红）：优先应答。 */
+    NONE("未通联"),
+
+    /** 只在别的波段通联过（蓝）。 */
+    OTHER_BAND("他波段"),
+
+    /** 本波段已通联（灰）：不必再抢（自动程序也不会呼叫它）。 */
+    THIS_BAND("本波段"),
+}
+
+/**
+ * CQ 旗（docs/UI-MOBILE.md §31/§34）：形状=旗表示「在 CQ」，旗面颜色 = [worked]（通联状态）。
+ */
 data class CqFlag(
     val call: String,
     val lat: Double,
     val lon: Double,
     val snr: Int,
     val utcMs: Long,
+    /** 旗面颜色语义（通联状态）；默认未通联。 */
+    val worked: CqWorked = CqWorked.NONE,
 )
 
 /** 信号连线（docs/UI.md §2.4）：方向由 [fromCall] 指向 [toCall]。 */
@@ -176,7 +197,8 @@ object MapModel {
     /**
      * 解码到的 CQ 台（同一呼号取最近一次，过滤掉自己）。
      *
-     * 绘制时这些呼号用**旗子**当标记（替代圆点），旗面颜色取该台的类别色（§31）。
+     * 绘制时这些呼号用**旗子**当标记（替代圆点），旗面颜色取该台的**通联状态**（§34）：
+     * [workedCalls]（任意波段已通联）与 [bandWorkedCalls]（**本波段**已通联）决定旗色。
      * [latestSlotOnly] = true 时只看**最近一个时隙**（地图页口径：旗子表示「**现在**谁在喊 CQ」，
      * §33）；默认 false 仍按 [nowMs]/[windowMs] 的时间窗，便于复用与单测。
      */
@@ -188,6 +210,10 @@ object MapModel {
         gridCache: Map<String, String> = emptyMap(),
         maxFlags: Int = 200,
         latestSlotOnly: Boolean = false,
+        /** 任意波段已通联的呼号（大写）；与 [bandWorkedCalls] 一起决定旗色。 */
+        workedCalls: Set<String> = emptySet(),
+        /** **本波段**已通联的呼号（大写）；优先于 [workedCalls]。 */
+        bandWorkedCalls: Set<String> = emptySet(),
     ): List<CqFlag> {
         val me = myCall.trim().uppercase()
         val slot = if (latestSlotOnly) latestSlotMs(messages) else null
@@ -205,7 +231,12 @@ object MapModel {
             val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
             if (from == me) continue
             val r = resolve(from, p.grid, cache) ?: continue
-            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs)
+            val worked = when {
+                from in bandWorkedCalls -> CqWorked.THIS_BAND
+                from in workedCalls -> CqWorked.OTHER_BAND
+                else -> CqWorked.NONE
+            }
+            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs, worked)
             val prev = byCall[from]
             if (prev == null || flag.utcMs >= prev.utcMs) byCall[from] = flag
         }
