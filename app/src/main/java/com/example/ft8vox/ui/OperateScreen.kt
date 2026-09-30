@@ -80,7 +80,7 @@ fun OperateScreen(
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 当前发射目标（点选解码行 / 左滑呼叫 / 详情「呼叫」设置）
     var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
-    // 「关注列表 → 全部清除」的二次确认
+    // 「跟踪列表 → 全部清除」的二次确认
     var clearFollowConfirm by remember { mutableStateOf(false) }
 
     fun copyToClipboard(text: String) {
@@ -134,7 +134,7 @@ fun OperateScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().padding(4.dp)) {
-        // ---- 表格上方只留一行：监听 / 清除 / 关注 / 时间告警 ----
+        // ---- 表格上方只留一行：监听 / 清除 / 跟踪 / 时间告警 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -151,7 +151,7 @@ fun OperateScreen(
                 enabled = messages.isNotEmpty() || txRecords.isNotEmpty(),
             )
             JtdxButton(
-                text = "关注 ${settings.followCalls.size}",
+                text = "跟踪 ${settings.followCalls.size}",
                 onClick = { onFollowOpenChange(true) },
                 active = followOpen,
             )
@@ -245,7 +245,7 @@ fun OperateScreen(
     if (followOpen) {
         AlertDialog(
             onDismissRequest = { onFollowOpenChange(false) },
-            title = { Text("关注呼号列表") },
+            title = { Text("跟踪 CQ 列表") },
             text = {
                 Box(Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 320.dp)) {
                     FollowListPanel(
@@ -270,8 +270,8 @@ fun OperateScreen(
     if (clearFollowConfirm) {
         AlertDialog(
             onDismissRequest = { clearFollowConfirm = false },
-            title = { Text("清空关注名单") },
-            text = { Text("将移除全部 ${settings.followCalls.size} 个关注呼号，不可撤销。") },
+            title = { Text("清空跟踪名单") },
+            text = { Text("将移除全部 ${settings.followCalls.size} 个跟踪呼号，不可撤销。") },
             confirmButton = {
                 Button(
                     onClick = {

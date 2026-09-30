@@ -113,7 +113,7 @@ class AutoProgramTest {
 
     @Test
     fun collectKeepsFollowedCqWhenSwitchOff() {
-        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在关注名单里 → 仍纳入候选
+        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在跟踪名单里 → 仍纳入候选
         val list = AutoProgramSelector.collect(
             listOf(decoded("CQ W1AW FN42"), decoded("CQ JA1ABC PM95")),
             program.copy(autoAddCqToFollow = false),
@@ -231,7 +231,7 @@ class AutoProgramTest {
 
     @Test
     fun autoAddCqToFollowOffMeansSendCq() {
-        // 「自动跟踪 CQ」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
+        // 「自动跟踪 CQ」关、且不在跟踪名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
         val s = scheduler(program.copy(autoAddCqToFollow = false))
         assertEquals(
             AutoAction.SendCq,
@@ -241,7 +241,7 @@ class AutoProgramTest {
 
     @Test
     fun followedCqIsExceptionToAutoFollowCqSwitch() {
-        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在关注名单里 → 仍自动呼叫
+        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在跟踪名单里 → 仍自动呼叫
         val s = scheduler(program.copy(autoAddCqToFollow = false))
         val action = s.onDecoded(
             listOf(decoded("CQ W1AW FN42")),

@@ -785,7 +785,7 @@ private fun HighlightLegend() {
         LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
         LegendRow(BarNewGrid, "紫：新网格")
         LegendRow(BarNewEntity, "棕：新 DXCC / ITU / CQ 区域 / 新前缀")
-        LegendRow(BarNewCall, "粉：已关注的呼号")
+        LegendRow(BarNewCall, "粉：已跟踪的呼号")
 
         LegendSection("地图")
         LegendRow(MapLinkMine, "红线 / 红字：报文里有我的连线（我发出的 / 发给我的）")

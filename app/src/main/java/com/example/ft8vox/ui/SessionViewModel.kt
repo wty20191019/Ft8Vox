@@ -565,19 +565,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(ignoredCalls = emptySet()) }
     }
 
-    /** 手动关注一个呼号（长按菜单「关注」）；`autoAddCqToFollow` 关时自动程序仍会呼叫它的 CQ。 */
+    /** 手动跟踪一个呼号（长按菜单「跟踪」）；`autoAddCqToFollow` 关时自动程序仍会呼叫它的 CQ。 */
     fun followCall(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
         persist { it.copy(followCalls = it.followCalls + c) }
     }
 
-    /** 取消关注（⭐ 关注列表右滑 / 长按菜单；旧版自动收录遗留的顺序也一并摘掉）。 */
+    /** 取消跟踪（⭐ 跟踪列表右滑 / 长按菜单；旧版自动收录遗留的顺序也一并摘掉）。 */
     fun unfollowCall(call: String) {
         val c = call.trim().uppercase()
         persist { it.copy(followCalls = it.followCalls - c, autoFollowOrder = it.autoFollowOrder - c) }
     }
 
-    /** 切换关注状态（长按菜单「关注 / 取消关注」）。 */
+    /** 切换跟踪状态（长按菜单「跟踪 / 取消跟踪」）。 */
     fun toggleFollow(call: String) {
         val c = call.trim().uppercase().takeIf { it.isNotEmpty() } ?: return
         persist {
@@ -589,7 +589,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 清空关注名单（关注列表里的「全部清除」）。 */
+    /** 清空跟踪名单（跟踪列表里的「全部清除」）。 */
     fun clearFollowCalls() {
         persist { it.copy(followCalls = emptySet(), autoFollowOrder = emptyList()) }
     }
@@ -1473,7 +1473,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val bandKey = st.band.trim().uppercase()
             workedCallsByBand = workedCallsByBand +
                 (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
-            // 名单不因通联自动变动（照 FT8CN：⭐ 关注名单只由用户手动增删）
+            // 名单不因通联自动变动（照 FT8CN：⭐ 跟踪名单只由用户手动增删）
             _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
         }
         if (!finished) return
@@ -1616,7 +1616,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 显示 / 自动程序共用的呼号名单（docs/UI-MOBILE.md §20）。
      *
      * 操作页的筛选与搜索已整体删除，因此这里**不再带 tags / query**（恒为 `ALL` + 空搜索），
-     * 只保留忽略名单（隐藏）与关注名单（自动程序例外）。`AppSettings.filterTags` / `callFilter`
+     * 只保留忽略名单（隐藏）与跟踪名单（自动程序例外）。`AppSettings.filterTags` / `callFilter`
      * 两个字段仅为兼容旧设置保留，界面已无入口。
      */
     private fun currentFilter(): DecodeFilterState {

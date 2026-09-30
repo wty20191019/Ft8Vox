@@ -74,7 +74,7 @@ fun AutoProgramPanel(
     ) {
         Text(
             "打开「发送总开关」即启用自动程序（无确认框）：定向报文一律应答；" +
-                "CQ 台由下面两个开关与「关注名单」共同决定。",
+                "CQ 台由下面两个开关与「跟踪名单」共同决定。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -121,10 +121,10 @@ fun AutoProgramPanel(
         )
 
         Text(
-            "「关注」名单：在解码列表长按某台 →「关注」手动加入；" +
-                "点操作页的「关注 N」按钮可查看 / 删除（右滑取消关注，右上「全部清除」清空）。\n" +
+            "「跟踪」名单：在解码列表长按某台 →「跟踪」手动加入；" +
+                "点操作页的「跟踪 N」按钮可查看 / 删除（右滑取消跟踪，右上「全部清除」清空）。\n" +
                 "「自动跟踪 CQ」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
-                "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动跟踪 CQ」＝只呼叫关注的台；" +
+                "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动跟踪 CQ」＝只呼叫跟踪名单里的台；" +
                 "关掉「自动呼叫 CQ 台」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
                 "对方直接呼叫我方一定应答；本波段已通联的 CQ 台不再主动呼叫。",
             style = MaterialTheme.typography.labelSmall,

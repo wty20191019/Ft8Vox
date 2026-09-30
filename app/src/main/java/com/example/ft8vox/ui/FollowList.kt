@@ -48,10 +48,10 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 /**
- * 「关注呼号列表」面板（操作页控制行的「关注 N」按钮打开）。
+ * 「跟踪 CQ 列表」面板（操作页控制行的「跟踪 N」按钮打开）。
  *
  * 与**解码列表**是两回事：这里列的是**呼号**（[follows] 名单），每行带入本会话最近一次听到的
- * 网格 / 信号 / 时间；手势 **左滑 = 呼叫该呼号**、**右滑 = 取消关注（从名单移除）**，
+ * 网格 / 信号 / 时间；手势 **左滑 = 呼叫该呼号**、**右滑 = 取消跟踪（从名单移除）**，
  * 标题栏右侧「全部清除」可一次清空（带二次确认）。
  */
 @Composable
@@ -83,10 +83,10 @@ fun FollowListPanel(
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(6.dp))
-            Text("关注呼号 ${rows.size}", style = MaterialTheme.typography.titleSmall)
+            Text("跟踪 CQ ${rows.size}", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.weight(1f))
             Text(
-                "左滑呼叫 · 右滑取消关注",
+                "左滑呼叫 · 右滑取消跟踪",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -98,7 +98,7 @@ fun FollowListPanel(
         if (rows.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "还没有关注的呼号。\n在解码列表长按某台 →「关注」，就会出现在这里。",
+                    "还没有跟踪的呼号。\n在解码列表长按某台 →「跟踪」，就会出现在这里。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -123,7 +123,7 @@ fun FollowListPanel(
     }
 }
 
-/** 关注列表的一行：呼号 + 本会话最近一次听到的信息（没有则为空）。 */
+/** 跟踪列表的一行：呼号 + 本会话最近一次听到的信息（没有则为空）。 */
 private data class FollowRow(
     val call: String,
     val grid: String? = null,
@@ -135,7 +135,7 @@ private data class FollowRow(
     val auto: Boolean = false,
 )
 
-/** 每个关注呼号取本会话**最新**一条解码（`messages` 为新→旧），最近听到的排前面。 */
+/** 每个跟踪呼号取本会话**最新**一条解码（`messages` 为新→旧），最近听到的排前面。 */
 private fun buildFollowRows(
     follows: Set<String>,
     messages: List<DecodeResult>,
@@ -163,7 +163,7 @@ private fun buildFollowRows(
     return heardRows + unheardRows
 }
 
-/** 呼号行（左滑呼叫 / 右滑取消关注），滑动机制与解码卡片一致。 */
+/** 呼号行（左滑呼叫 / 右滑取消跟踪），滑动机制与解码卡片一致。 */
 @Composable
 private fun FollowCard(
     row: FollowRow,
@@ -185,7 +185,7 @@ private fun FollowCard(
     val latestOnUnfollow by rememberUpdatedState(onUnfollow)
 
     Box(Modifier.fillMaxWidth()) {
-        // 滑动背景提示：右移露出左侧「取消关注」，左移露出右侧「呼叫」
+        // 滑动背景提示：右移露出左侧「取消跟踪」，左移露出右侧「呼叫」
         Row(Modifier.matchParentSize()) {
             Box(
                 modifier = Modifier
@@ -195,7 +195,7 @@ private fun FollowCard(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (offsetX.value > 4f) {
-                    Text("取消关注", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                    Text("取消跟踪", color = Color.White, style = MaterialTheme.typography.labelMedium)
                 }
             }
             Box(

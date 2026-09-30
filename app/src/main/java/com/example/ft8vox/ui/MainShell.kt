@@ -71,7 +71,7 @@ fun MainShell(
     var logFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
     var helpDialogOpen by rememberSaveable { mutableStateOf(false) }
-    // 关注列表弹窗由本壳持有（跨页跳转时保持状态）
+    // 跟踪列表弹窗由本壳持有（跨页跳转时保持状态）
     var followOpen by rememberSaveable { mutableStateOf(false) }
 
     val appSettings by settings.settings.collectAsState()

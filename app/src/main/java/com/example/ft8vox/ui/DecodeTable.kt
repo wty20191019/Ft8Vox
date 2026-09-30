@@ -527,7 +527,7 @@ private fun DecodeTableRow(
                 },
             )
             DropdownMenuItem(
-                text = { Text(if (followed) "取消关注 $callText" else "关注 $callText") },
+                text = { Text(if (followed) "取消跟踪 $callText" else "跟踪 $callText") },
                 enabled = from != null,
                 onClick = {
                     menuOpen = false

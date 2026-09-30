@@ -88,7 +88,7 @@ object TxCompose {
      *
      * @param engineCall 引擎当前对手（`QsoProgress.theirCall`）
      * @param engineBusy 引擎是否在进行中或有待发报文（`active || txText != null`）
-     * @param picked 用户点选的目标（解码行单击 / 左滑 / 关注列表 / 详情「呼叫」）
+     * @param picked 用户点选的目标（解码行单击 / 左滑 / 跟踪列表 / 详情「呼叫」）
      */
     fun targetFor(engineCall: String?, engineBusy: Boolean, picked: String?): String? {
         val engine = engineCall?.takeIf { engineBusy && it.isNotBlank() }
