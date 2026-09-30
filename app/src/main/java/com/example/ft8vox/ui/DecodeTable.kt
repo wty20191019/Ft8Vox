@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -283,6 +284,13 @@ private fun DecodeTableRow(
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
 
+    // 手势回调走 rememberUpdatedState 取**最新**：LazyColumn 按索引复用节点时，
+    // `pointerInput(Unit)` 的协程不会重启，直接捕获的 `onCall` / `onSwipeDelete` 会停留在
+    // 首次组合的那条 row 上 —— 真机现象：左滑最新那条，结果呼叫（或删除）了上一秒
+    // 占同一位置的旧条目（解码列表每 15 s 前插一条，index 0 一直在换人）。
+    val latestOnCall by rememberUpdatedState(onCall)
+    val latestOnSwipeDelete by rememberUpdatedState(onSwipeDelete)
+
     Box(Modifier.fillMaxWidth()) {
         // 滑动背景提示（左移露出右侧「呼叫」，右移露出左侧「删除」）
         Row(Modifier.matchParentSize()) {
@@ -321,11 +329,11 @@ private fun DecodeTableRow(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onCall()
+                                        latestOnCall()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
-                                        onSwipeDelete()
+                                        latestOnSwipeDelete()
                                         offsetX.animateTo(0f)
                                     }
                                     else -> offsetX.animateTo(0f)

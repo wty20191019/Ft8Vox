@@ -26,8 +26,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -175,6 +177,13 @@ private fun FollowCard(
     val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
 
+    // 手势回调走 rememberUpdatedState 取**最新**：节点按呼号复用（`key = it.call`），
+    // 而同一呼号的网格/频率会随后续解码刷新；`pointerInput(Unit)` 协程不重启，
+    // 直接捕获的 onCall 会停留在首次组合那一帧的 grid/df —— 真机现象：
+    // 左滑呼叫用的是**过期**的网格与发射频率。
+    val latestOnCall by rememberUpdatedState(onCall)
+    val latestOnUnfollow by rememberUpdatedState(onUnfollow)
+
     Box(Modifier.fillMaxWidth()) {
         // 滑动背景提示：右移露出左侧「取消关注」，左移露出右侧「呼叫」
         Row(Modifier.matchParentSize()) {
@@ -214,11 +223,11 @@ private fun FollowCard(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onCall()
+                                        latestOnCall()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
-                                        onUnfollow()
+                                        latestOnUnfollow()
                                         offsetX.animateTo(0f)
                                     }
                                     else -> offsetX.animateTo(0f)

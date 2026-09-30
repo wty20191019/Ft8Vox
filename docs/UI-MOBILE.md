@@ -132,8 +132,11 @@
 | 5 73 | `SEVENTY_THREE` | `目标 我 73` | `sendOnce` |
 | 6 CQ | `CQ` | `CQ <前缀> 我 网格` | `startCq` |
 
-- 槽内容**不持久化**，每帧由 `TxCompose.compose` 现算，永远与六步序列一致。
-- 目标为空时 Tx1–Tx5 置灰；指示灯按格独立（§25）：**正在播的那格红点红边、待发那格绿点绿边**。
+- 槽内容**不持久化**，每帧由 `TxCompose.slots` 现算（`compose` 的六步封装），永远与六步序列一致；
+  报告值取**我方实测**（序号 2「报告」与序号 3「R报告」**同一个值**，照 FT8CN）。
+- 目标呼号：引擎在通联 / 有待发报文时以 `QsoProgress.theirCall` 为准，空闲时才用点选目标
+  （`TxCompose.targetFor`）—— 避免旧的点选呼号劫持六槽组包（§36）。
+- 目标为空时 Tx1–Tx5 置灰；指示灯**按报文序号**判定（§25、§36）：**正在播的那格红点红边、待发那格绿点绿边**。
 - 第 ⑨⑩ 行下面的一行提示（§27）：一次性发射被拒 / 编不出来的**原因（红）** 优先，
   其次是常驻的「只接收：…」（红），最后才是 QSO 进度（绿）。
 - 闸门仍是**发送总开关**；关闭时点击由 `SessionViewModel` 拦下并提示，不弹确认框。
@@ -496,7 +499,7 @@
 | 反馈 | 处理 |
 | --- | --- |
 | **回发的信号报告用第一次的强度** | Tx2 报告值从「每次重测最新」改回**固定第一次测得的强度**（JTDX / FT8CN 口径）：进入 `REPORT` 步时按当时解码 SNR 算一次，**未推进的重复解码不再刷新 `reportSent`**（`QsoEngine.onDecoded` 删掉刷新分支与 `latestTargetSnr`）。理由：对方每重发一次强度都会抖，报告跟着跳会出现「我方显示的待发值」与「真正发出去的首次值」对不上。Tx3 的 R 报告仍复用 Tx2 实际发出的快照（`lastSentReport`）。`docs/QSO.md` §2.1 / §2.4 / §6 / §7 同步改口径（并从「有意偏离清单」移出）。 |
-| **发送时对应的槽有红点、待发是绿点** | 六格报文槽的指示灯与边框改为**按格独立**判定（`TxPanel.slotLed()` 纯函数，`SlotLed = OFF / QUEUED / ON_AIR`）：`ON_AIR`（`text == status.lastTxText && status.txing`）= **红点 + 红边**；`QUEUED`（`text == status.pendingTxText`）= **绿点 + 绿边**；其余暗灰。**红优先于绿**：收尾报文已排定但上一条还在播时，会同时看到「在播那格红点 + 下一格绿点」。槽名文字也跟着变色（不再固定灰）。新增 `SlotLedTest` 6 例。 |
+| **发送时对应的槽有红点、待发是绿点** | 六格报文槽的指示灯与边框**按格独立**判定（`TxPanel.slotLed(kindOrder, queuedOrder, onAirOrder)` 纯函数，`SlotLed = OFF / QUEUED / ON_AIR`），判据是**报文序号**、**不再比较文本**（§36 解耦）：`ON_AIR`（本格序号 == 在播序号）= **红点 + 红边**；`QUEUED`（本格序号 == 引擎 `QsoProgress.order`）= **绿点 + 绿边**；其余暗灰。**红优先于绿**：收尾报文已排定但上一条还在播时，会同时看到「在播那格红点 + 下一格绿点」。槽名文字也跟着变色（不再固定灰）。`SlotLedTest` 7 例。 |
 
 ---
 
@@ -564,7 +567,7 @@ sendOnceInternal（改前）
 | ③「**生成信息**这个几个键可以不要了」 | 第 ⑦ 行最左就是它 | ❌ 删除 |
 | ③「可以直接点下面 6 个栏来生成标准报文」 | 六格槽 = `TxCompose.compose` 现算的六步序列，点哪格发哪格 | ✅ 不用改 |
 | ④ 自定义报文：框里改 → 发送 → 下一个（或最近可发）时隙发 → 暂停 QSO → **发完清空框** → 继续 QSO | 发送/插一条/发完继续 QSO 是 §27 已做的；但框当时**会自动填入待发报文**，发完是「跟着显示 QSO 下一跳」而不是「清空」 | ❌ 部分不符 → 本轮改成「平时空框、发完清空」（§28.2） |
-| ⑤ 六格槽：将发=**绿点绿框**、正发=**红点红框**，且格内文字**就是真发的报文** | `slotLed`：`ON_AIR`（`text == lastTxText && txing`）红、`QUEUED`（`text == pendingTxText`）绿；`QUEUED` 的判据就是「字面等于实际待发文本」 | ✅ 不用改 |
+| ⑤ 六格槽：将发=**绿点绿框**、正发=**红点红框**，且格内文字**就是真发的报文** | 内容由 `TxCompose.slots` 现算、与引擎渲染逐字一致（§36 起有单测锁死）；**指示灯按报文序号**（引擎 `QsoProgress.order`）判定，与文本解耦 | ✅ 已改（§36） |
 
 ### 28.1 删掉「生成信息」键
 
@@ -940,5 +943,36 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
   `targetCallingOthersGivesUpWhileWaitingFinal73`、`giveUpOnlyHappensWhileWaitingFinal73`、
   `respondToRr73SendsSeventyThreeAndLogs` 等），`FunctionOrderTest` 6 例。
 - 合计 **39 suite / 401 例 / 0 失败 0 错**，`:app:assembleDebug` 通过。
+
+## 36. 实机第二十三轮：发射区「槽内文字 ≠ 真发报文」修复 + UI/运算层解耦（2026-09-30，已完成）
+
+现象：正在发 `BG7ZJK BG7ZJW R-07` 时，下面 **`3 R报告` 那格不亮红框红点**（截图见本轮记录）。
+
+根因（用户判断「UI 层与运算层没有完全解耦」）：发射区高亮靠**文本逐字相等**匹配
+（`text == lastTxText` / `text == pendingTxText`），而槽 3 组包时误用了 `reportReceived`
+（**对方给我**的报告 `-08`）—— 引擎发序号 3 用的是 `reportSent`（**我方实测** `-07`）。
+文本差一个数字 → 整格不点灯；同理，旧的点选呼号 `targetCall`（只赋值、从不清空、还是
+`rememberSaveable`）也会让六槽整体按过期呼号组包、与「正在发送」对不上。
+
+| 项 | 改前 | 改后 |
+| --- | --- | --- |
+| 槽 3 报告值 | `reportReceived`（对方给我的） | `reportSent`（我方实测，与序号 2 同值，照 FT8CN） |
+| 六槽组包 | `TxPanel` 内联 6 次 `TxCompose.compose` | 抽成 `TxCompose.slots(...)` 纯函数，单测锁死「槽内文字 == 引擎 `txText`」 |
+| 目标呼号 | `targetCall ?: qso.theirCall`（`targetCall` 只赋值、从不清空）→ 自动程序已与 B 通联、六槽却仍按旧呼号 A 组包 | `TxCompose.targetFor(engineCall, engineBusy, picked)`：引擎在通联 / 有待发报文时以引擎对手为准，空闲时才用点选目标 |
+| 指示灯判据 | 文本相等（`text == lastTxText && txing` / `text == pendingTxText`） | **报文序号**：`slotLed(kindOrder, queuedOrder, onAirOrder)`；`queuedOrder = QsoProgress.order`（待发是自定义报文则 `null`）、`onAirOrder` 由 `kindOf(lastTxText).order` 反推 |
+| 解码行滑动 | `pointerInput(Unit)` 捕获的是**首次组合**那帧的 `onCall` / `onSwipeDelete` → 左滑最新那条，结果呼叫 / 删除了上一秒占同位置的旧条目 | 回调改走 `rememberUpdatedState`，手势总是取**最新**行 |
+| 关注列表滑动 | 同上：同一呼号的网格 / 频率随后续解码刷新，旧闭包用的是**过期**网格与发射频率 | 同上 |
+
+### 36.1 单测
+
+- `TxComposeTest` 新增 `slotsUseMyOwnReportForBothReportAndRoger`、
+  `slotsMatchEngineSpokenText`（**逐序号 1..6** 对照 `QsoEngine` 渲染的 `txText`）、
+  `targetPrefersEngineWhileBusy`、`targetFallsBackToPickedWhenEngineIdle`。
+- `SlotLedTest` 重写为**按序号判定**的新语义，7 例。
+- 合计 **39 suite / 406 例 / 0 失败 0 错**，`:app:assembleDebug` 通过。
+
+### 36.2 遗留
+
+- 引擎的单线程归属仍未收口（`QsoEngine` 同时被主线程与轮询线程调用），留待单独一轮处理。
 
 
