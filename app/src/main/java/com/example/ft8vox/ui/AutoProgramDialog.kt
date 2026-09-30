@@ -109,7 +109,7 @@ fun AutoProgramPanel(
 
         AutoOptionRow(
             title = "自动跟踪 CQ（本波段）",
-            subtitle = "把本波段还没通联过的 CQ 台纳入可自动呼叫的候选",
+            subtitle = "本波段还没通联过的 CQ 台会自动写进「跟踪 CQ 列表」，并作为可自动呼叫的候选",
             checked = program.autoAddCqToFollow,
             onChange = { v -> onOption { it.copy(autoAddCqToFollow = v) } },
         )
@@ -121,9 +121,10 @@ fun AutoProgramPanel(
         )
 
         Text(
-            "「跟踪」名单：在解码列表长按某台 →「跟踪」手动加入；" +
+            "「跟踪」名单：开关开着时本波段未通联的 CQ 台会自动写进；" +
+                "也可在解码列表长按某台 →「跟踪」手动加入。" +
                 "点操作页的「跟踪 N」按钮可查看 / 删除（右滑取消跟踪，右上「全部清除」清空）。\n" +
-                "「自动跟踪 CQ」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
+                "通联完成后自动从名单移除；「自动跟踪 CQ」关掉后不再新增，但仍会呼叫名单里 CQ 台的 CQ。\n" +
                 "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动跟踪 CQ」＝只呼叫跟踪名单里的台；" +
                 "关掉「自动呼叫 CQ 台」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
                 "对方直接呼叫我方一定应答；本波段已通联的 CQ 台不再主动呼叫。",

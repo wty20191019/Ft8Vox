@@ -34,6 +34,7 @@ import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
 import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
+import com.example.ft8vox.qso.FollowRoster
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
@@ -571,7 +572,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(followCalls = it.followCalls + c) }
     }
 
-    /** 取消跟踪（⭐ 跟踪列表右滑 / 长按菜单；旧版自动收录遗留的顺序也一并摘掉）。 */
+    /** 取消跟踪（⭐ 跟踪列表右滑 / 长按菜单；自动收录的顺序也一并摘掉）。 */
     fun unfollowCall(call: String) {
         val c = call.trim().uppercase()
         persist { it.copy(followCalls = it.followCalls - c, autoFollowOrder = it.autoFollowOrder - c) }
@@ -589,9 +590,35 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 清空跟踪名单（跟踪列表里的「全部清除」）。 */
+    /** 清空跟踪名单（跟踪列表里的「全部清除」；手动跟踪与自动收录一并清掉）。 */
     fun clearFollowCalls() {
         persist { it.copy(followCalls = emptySet(), autoFollowOrder = emptyList()) }
+    }
+
+    /**
+     * 「自动跟踪 CQ（本波段）」：把本批解到的**当前波段还没通联过**的 **CQ** 呼号并入跟踪名单
+     * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动跟踪的永不被淘汰）。
+     *
+     * 波段口径照 FT8CN `checkQSLCallsign`（`where band=?`）：跨波段通联过的台在本波段仍算没通联过。
+     * 与 FT8CN 的**有意偏离**：FT8CN 只推送到「呼叫」列表、不写跟踪名单，见 [FollowRoster] 文档。
+     */
+    private fun autoCollectCqToFollow(batch: List<DecodeResult>) {
+        if (batch.isEmpty()) return
+        val s = latestSettings
+        if (!s.auto.autoAddCqToFollow) return
+        val incoming = FollowRoster.pickCqCalls(
+            messages = batch,
+            myCall = _status.value.myCall,
+            ignoredCalls = s.ignoredCalls,
+            followedCalls = s.followCalls,
+            workedCalls = workedCallsOnBand(_status.value.band),
+        )
+        if (incoming.isEmpty()) return
+        persist { cur ->
+            val (calls, order) = FollowRoster.merge(cur.followCalls, cur.autoFollowOrder, incoming)
+            if (calls == cur.followCalls && order == cur.autoFollowOrder) cur
+            else cur.copy(followCalls = calls, autoFollowOrder = order)
+        }
     }
 
     /**
@@ -1286,6 +1313,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _messages.update { current -> (decoded + current).take(ACTIVITY_LIMIT) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
+            // 「自动跟踪 CQ（本波段）」：把本批新解到的本波段未通联 CQ 呼号并入跟踪名单
+            autoCollectCqToFollow(decoded)
             // U7d：有报文叫我呼号时短促提示
             val my = _status.value.myCall
             if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {
@@ -1473,8 +1502,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val bandKey = st.band.trim().uppercase()
             workedCallsByBand = workedCallsByBand +
                 (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
-            // 名单不因通联自动变动（照 FT8CN：⭐ 跟踪名单只由用户手动增删）
-            _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
+            // 「跟踪的呼号通联完成后取消跟踪」：本段通联已落库，无需再盯这个台
+            // （名单与自动收录顺序一并移除；幂等）
+            val wasFollowed = key in latestSettings.followCalls
+            if (wasFollowed) {
+                persist {
+                    it.copy(followCalls = it.followCalls - key, autoFollowOrder = it.autoFollowOrder - key)
+                }
+            }
+            _status.update {
+                it.copy(
+                    status = if (wasFollowed) {
+                        "已记录通联：${entry.theirCall}（已取消跟踪）"
+                    } else {
+                        "已记录通联：${entry.theirCall}"
+                    },
+                )
+            }
         }
         if (!finished) return
         if (!_status.value.txEnabled) return

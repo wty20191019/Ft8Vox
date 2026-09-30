@@ -34,9 +34,10 @@ data class AutoProgramSettings(
     /**
      * 自动跟踪 CQ（默认开；对应 FT8CN `autoFollowCQ` `GeneralVariables.java:205`）。
      *
-     * 口径照 FT8CN：**只把关「哪些 CQ 台可以进候选被自动呼叫」，不写任何名单**
-     * （FT8CN 帮助文件 `auto_follow_help.txt` 明确写「该呼号不会被长久保存到关注的呼号数据库中」）。
-     * ⭐「跟踪 CQ 列表」永远只由用户手动增删。
+     * **与 FT8CN 的有意偏离**：FT8CN 只把关「哪些 CQ 台可以进候选被自动呼叫」，不写名单
+     * （其帮助文件 `auto_follow_help.txt` 明确写「该呼号不会被长久保存到关注的呼号数据库中」）；
+     * 本机开启时还会把本波段未通联的 CQ 台**自动写进 ⭐「跟踪 CQ 列表」**（见 `FollowRoster`），
+     * 并在该台通联完成后自动移除。
      *
      * 它同时是 [AutoProgramSelector.collect] 的 CQ 候选闸门：开启 ⇒ 任何本波段未通联的 CQ 台都可呼叫；
      * 关闭 ⇒ **只**呼叫「跟踪名单」（`AppSettings.followCalls`）里的 CQ 台（名单不受本开关限制）。
@@ -435,8 +436,8 @@ class AutoScheduler {
      *
      * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3（条件
      * `autoCallFollow && (autoFollowCQ || 该台在跟踪名单里)`）。本机两个开关**串联**生效：
-     * - [AutoProgramSettings.autoAddCqToFollow]：CQ 台是否**纳入候选**（照 FT8CN「自动跟踪 CQ」＝把 CQ
-     *   推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关，跟踪名单是它的例外）。
+     * - [AutoProgramSettings.autoAddCqToFollow]：CQ 台是否**纳入候选**（并自动写进跟踪名单；照 FT8CN「自动
+     *   跟踪 CQ」＝把 CQ 推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关，跟踪名单是它的例外）。
      * - [AutoProgramSettings.autoCallFollow]：是否**真的去呼叫**（FT8CN `:714`，关掉则一条 CQ 都不叫）。
      *
      * 因此「自动跟踪 CQ」关掉后，本机**只**自动呼叫跟踪名单里的 CQ 台（没有名单时就不叫 CQ）。

@@ -15,6 +15,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DecodeFilterTag
+import com.example.ft8vox.qso.FollowRoster
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -159,16 +160,16 @@ private fun readPrefixSlots(s: String?): List<String>? =
 
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
-    // 旧版「自动收录 CQ 台」写进名单的呼号（3ed6562 已删除该功能）是遗留脏数据：它会被
-    // 「自动跟踪 CQ」的「⭐ 名单例外」放行，让那个开关看起来关不掉。这里一次性剔除。
-    val legacyAutoFollow = splitLines(this[Keys.autoFollowOrder]) ?: emptyList()
-    val followCalls = purgeLegacyAutoFollow(
-        this[Keys.followCalls]
-            ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
-            ?.toSet()
-            ?: defaults.followCalls,
-        legacyAutoFollow,
-    )
+    val followCalls = this[Keys.followCalls]
+        ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        ?.toSet()
+        ?: defaults.followCalls
+    // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
+    val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
+        .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+        .distinct()
+        .filter { it in followCalls }
+        .take(FollowRoster.AUTO_MAX)
     // CQ 前缀格子：保留空格子（空串＝普通 CQ），最后按格子数夹一下选中的下标
     val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
     val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
@@ -198,8 +199,7 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.toSet()
             ?: defaults.ignoredCalls,
         followCalls = followCalls,
-        // 旧版「自动收录」顺序不再有写入方：恒空（写回时会把持久化键一并清空）
-        autoFollowOrder = emptyList(),
+        autoFollowOrder = autoFollowOrder,
         cqPrefixes = cqPrefixes,
         cqPrefixIndex = cqPrefixIndex,
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,

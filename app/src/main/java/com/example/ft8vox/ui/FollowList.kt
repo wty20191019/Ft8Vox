@@ -63,7 +63,7 @@ fun FollowListPanel(
     onUnfollow: (String) -> Unit,
     /** 点「全部清除」时回调（弹确认框的逻辑由调用方负责）。 */
     onClearAll: () -> Unit,
-    /** **旧版遗留**：由已删除的「自动收录 CQ 台」写过的呼号（行内显示「自动」标记）。 */
+    /** **自动收录**的呼号（「自动跟踪 CQ」写入，行内显示「自动」标记）。 */
     autoFollowed: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
@@ -98,7 +98,7 @@ fun FollowListPanel(
         if (rows.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "还没有跟踪的呼号。\n在解码列表长按某台 →「跟踪」，就会出现在这里。",
+                    "还没有跟踪的呼号。\n开启「自动跟踪 CQ」会自动加入；也可长按解码 →「跟踪」。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -131,7 +131,7 @@ private data class FollowRow(
     val df: Int? = null,
     val slotUtcMs: Long? = null,
     val distKm: Double? = null,
-    /** **旧版遗留**：由已删除的「自动收录 CQ 台」自动加入。 */
+    /** **自动收录**：「自动跟踪 CQ」写入的（行内显示「自动」标记）。 */
     val auto: Boolean = false,
 )
 

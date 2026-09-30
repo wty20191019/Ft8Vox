@@ -197,22 +197,23 @@ data class AppSettings(
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
     /**
-     * 跟踪的呼号（长按菜单「跟踪 / 取消跟踪」**手动**加入）。
+     * 跟踪的呼号（⭐「跟踪 CQ 列表」的内容）。
      *
-     * 照 FT8CN：跟踪名单**只由用户手动增删**（「自动跟踪 CQ」不写名单，其帮助文件明确说明
-     * 「该呼号不会被长久保存到关注的呼号数据库中」）。
+     * 两个来源：
+     * - **手动**：解码列表长按某台 →「跟踪」；
+     * - **自动**（**有意偏离 FT8CN**）：`autoAddCqToFollow`（自动跟踪 CQ）开启时，本波段未通联的
+     *   CQ 台由 `FollowRoster` 自动写入（顺序记在 [autoFollowOrder]，超出上限淘汰最早收录的）。
      *
-     * - ⭐「跟踪 CQ 列表」显示这些台；
-     * - 照 FT8CN：`autoAddCqToFollow`（自动跟踪 CQ）关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
+     * 通联完成后该呼号会被自动移除（FT8CN 不会）；`autoAddCqToFollow` 关掉时，自动程序**仍会**
+     * 呼叫名单里 CQ 台的 CQ（照 FT8CN：名单是「自动跟踪 CQ」的例外）。
      */
     val followCalls: Set<String> = emptySet(),
 
     /**
-     * **旧版遗留字段**：「自动收录 CQ 台」（已于 `3ed6562` 删除）写过的呼号。
+     * **自动收录**的呼号顺序（最近在前；恒为 [followCalls] 的子集）。
      *
-     * 现在**恒为空**：读设置时按旧值把残留条目从 [followCalls] 里剔除（见
-     * [purgeLegacyAutoFollow]），并在下一次写回时清空持久化键 —— 否则这些残留会被
-     * 「自动跟踪 CQ」的「⭐ 名单例外」放行，让那个开关看起来关不掉。
+     * 用于「超 `FollowRoster.AUTO_MAX` 时淘汰最早收录的」，以及在 ⭐ 列表里给自动加入的行打
+     * 「自动」标记。**手动跟踪**的呼号不在此列，故永不被淘汰。
      */
     val autoFollowOrder: List<String> = emptyList(),
 

@@ -6,8 +6,10 @@
 > 对标基准：FT8CN（Android / Java）。
 >
 > **2026-09-30 大改**：全面回到 FT8CN 的**报文序号模型**（`functionOrder`）+ **5 路 OR 完成判据**，
-> 删掉了此前的「收敛阶梯」「DX / 区域分级选台」「自动收录 CQ 台写跟踪名单」等自定机制，
-> 详见 §7。
+> 删掉了此前的「收敛阶梯」「DX / 区域分级选台」等自定机制，详见 §7。
+>
+> **2026-10-01**：「自动跟踪 CQ（本波段）」恢复**自动写跟踪名单**、并在该台**通联完成后自动移除**
+> （**有意偏离** FT8CN，用户决定，见 §5.1 / §7）。
 
 ---
 
@@ -196,7 +198,7 @@
 - **会话内同一呼号只写一条**：`SessionViewModel.sessionSavedCalls` ＋ `saved` 标记去重。
   落库取**引擎快照**（进入序号 4 时那一刻的收发报告）。
 - 完成即写 `WorkedIndex`（本波段，`WorkedIndex.plus`），使「已通联」过滤立即生效；`stop()` / 换波段清空集合。
-- 跟踪名单**不因通联自动变动**（照 FT8CN：⭐ 只由用户手动增删）。
+- 跟踪名单在**通联完成后自动移除**该台（**有意偏离 FT8CN**：FT8CN 不会自动移除，见 §7）。
 
 ### 2.10 `Protocol` 时隙与报文长度
 
@@ -310,8 +312,8 @@
   `autoFollowCQ` 关 ⇒ **只**呼叫跟踪名单里的 CQ 台（`FT8TransmitSignal.java:733-737`）。
 - **`checkQSLCallsign()`（`:273`）**：是否在本波段已通联（`QSL_Callsign_list`）；`checkQSLCallsign_OtherBand()`（`:283`）为其它波段。
 
-> **本机照搬**：`autoFollowCQ` **不写任何名单**（本机 `autoAddCqToFollow` 只是 CQ 候选闸门），
-> ⭐ 跟踪名单**只由用户手动增删**。
+> **本机偏离**：`autoFollowCQ`（本机 `autoAddCqToFollow`）除作 CQ 候选闸门，还会把**本波段未通联**的
+> CQ 台**自动写进 ⭐ 跟踪名单**（FT8CN 不写名单）。详见 §5.1。
 
 ### 3.6 关键行号索引
 
@@ -451,32 +453,34 @@
 | --- | --- | --- | :---: |
 | 发射监管 | `supervisionMinutes` | `SUPERVISION_MINUTES = listOf(0) + (5..95 step 10)`（`0`＝不监管） | 10 |
 | 无回应次数（换台阈值） | `noReplyLimit` | `NO_REPLY_LIMIT_RANGE = 0..30`（`0`＝用内置硬上限 20 个批次；否则判据为 `> ×2`） | 0 |
-| 自动跟踪 CQ | `autoAddCqToFollow` | 开关（CQ 候选闸门；**不写名单**） | true |
+| 自动跟踪 CQ | `autoAddCqToFollow` | 开关（CQ 候选闸门 + **自动写跟踪名单**，通联后移除） | true |
 | 自动呼叫 CQ 台 | `autoCallFollow` | 开关（总闸） | true |
 
 持久化键：`auto_supervision_minutes` / `auto_no_reply_limit` / `auto_follow_cq` / `auto_call_follow`；
 旧键常量保留但不再读写。
 
-> **已删除**：`autoCollectCqToFollow`（自动写跟踪名单）与 `qso/FollowRoster.kt`。
-> `AppSettings.autoFollowOrder` **恒为空**：读设置时按持久化键 `auto_follow_order` 把旧版
-> **自动收录**写进 `follow_calls` 的残留条目一次性剔除（手动跟踪的台不动，见
-> `purgeLegacyAutoFollow`），下一次写回时清空该键。否则这些残留会被下面 §5.2 的
-> 「⭐ 名单例外」放行，让「自动跟踪 CQ」开关看起来关不掉。
+> **2026-10-01**：「自动跟踪 CQ（本波段）」恢复**自动写跟踪名单**（`qso/FollowRoster.kt` +
+> `SessionViewModel.autoCollectCqToFollow`），并在该台**通联完成后自动移除**。这是**有意偏离**
+> FT8CN（其 `autoFollowCQ` 只推送到「呼叫」列表，帮助文件明确「该呼号不会被长久保存到关注的呼号
+> 数据库中」）。
+> `AppSettings.autoFollowOrder` 记录**自动收录**的顺序（最近在前、恒为 `followCalls` 子集），
+> 用于超出 `FollowRoster.AUTO_MAX = 100` 时淘汰最早收录的，以及 ⭐ 列表里给自动加入的行打
+> 「自动」标记；**手动跟踪**的呼号不在此列，永不被淘汰。
 
 ### 5.2 两个开关的语义（照 FT8CN）
 
 - **自动跟踪 CQ（`autoAddCqToFollow`）**：把关「哪些 CQ 台能进候选被自动呼叫」——
   开 ⇒ 任何**本波段还没通联过**的 CQ 台都纳入候选（波段口径照 FT8CN `checkQSLCallsign` 的 `where band=?`；
-  跨波段通联过的台在本波段仍算没通联过）；关 ⇒ **只**纳入跟踪名单里的 CQ 台。
-  **它不写任何名单**（照 FT8CN `autoFollowCQ`：帮助文件明确「该呼号不会被长久保存到关注的呼号数据库中」）。
+  跨波段通联过的台在本波段仍算没通联过），**并自动写进跟踪名单**（`FollowRoster`：跳过自己 / 已忽略 /
+  本波段已通联；同批去重；超 `AUTO_MAX = 100` 淘汰最早收录的）；关 ⇒ 不再新增，**只**纳入跟踪名单里的 CQ 台。
+  **写名单是有意偏离 FT8CN**（其 `autoFollowCQ` 只推送到「呼叫」列表）。
 - **自动呼叫 CQ 台（`autoCallFollow`）**：是否**真的去呼叫**候选里的 CQ 台（**总闸**，FT8CN `:714`）；
   关掉后只回应定向呼叫 ＋ 自己发 CQ。
-- **跟踪名单** ＝ `AppSettings.followCalls`（**只由用户手动增删**：解码长按「跟踪 / 取消跟踪」；
-  筛选条最右 **⭐** 打开面板，列表里**左滑＝呼叫、右滑＝取消跟踪**，右上「全部清除」）。
-  它**不是解码筛选**；照 FT8CN，名单里的台**不受** `autoAddCqToFollow` 限制。
-  **通联完成后不会自动取消跟踪**（名单只手动变动）。
-  旧版「自动收录」写进去的残留条目已由 §5.1 的清理剔除，因此名单里的台只可能是手动加的 ——
-  否则那个「例外」会让关掉「自动跟踪 CQ」也照叫，看起来像开关坏了。
+- **跟踪名单** ＝ `AppSettings.followCalls`，两个来源：解码列表长按「跟踪 / 取消跟踪」手动加入；
+  「自动跟踪 CQ」开着时自动写入本波段未通联的 CQ 台（顺序记在 `autoFollowOrder`）。
+  筛选条最右 **⭐** 打开面板，列表里**左滑＝呼叫、右滑＝取消跟踪**，右上「全部清除」。
+  它**不是解码筛选**；照 FT8CN，名单里的台**不受** `autoAddCqToFollow` 限制（开关关掉时仍会被自动呼叫）。
+  **通联完成后自动移除**该台（**有意偏离 FT8CN**）。
 
 ### 5.3 关键常量与默认值
 
@@ -484,7 +488,7 @@
 | --- | --- | --- |
 | 发送总开关 `txEnabled` | `false`（不持久化） | 自动程序的**唯一闸门** |
 | `QsoEngine.NO_REPLY_HARD_LIMIT` | `20` | `noReplyLimit == 0` 时，序号 4 的兜底批次上限（FT8CN `:840`） |
-| `purgeLegacyAutoFollow` | — | 读设置时把旧版「自动收录」残留从跟踪名单剔除（`SettingsRepository`） |
+| `FollowRoster.AUTO_MAX` | `100` | 自动收录的上限，超出淘汰最早收录的（`qso/FollowRoster.kt`） |
 | `TX_START_WINDOW_MS` | `1200L` | 时隙起始的发射窗口（`ui/SessionViewModel.kt`） |
 | `MIN_SEND_NOW_MS` | `2500L` | 立即发射所需最小余量（`TxCompose.TxScheduler`） |
 | `AUTO_PARITY_LEAD_MARGIN_MS` | `500L` | 前导对齐余量 |
@@ -527,8 +531,9 @@
 | 手动接管 paused | 无此概念，人工不暂停自动 | 取消 `paused`；人工只改目标 / 指令 | 照搬 |
 | 发射确认框 | 无 | 删 `AutoEnableConfirmDialog`；`txEnabled` 即唯一闸门 | 照搬 |
 | 选台排序 | 无 DX 分级 | `rank` 保持解码顺序（不再按 DX / 区域加权） | 照搬 |
-| 两个 CQ 开关 | `autoFollowCQ`＝推送到呼叫列表（**不写名单**）；`autoCallFollow`＝是否自动呼叫（总闸） | 同名同义（`autoAddCqToFollow` / `autoCallFollow`） | 照搬 |
-| 跟踪名单写入 | 只在用户手动操作时写入 | 同（删掉「自动收录」写入路径） | 照搬 |
+| 两个 CQ 开关 | `autoFollowCQ`＝推送到呼叫列表（**不写名单**）；`autoCallFollow`＝是否自动呼叫（总闸） | 名字对应（`autoAddCqToFollow` / `autoCallFollow`）；`autoAddCqToFollow` 额外**写跟踪名单** | 开关口径照搬，写名单有意偏离 |
+| 跟踪名单写入 | 只在用户手动操作时写入 | 手动 + 「自动跟踪 CQ」自动写入本波段未通联的 CQ（`FollowRoster`） | 有意偏离 |
+| 跟踪名单移除 | 不自动移除 | 通联完成后自动移除该台 | 有意偏离 |
 | 跟踪名单删除 | 只能在局域网 Web 后台 / 清缓存 | ⭐ 面板内即可删（含「全部清除」） | 有意偏离 |
 | 复合呼号匹配 | 目标带 `/` 时 `contains`（单向） | **双向**（任一方带 `/` 即 `contains`） | 超集 / 加固 |
 | 2 秒时窗闸门 | 有（漏应答根因） | **无**（逐条判定，晚到 / 大批量也能触发） | 有意偏离（避隐患） |
@@ -550,13 +555,18 @@
 5. **跟踪名单可从 App 内删除**：存 `AppSettings.followCalls`，App 内即可删；FT8CN 是独立表、只能在局域网 Web 后台删。
 6. **6 位扩展网格也算序号 1**：`FunctionOrder.GRID6`；FT8CN `checkFun1` 只认 4 位，收到 6 位网格会解析不出序号而卡住。
 7. **深度解码占位**：`DecodeResult.deep` 当前恒 `false`（native 单遍解码），仅按 FT8CN 口径预留「不驱动自动」的钩子。
+8. **「自动跟踪 CQ」自动写跟踪名单**：本波段未通联的 CQ 台由 `FollowRoster` 写入 `followCalls`，
+   超 `AUTO_MAX = 100` 淘汰最早收录的（手动跟踪的不淘汰）；FT8CN 的 `autoFollowCQ` 只把 CQ 推送到
+   「呼叫」列表、不写名单。
+9. **跟踪台通联完成后自动移除**：该台与本机通联落库后从名单（含 `autoFollowOrder`）剔除；FT8CN 不会自动移除。
 
 > **2026-09-30 从偏离清单里移除的机制**（改为照搬 FT8CN）：
 > 收敛阶梯（含「收到纯报告而己方已回过 R → 直接 RR73」的 4a）、
 > CQ 修饰符/DX 区域分级选台（`modifierPriority` / `areaOfGrid`）、
-> 「自动收录 CQ 台」写跟踪名单（`FollowRoster`）、
-> 「跟踪台通联完成后自动取消跟踪」、
 > 「Tx3 的 R 报告复用快照」（现在与 FT8CN 同为「首次测到的强度」）。
+>
+> **2026-10-01 重新加回**（用户决定，属有意偏离）：
+> 「自动跟踪 CQ」写跟踪名单（`FollowRoster`）、「跟踪台通联完成后自动移除」。
 
 ---
 
@@ -577,4 +587,3 @@
 - 看门狗（watchdog）。
 - `AutoEnableConfirmDialog`（发送总开关确认框）。
 - `retryLimit` / `giveUpAfterRetry` / `QsoProgress.retries` 重试体系（已退役）。
-- 「自动收录 CQ 台」写跟踪名单（`FollowRoster`，已删除；改为照 FT8CN 不写名单）。

@@ -447,7 +447,7 @@
 | 反馈 | 处理 |
 | --- | --- |
 | 操作页不需要「忽略」 | 解码行长按菜单去掉「忽略」项，`DecodeTable` 的 `onIgnore` 参数链一并删除。后端忽略名单（`ignoredCalls` / `ignoreCall`）保留但不再有 UI 入口（`DecodeFilter` / 自动程序仍会读它）。 |
-| 跟踪列表要能一键清空 | 跟踪列表标题栏加「全部清除」（名单非空时才显示），带**二次确认**弹窗；新增 `SessionViewModel.clearFollowCalls()`（当时会把「自动收录」的遗留顺序一并清掉；该自动收录逻辑已在 §35 删除）。 |
+| 跟踪列表要能一键清空 | 跟踪列表标题栏加「全部清除」（名单非空时才显示），带**二次确认**弹窗；新增 `SessionViewModel.clearFollowCalls()`（「自动收录」顺序也一并清掉；该逻辑见 §38）。 |
 | 手势速查同步 | `JtdxHelpDialog` 里删掉「忽略」，补上「跟踪列表：左滑呼叫 / 右滑取消跟踪 / 右上全部清除」，并把频谱说明改成「叠加最近解码的报文」。 |
 
 ---
@@ -912,7 +912,7 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
 | 报告值（我方发） | Tx3 复用 Tx2 **实际发出的快照**（有意偏离） | 序号 2/3 取**同一个**「定台时测到的强度」（`:260`/`:266`） | 同 FT8CN（固定首次测得） |
 | 报告值（对方给） | 首个 / 保留 | 命中即覆盖（`receiveTargetReport`，`:621`） | 同 FT8CN |
 | 选台排序 | `DX` ＞ 我所在区域 ＞ 其它修饰符 ＞ 无（稳定保序） | **无 DX / 区域分级** | 删除 `modifierPriority`/`areaOfGrid`；`rank` 保持解码顺序 |
-| `autoFollowCQ` | 「自动收录 CQ 台」**真写跟踪名单** + 通联后自动取消跟踪 | 只把 CQ 推送到「呼叫」列表，**不写名单**（`auto_follow_help.txt` 明确） | 只作 CQ 候选闸门；⭐ 名单**只手动增删** |
+| `autoFollowCQ` | 「自动收录 CQ 台」**真写跟踪名单** + 通联后自动取消跟踪 | 只把 CQ 推送到「呼叫」列表，**不写名单**（`auto_follow_help.txt` 明确） | 只作 CQ 候选闸门；⭐ 名单**只手动增删**（**§38 已改回**：恢复写名单 + 通联后移除） |
 
 ### 35.1 代码增删
 
@@ -923,6 +923,7 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
   `AutoScheduler` 的 `myGrid`、`SessionViewModel.autoCollectCqToFollow` / `maybeGiveUpTarget`、
   收敛阶梯 4a、`AutoScheduler.rank(candidates, myGrid)` 的重载。
   **`QsoEngine.Step` 收敛阶梯表**整段删除，改为序号模型。
+  （**§38 已重新加回**：`FollowRoster` + `FollowRosterTest` + `SessionViewModel.autoCollectCqToFollow`。）
 - **收口路径改向**：`applyQsoProgress` 现在按 `p.gaveUp` 派发——
   `true` → `scheduler.onTargetGaveUp`（换台 / 回 CQ）；`false` → `onQsoFinished`（队列空回 CQ）。
   收尾判定不再由 `SessionViewModel` 判 `noReplyLimit`。
@@ -935,6 +936,9 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
   （`purgeLegacyAutoFollow`，清掉 `autoFollowOrder` 记录的台；手动跟踪的台不动），
   持久化键 `auto_follow_order` 在下一次写回时清空；通联完成也**不再**自动取消跟踪。
 - 抽屉摘要同步：`监管 10 分｜无回应内置 20 次换台｜跟踪本波段新 CQ｜自动呼叫`。
+
+> **§38 已改回**：设置项说明恢复「自动写入跟踪名单」，⭐ 名单恢复自动新增来源，通联后恢复自动移除；
+> `purgeLegacyAutoFollow` 已删除（`SettingsRepository` 恢复读取 `auto_follow_order`）。
 
 ### 35.3 文档与验收
 
@@ -1028,5 +1032,43 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
   `decodeEmptyHint` 仍只在**两类都为空**时出现。
 - `sendNow()` / `transmitTest()` 目前无调用点（历史遗留）；本轮已给 `sendNow()` 补记账，
   `transmitTest()`（「仅用于验证音频通路」）**有意不记账**。是否删除二者留待清理轮。
+
+---
+
+## 38. 「自动跟踪 CQ」恢复自动写跟踪名单 + 通联后移除（2026-10-01，已完成）
+
+**需求**（用户提问 → 拍板）：问「开启『自动跟踪 CQ』后收到本波段没通联过的 CQ，这个呼号会出现在跟踪页面里吗？」
+当时的答案是**不会**（§35 已把写名单路径删掉）。用户决定：**改成会**——「自动写入 + 通联后移除」
+（＝旧版 `d71a036` 的口径）。这是**有意偏离 FT8CN**（其 `autoFollowCQ` 只把 CQ 推送到「呼叫」列表、不写名单）。
+
+同轮另有一次**术语改名**（提交 `7340a41`）：「关注」→「跟踪」，列表名「关注呼号列表」→「跟踪 CQ 列表」，
+按钮 `关注 N` → `跟踪 N`，手势「取消关注」→「取消跟踪」；代码标识符保持英文 `follow*`。
+
+### 38.1 行为
+
+| 环节 | 口径 |
+| --- | --- |
+| 触发 | 「自动跟踪 CQ（本波段）」**开**，且本批解码里有 **CQ** 报文 |
+| 收录对象 | 发方≠自己、不在忽略名单、**本波段还没通联过**、不在跟踪名单里（同批去重） |
+| 写入 | `followCalls` + 顺序记 `autoFollowOrder`（最近在前）；⭐ 列表里自动加入的行打「自动」标记 |
+| 上限 | `FollowRoster.AUTO_MAX = 100`，超出**淘汰最早收录**的；**手动跟踪**的不占额度、永不淘汰 |
+| 移除 | 该台与本机**通联落库**时，从 `followCalls` + `autoFollowOrder` 一并移除（幂等）；状态栏「已记录通联：…（已取消跟踪）」 |
+| 关掉开关 | 只**停止新增**；已写入的台仍在名单里、仍会被自动呼叫（名单是 `autoAddCqToFollow` 的例外），直到通联完成被移除或手动删除 |
+
+### 38.2 代码
+
+- **新增** `qso/FollowRoster.kt`（`pickCqCalls` / `merge` / `AUTO_MAX`）+ `FollowRosterTest`（8 例）。
+- **删除** `data/settings/LegacyFollowCleanup.kt` + `LegacyFollowCleanupTest`（旧版残留已不再是脏数据）。
+- `SettingsRepository`：恢复读持久化键 `auto_follow_order`（去空 / 去重 / 只留仍在名单里的 / `take(AUTO_MAX)`），
+  删掉 `purgeLegacyAutoFollow`。
+- `SessionViewModel`：`pollOnce` 每批解码调 `autoCollectCqToFollow(decoded)`；
+  `applyQsoProgress` 落库时按 `latestSettings.followCalls` 判是否移除。
+- UI：开关副标题、自动程序说明、⭐ 空态文案同步；「自动」标记沿用既有 `autoFollowed` 接线。
+
+### 38.3 验证
+
+- 合计 **41 suite / 420 例 / 0 失败 0 错**，`:app:assembleDebug` 通过。
+- 偏离清单：`docs/QSO.md` §7 新增第 8、9 条；§3.5 / §5.1 / §5.2 / §6 对照表同步。
+
 
 

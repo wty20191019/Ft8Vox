@@ -1,0 +1,82 @@
+package com.example.ft8vox.qso
+
+import com.example.ft8vox.engine.DecodeResult
+
+/**
+ * 「自动跟踪 CQ（本波段）」的**纯逻辑**（可 JVM 单测）。
+ *
+ * **与 FT8CN 的有意偏离**（2026-10-01 用户决定）：FT8CN 的 `autoFollowCQ` 只把 CQ 报文推送到
+ * 「呼叫」列表，其帮助文件 `auto_follow_help.txt` 明确写「该呼号不会被长久保存到关注的呼号数据库
+ * 中」；本机改为**真的写进 ⭐「跟踪 CQ 列表」**，这样列表会随解码自动增长。
+ *
+ * **波段口径**：只收录**当前波段还没通联过**的 CQ 台——与 FT8CN `checkQSLCallsign`
+ * （`where band=?`，见 `DatabaseOpr.GetAllQSLCallsign`）的波段口径一致；跨波段已通联的台在本波段
+ * 仍算「没通联过」。
+ *
+ * **退出**：某台与本机通联完成后，[com.example.ft8vox.ui.SessionViewModel] 把它从名单里摘掉
+ * （这是本机行为，FT8CN 不会自动移除）；容量超出 [AUTO_MAX] 时淘汰**最早收录**的。
+ */
+object FollowRoster {
+
+    /**
+     * 自动收录的容量上限；超出后淘汰**最早收录**的。
+     *
+     * **手动跟踪**（长按菜单「跟踪」）的呼号不占此额度、也永远不会被淘汰——它们不在
+     * `AppSettings.autoFollowOrder` 里。
+     */
+    const val AUTO_MAX = 100
+
+    /**
+     * 从一批解码里挑出可自动收录的呼号（保持入参顺序；解码列表为「新→旧」，故结果即「最近在前」）。
+     *
+     * 只收 **CQ** 报文；跳过自己、[ignoredCalls]、[workedCalls]（**当前波段**已通联过的）、
+     * 以及 [followedCalls] 里已有的；同一批去重。
+     */
+    fun pickCqCalls(
+        messages: List<DecodeResult>,
+        myCall: String,
+        ignoredCalls: Set<String> = emptySet(),
+        followedCalls: Set<String> = emptySet(),
+        workedCalls: Set<String> = emptySet(),
+    ): List<String> {
+        val out = ArrayList<String>()
+        for (m in messages) {
+            val p = MessageParser.parse(m.text)
+            if (!p.isCq) continue
+            val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
+            if (from.equals(myCall, ignoreCase = true)) continue
+            if (from in ignoredCalls || from in followedCalls || from in workedCalls || from in out) continue
+            out += from
+        }
+        return out
+    }
+
+    /**
+     * 把 [incoming] 并入名单，返回新的 `(跟踪呼号集合, 自动收录顺序)`。
+     *
+     * [order] ＝「自动收录」的呼号、**最近在前**，恒为 [followed] 的子集；超出 [max] 时从尾部
+     * （最早收录）淘汰，并从 [followed] 一并移除。手动跟踪的呼号不在 [order] 里，故不会被淘汰。
+     */
+    fun merge(
+        followed: Set<String>,
+        order: List<String>,
+        incoming: List<String>,
+        max: Int = AUTO_MAX,
+    ): Pair<Set<String>, List<String>> {
+        var calls = followed
+        // 先修正不变式 order ⊆ calls，避免历史脏数据在淘汰时误删手动跟踪的台
+        var ord = order.filter { it in calls }.distinct()
+        // [incoming] 为「新→旧」；整段放到最前（保持内部顺序），即最近的仍在最前
+        val fresh = incoming.filter { it !in calls }.distinct()
+        if (fresh.isNotEmpty()) {
+            calls = calls + fresh
+            ord = fresh + ord
+        }
+        while (ord.size > max) {
+            val oldest = ord.last()
+            ord = ord.dropLast(1)
+            calls = calls - oldest
+        }
+        return calls to ord
+    }
+}
