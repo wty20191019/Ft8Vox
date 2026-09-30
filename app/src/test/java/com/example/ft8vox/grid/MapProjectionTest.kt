@@ -175,4 +175,22 @@ class MapProjectionTest {
         val p = MapProjection.fit(800.0, 800.0)
         assertTrue("最大缩放应允许底图 1:1 以上", p.maxScale >= MapProjection.WORLD_IMAGE_PX)
     }
+
+    @Test
+    fun maxScaleAllowsDeepZoom() {
+        // 「尽量放大」：手机竖屏下最大缩放时，屏宽应缩到 ≲ 100 km（赤道尺度；远小于一格 4 字符网格的 ~220 km）
+        val p = MapProjection.fill(1080.0, 1900.0)
+        val kmPerScreenWidth = 40075.0 * (1080.0 / p.maxScale)
+        assertTrue("最大缩放时屏宽应 ≲ 100 km，实际 $kmPerScreenWidth km", kmPerScreenWidth < 100.0)
+
+        // 连续捏合放大能真的走到这个上限（不是被中间某处挡住）
+        val deep = p.zoomBy(1e6, 540.0, 950.0)
+        assertEquals(p.maxScale, deep.scale, 1e-6)
+    }
+
+    @Test
+    fun zoomIsClampedByMaxScale() {
+        val p = MapProjection.fit(800.0, 800.0).zoomBy(1e9, 400.0, 400.0)
+        assertEquals(p.maxScale, p.scale, 1e-9)
+    }
 }

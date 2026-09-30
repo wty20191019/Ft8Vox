@@ -114,8 +114,6 @@ private object Keys {
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
     // 解码高亮开关与「已通联呈现方式」不再持久化（docs/UI-MOBILE.md §29：颜色恒启用）
     val beepOnMyCall = booleanPreferencesKey("beep_on_my_call")
-    val endMarkMyCall = booleanPreferencesKey("end_mark_my_call")
-    val endMarkActive = booleanPreferencesKey("end_mark_active")
     val themeMode = stringPreferencesKey("theme_mode")
     val fontSize = stringPreferencesKey("font_size")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
@@ -218,8 +216,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
             .coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS),
         beepOnMyCall = this[Keys.beepOnMyCall] ?: defaults.beepOnMyCall,
-        endMarkMyCall = this[Keys.endMarkMyCall] ?: defaults.endMarkMyCall,
-        endMarkActive = this[Keys.endMarkActive] ?: defaults.endMarkActive,
         themeMode = enumOr(Keys.themeMode, defaults.themeMode),
         fontSize = enumOr(Keys.fontSize, defaults.fontSize),
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
@@ -271,8 +267,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.inputGainDb] = inputGainDb
     prefs[Keys.slotOffsetMs] = slotOffsetMs
     prefs[Keys.beepOnMyCall] = beepOnMyCall
-    prefs[Keys.endMarkMyCall] = endMarkMyCall
-    prefs[Keys.endMarkActive] = endMarkActive
     prefs[Keys.themeMode] = themeMode.name
     prefs[Keys.fontSize] = fontSize.name
     prefs[Keys.waterfallHeight] = waterfallHeight.name

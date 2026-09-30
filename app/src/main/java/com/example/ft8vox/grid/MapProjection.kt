@@ -115,8 +115,14 @@ data class MapProjection(
     val fitScale: Double get() = minOf(viewWidth, viewHeight)
     val minScale: Double get() = fitScale
 
-    /** 最大缩放：允许在底图 1:1 基础上再放大 2×（再多就是无意义的插值放大）。 */
-    val maxScale: Double get() = maxOf(WORLD_IMAGE_PX * 2.0, fitScale * 6.0)
+    /**
+     * 最大缩放：**底图 1:1 的 64 倍**（手机竖屏下屏宽约 80 km ≈ 一格 4 字符网格）。
+     *
+     * 底图（z5 = 8192 px）到这里早已是插值放大的糊图，但**地图本身仍然可用**：网格方块、呼号点、
+     * 连线都是矢量绘制，放大才看得清「谁和谁在同一格」。所以刻意放到远超底图分辨率
+     * （2026-09-30 用户要求「不用管图层精度，尽量放大」）；再要更深只改这一个数字。
+     */
+    val maxScale: Double get() = maxOf(WORLD_IMAGE_PX * 64.0, fitScale * 6.0)
 
     /** 视口覆盖的世界坐标范围（未折叠；基图据此枚举「世界副本」）。 */
     fun visibleWorldRange(): WorldRange {

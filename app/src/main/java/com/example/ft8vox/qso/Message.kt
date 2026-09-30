@@ -66,8 +66,18 @@ object CallMatch {
     /** `to` 是否在呼叫我（宽松：`to` 含我方短呼号）。 */
     fun isCallingMe(to: String?, myCall: String): Boolean {
         val t = to?.trim()?.uppercase().orEmpty()
+        return t.isNotEmpty() && mentions(t, myCall)
+    }
+
+    /**
+     * 文本里是否出现我方呼号（宽松：含我方短呼号，`F4FSY/P` 与 `F4FSY` 视为同一个人）。
+     *
+     * 与 [isCallingMe] 同一口径，区别是看**整条报文文本**：地图连线用它判定「报文里有我 → 标红」
+     * （docs/UI-MOBILE.md §30）。
+     */
+    fun mentions(text: String?, myCall: String): Boolean {
         val me = shortCall(myCall)
-        return t.isNotEmpty() && me.isNotEmpty() && t.contains(me)
+        return me.isNotEmpty() && text?.uppercase()?.contains(me) == true
     }
 
     /**

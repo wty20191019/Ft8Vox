@@ -262,13 +262,9 @@ data class AppSettings(
      */
     val slotOffsetMs: Int = 0,
 
-    // ---- 高亮与提醒（docs/UI-MOBILE.md §29：颜色恒启用，不再提供开关） ----
+    // ---- 高亮与提醒（docs/UI-MOBILE.md §29/§31：颜色与末端标记恒启用，不再提供开关） ----
     /** 含我呼号时哔声提醒（依赖音频，U7）。 */
     val beepOnMyCall: Boolean = false,
-    /** 末端红标记：报文含我呼号。 */
-    val endMarkMyCall: Boolean = true,
-    /** 末端蓝标记：当前 QSO 对手。 */
-    val endMarkActive: Boolean = true,
 
     // ---- 外观（docs/UI.md §2.6） ----
     val themeMode: ThemeMode = ThemeMode.DARK,

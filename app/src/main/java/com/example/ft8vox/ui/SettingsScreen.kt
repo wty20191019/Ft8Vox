@@ -448,7 +448,7 @@ fun SettingsScreen(
             PrefNote(
                 "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
                     "最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > 重复 > 新网格 > " +
-                    "新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码。下方列出每种颜色的含义。",
+                    "新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码。行尾小圆点同样恒开。下方列出每种颜色的含义。",
             )
             HighlightLegend()
             PrefDivider()
@@ -459,19 +459,6 @@ fun SettingsScreen(
                 onCheckedChange = { v -> settings.update { it.copy(beepOnMyCall = v) } },
             )
             PrefDivider()
-            PrefSwitch(
-                title = "末端标记：红=有我",
-                checked = app.endMarkMyCall,
-                onCheckedChange = { v -> settings.update { it.copy(endMarkMyCall = v) } },
-                dotColor = VoxError,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "末端标记：蓝=正通联",
-                checked = app.endMarkActive,
-                onCheckedChange = { v -> settings.update { it.copy(endMarkActive = v) } },
-                dotColor = MaterialTheme.colorScheme.primary,
-            )
         }
 
         // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/UI-MOBILE.md §1：无亮/暗主题、无字体档位） ----------
@@ -793,7 +780,7 @@ private fun HighlightLegend() {
         LegendRow(BarWorked, "红字 + 删除线：已通联")
         LegendRow(Color(0xFF9AA0B5), "灰字弱化：重复解码（同一条报文又解到一次）")
 
-        LegendSection("解码列表 · 行尾小圆点")
+        LegendSection("解码列表 · 行尾小圆点（恒开）")
         LegendRow(VoxError, "红：报文里有我的呼号")
         LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
         LegendRow(BarNewGrid, "紫：新网格")
@@ -801,7 +788,7 @@ private fun HighlightLegend() {
         LegendRow(BarNewCall, "粉：已关注的呼号")
 
         LegendSection("地图")
-        LegendRow(MapLinkMine, "红线 / 红字：与我有关的信号连线（我发出的 / 发给我的）")
+        LegendRow(MapLinkMine, "红线 / 红字：报文里有我的连线（我发出的 / 发给我的）")
         LegendRow(MapLinkColor, "蓝线：其它台站之间的连线")
     }
 }

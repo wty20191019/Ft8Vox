@@ -215,8 +215,6 @@ fun OperateScreen(
                         onSwipeDelete = { viewModel.removeMessage(it.msg) },
                         onCopy = { copyToClipboard(it.msg.text) },
                         onToggleFollow = { it.parsed.from?.let { c -> viewModel.toggleFollow(c) } },
-                        endMarkMyCall = settings.endMarkMyCall,
-                        endMarkActive = settings.endMarkActive,
                         slotMs = status.slotMs,
                         myGrid = status.myGrid,
                     )
