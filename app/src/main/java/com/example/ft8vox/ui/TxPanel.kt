@@ -71,21 +71,20 @@ fun TxPanel(
 ) {
     val myCall = status.myCall
     val myGrid = status.myGrid
-    val target = targetCall?.takeIf { it.isNotBlank() } ?: status.qso.theirCall
+    // 目标呼号：引擎在通联时以引擎的真正对手为准，空闲时用用户点选的目标（见 `TxCompose.targetFor`）。
+    val target = TxCompose.targetFor(
+        engineCall = status.qso.theirCall,
+        engineBusy = status.qso.active || status.qso.txText != null,
+        picked = targetCall,
+    )
     val reportSent = status.qso.reportSent ?: TxCompose.reportFor(messages, target)
-    val reportReceived = status.qso.reportReceived ?: reportSent
     val cqPrefix = settings.cqPrefix
 
-    // 六个槽的报文：每帧现算，永远与六步序列一致（docs/UI-MOBILE.md §3.4）
-    val slots = remember(target, myCall, myGrid, reportSent, reportReceived, cqPrefix) {
-        listOf(
-            TxMessageKind.GRID to TxCompose.compose(TxMessageKind.GRID, target, myCall, myGrid),
-            TxMessageKind.REPORT to TxCompose.compose(TxMessageKind.REPORT, target, myCall, myGrid, reportSent),
-            TxMessageKind.ROGER to TxCompose.compose(TxMessageKind.ROGER, target, myCall, myGrid, reportReceived),
-            TxMessageKind.RR73 to TxCompose.compose(TxMessageKind.RR73, target, myCall, myGrid),
-            TxMessageKind.SEVENTY_THREE to TxCompose.compose(TxMessageKind.SEVENTY_THREE, target, myCall, myGrid),
-            TxMessageKind.CQ to TxCompose.compose(TxMessageKind.CQ, null, myCall, myGrid, cqPrefix = cqPrefix),
-        )
+    // 六个槽的报文：每帧现算，永远与六步序列**逐字一致**（docs/UI-MOBILE.md §3.4：
+    // 「格内文字就是真发的报文」）；组装规则统一在 `TxCompose.slots`，
+    // 由单测锁死「槽内文字 == 引擎渲染的 txText」（红/绿点靠文本相等匹配）。
+    val slots = remember(target, myCall, myGrid, reportSent, cqPrefix) {
+        TxCompose.slots(target, myCall, myGrid, reportSent, cqPrefix)
     }
 
     var custom by remember { mutableStateOf("") }

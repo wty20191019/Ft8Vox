@@ -53,6 +53,48 @@ object TxCompose {
         }
     }
 
+    /**
+     * 发射区**六个报文槽**的文本（3 列 × 2 行、列优先 `1 3 5` / `2 4 6`；下标 `0..5` 即序号 `1..6`）。
+     *
+     * **必须与 [QsoEngine] 的 `txText` 逐字一致**：发射区的红/绿点靠**文本相等**匹配
+     * （`com.example.ft8vox.ui.slotLed`），差一个字符就不点灯 —— 真机现象是「在发 `R-07`，
+     * 但 `3 R报告` 那格不亮红框红点」。
+     *
+     * 序号 3 的 `R<报告>` 用**我方实测的 [reportSent]**（与序号 2 **同一个值**，照 FT8CN
+     * `toCallsign.snr`），**不是**对方给我的报告。
+     */
+    fun slots(
+        target: String?,
+        myCall: String,
+        myGrid: String,
+        reportSent: Int,
+        cqPrefix: String = "",
+    ): List<Pair<TxMessageKind, String?>> = listOf(
+        TxMessageKind.GRID to compose(TxMessageKind.GRID, target, myCall, myGrid),
+        TxMessageKind.REPORT to compose(TxMessageKind.REPORT, target, myCall, myGrid, reportSent),
+        TxMessageKind.ROGER to compose(TxMessageKind.ROGER, target, myCall, myGrid, reportSent),
+        TxMessageKind.RR73 to compose(TxMessageKind.RR73, target, myCall, myGrid),
+        TxMessageKind.SEVENTY_THREE to compose(TxMessageKind.SEVENTY_THREE, target, myCall, myGrid),
+        TxMessageKind.CQ to compose(TxMessageKind.CQ, null, myCall, myGrid, cqPrefix = cqPrefix),
+    )
+
+    /**
+     * 发射区该以**谁**为目标呼号（六槽组包用）。
+     *
+     * **引擎有进行中的 QSO / 有待发报文时，以引擎真正在通联的对手为准** —— 否则用户先前
+     * 点选过的目标（UI 里只赋值、从不清空、还是 `rememberSaveable`）会一直优先，六槽按旧呼号
+     * 组包，与「正在发送」对不上（真机现象：自动程序已与 B 通联，槽内却还写着 A）。
+     * 引擎空闲时才用点选目标，方便为还没开始的 QSO 预先备好报文。
+     *
+     * @param engineCall 引擎当前对手（`QsoProgress.theirCall`）
+     * @param engineBusy 引擎是否在进行中或有待发报文（`active || txText != null`）
+     * @param picked 用户点选的目标（解码行单击 / 左滑 / 关注列表 / 详情「呼叫」）
+     */
+    fun targetFor(engineCall: String?, engineBusy: Boolean, picked: String?): String? {
+        val engine = engineCall?.takeIf { engineBusy && it.isNotBlank() }
+        return engine ?: picked?.trim()?.takeIf { it.isNotBlank() } ?: engineCall?.takeIf { it.isNotBlank() }
+    }
+
     /** 识别一段报文的类型（用于收起态的「当前消息类型」）。 */
     fun kindOf(text: String?, myCall: String = ""): TxMessageKind? {
         val t = text?.trim().orEmpty()
