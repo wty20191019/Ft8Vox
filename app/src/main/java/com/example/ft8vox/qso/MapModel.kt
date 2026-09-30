@@ -165,9 +165,20 @@ object MapModel {
     }
 
     /**
+     * **最近一个时隙**的时间戳（没有任何解码时返回 null）。
+     *
+     * 地图上的「现在」层（CQ 旗、信号连线）都只取这一个时隙的解码；「历史」层（网格方块、
+     * 呼号点）才是整会话累计（docs/UI-MOBILE.md §33）。
+     */
+    fun latestSlotMs(messages: List<DecodeResult>): Long? =
+        messages.filter { it.slotUtcMs > 0L }.maxOfOrNull { it.slotUtcMs }
+
+    /**
      * 解码到的 CQ 台（同一呼号取最近一次，过滤掉自己）。
      *
      * 绘制时这些呼号用**旗子**当标记（替代圆点），旗面颜色取该台的类别色（§31）。
+     * [latestSlotOnly] = true 时只看**最近一个时隙**（地图页口径：旗子表示「**现在**谁在喊 CQ」，
+     * §33）；默认 false 仍按 [nowMs]/[windowMs] 的时间窗，便于复用与单测。
      */
     fun cqFlags(
         messages: List<DecodeResult>,
@@ -176,13 +187,19 @@ object MapModel {
         windowMs: Long = DEFAULT_WINDOW_MS,
         gridCache: Map<String, String> = emptyMap(),
         maxFlags: Int = 200,
+        latestSlotOnly: Boolean = false,
     ): List<CqFlag> {
         val me = myCall.trim().uppercase()
+        val slot = if (latestSlotOnly) latestSlotMs(messages) else null
         val cutoff = if (nowMs > 0L && windowMs > 0L) nowMs - windowMs else Long.MIN_VALUE
         val cache = gridLookup(messages, gridCache)
         val byCall = LinkedHashMap<String, CqFlag>()
         for (m in messages) {
-            if (m.slotUtcMs > 0L && m.slotUtcMs < cutoff) continue
+            if (slot != null) {
+                if (m.slotUtcMs != slot) continue
+            } else if (m.slotUtcMs > 0L && m.slotUtcMs < cutoff) {
+                continue
+            }
             val p = MessageParser.parse(m.text)
             if (!p.isCq) continue
             val from = p.from?.trim()?.uppercase()?.takeIf { it.isNotEmpty() } ?: continue
@@ -218,7 +235,7 @@ object MapModel {
         gridCache: Map<String, String> = emptyMap(),
         maxLinks: Int = 100,
     ): List<SignalLink> {
-        val slot = messages.filter { it.slotUtcMs > 0L }.maxOfOrNull { it.slotUtcMs } ?: return emptyList()
+        val slot = latestSlotMs(messages) ?: return emptyList()
         val me = myCall.trim().uppercase()
         val mine = myGrid?.let { Maidenhead.center(it) }
         val cache = gridLookup(messages, gridCache)

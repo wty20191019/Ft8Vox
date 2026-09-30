@@ -117,7 +117,9 @@ fun GridScreen(
         m
     }
 
-    // ---- 地图层（整会话，不做时间窗；消息上限 200 条） ----
+    // ---- 地图层：分「历史」与「现在」两层（docs/UI-MOBILE.md §33） ----
+    // 历史层（整会话累计，消息上限 200 条）：网格方块 + 呼号点 —— 「这一场听到过谁、在哪个格」。
+    // 现在层（只取**最近一个时隙**）：CQ 旗 + 信号连线 —— 「此刻空中正在发生什么」。
     val decodedSquares = remember(messages) { MapModel.decodedSquares(messages) }
     val gridMarkers = remember(decodedSquares, workedGrids, confirmedGrids) {
         MapModel.gridMarkers(decodedSquares, workedGrids, confirmedGrids)
@@ -133,7 +135,12 @@ fun GridScreen(
         )
     }
     val cqFlags = remember(messages, status.myCall, gridCache) {
-        MapModel.cqFlags(messages, myCall = status.myCall, windowMs = 0L, gridCache = gridCache)
+        MapModel.cqFlags(
+            messages = messages,
+            myCall = status.myCall,
+            gridCache = gridCache,
+            latestSlotOnly = true,
+        )
     }
     val links = remember(messages, status.myCall, status.myGrid, gridCache) {
         MapModel.signalLinks(

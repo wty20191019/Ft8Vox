@@ -183,6 +183,55 @@ class MapModelTest {
         assertEquals(listOf("JA1ABC"), flags.map { it.call })
     }
 
+    @Test
+    fun cqFlagsLatestSlotOnlyDropsOlderCq() {
+        // 地图页口径（§33）：CQ 旗只表示「现在谁在喊」，所以只取最近一个时隙
+        val messages = listOf(
+            decoded("CQ JA1ABC PM95", slotUtcMs = 1000),
+            decoded("CQ DL1ABC JN48", slotUtcMs = 2000),
+        )
+        assertEquals(
+            listOf("DL1ABC"),
+            MapModel.cqFlags(messages, latestSlotOnly = true).map { it.call },
+        )
+        // 不限定则两个都在（整会话口径，供其它调用方使用）
+        assertEquals(
+            listOf("DL1ABC", "JA1ABC"),
+            MapModel.cqFlags(messages).map { it.call },
+        )
+    }
+
+    @Test
+    fun cqFlagsLatestSlotOnlyKeepsSameSlotButNotOwnCall() {
+        // 同一时隙里的多条 CQ 都保留；自己的 CQ 不算
+        val flags = MapModel.cqFlags(
+            messages = listOf(
+                decoded("CQ F4FSY JN25", slotUtcMs = 2000),
+                decoded("CQ JA1ABC PM95", slotUtcMs = 2000),
+                decoded("F4FSY JA1ABC -12", slotUtcMs = 2000),
+                decoded("CQ DL1ABC JN48", slotUtcMs = 1000),
+            ),
+            myCall = "F4FSY",
+            latestSlotOnly = true,
+        )
+        assertEquals(listOf("JA1ABC"), flags.map { it.call })
+    }
+
+    @Test
+    fun latestSlotMsIgnoresZeroTimestamps() {
+        assertEquals(
+            2000L,
+            MapModel.latestSlotMs(
+                listOf(
+                    decoded("CQ JA1ABC PM95", slotUtcMs = 0),
+                    decoded("CQ DL1ABC JN48", slotUtcMs = 2000),
+                    decoded("CQ K1ABC FN42", slotUtcMs = 1000),
+                ),
+            ),
+        )
+        assertNull(MapModel.latestSlotMs(listOf(decoded("CQ JA1ABC PM95", slotUtcMs = 0))))
+    }
+
     // ---- signalLinks ----
 
     @Test
