@@ -98,6 +98,8 @@
 ### 3.3 解码列表
 
 - **两行制**（§13 起）：第 1 行 `时隙 UTC 信号 dT 报文`，第 2 行 `声音频率 国家 距离`；无表头。
+- **我方发射行（TX 行，§37）**：`时隙 | TX | 报文`，**只占一行**、黄底（同「自己发的报文」），
+  与接收解码行**按同一时间轴混排**；纯展示不可点，被作废的那次行尾标「未发完」。
 - **整行底色高亮**，颜色取命中类别的最高优先级（§6）。
 - **报文的额外标红**（§29）：发给我的报文，**「报文」那一列整列标红**；已通联的报文列是**红字 + 删除线**。
   两者都不动整行底色（色卡规则照旧）。
@@ -974,5 +976,56 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
 ### 36.2 遗留
 
 - 引擎的单线程归属仍未收口（`QsoEngine` 同时被主线程与轮询线程调用），留待单独一轮处理。
+
+---
+
+## 37. 实机第二十四轮：接收列表加「我方发射行」（TX 行）2026-09-30，已完成
+
+**需求**：接收信息列表里，**我方每发一次报文就插一行**（风格照 JTDX `1 | TX | 报文`），
+颜色与现有「自己发的报文 / 正在发射的那条」一致，且**只占一行**。
+
+| 细节 | 口径 |
+| --- | --- |
+| 记录范围 | **全部实际发射**：QSO 六步 / 手点六格槽 / CQ / 一次性自定义框（只要真的播出去） |
+| 插入时机 | **发射一开始就出现**（`transmit()` 里 `txing=true` 那一刻建行，先记再阻塞播放） |
+| 排序 | 与接收解码行**按同一时间轴**（`slotUtcMs` 新→旧）**混排** |
+| 连续重发 | **每个发射时隙各占一行**（不合并） |
+| 同一时隙换目标重发 | **各占一行**；被作废的那行标注「未发完」 |
+| 配色 | 行底色＝ [HighlightRole.TX] 那一档（**黄底**，与「自己发的报文」一致），报文列文字正常色 |
+| 行首 | `时隙 \| TX \| 报文`：`TX` **顶替**解码行的 UTC / SNR / dT 三段（合并居中），无第二行 |
+| 交互 | **纯展示**：不加 `combinedClickable` / `pointerInput`（避免左滑误呼叫自己、右滑误删自己） |
+| 条数上限 | 与接收解码**共用**一个 `ACTIVITY_LIMIT = 200`（一起淘汰最旧的） |
+| 页面 | 只出现在操作页接收列表；频谱页解码叠加**不加** |
+| 未发完 | 被「停止发射」/ 换目标就地重发**作废**，或写入失败的那次 → 行尾灰字**「未发完」** |
+
+### 37.1 实现
+
+- 新文件 `ui/ActivityRow.kt`：`sealed interface ActivityRow { Rx / Tx }`、`TxRecord`、
+  `TxOutcome { PLAYING / DONE / ABORTED }`、`ACTIVITY_LIMIT`、纯函数 `mergeActivity(rx, tx, limit)`
+  （**稳定排序**：同一时隙内接收解码在前、TX 在后）。
+- `SessionViewModel`：
+  - 新增 `txRecords: StateFlow<List<TxRecord>>`；
+  - `beginTxRecord(text, slotUtcMs)` 在 `transmit()` / `sendNow()` **一开播**调用（状态 `PLAYING`）；
+  - `finishTxRecord(id)`：`abortAtPlan == txAbortGen && written > 0` 才置 `DONE`；
+  - `abortPlayingTxRecord()`：`abortTransmit()` 里把**在播的那条**置 `ABORTED`
+    （同一时刻只可能有一条在播，故扫状态而不共享可变「当前 id」，避免跨线程竞态）；
+  - `clearMessages()` 同时清 `_txRecords`；`_messages` 上限改用 `ACTIVITY_LIMIT`。
+- `DecodeTable`：入参由 `List<DecodeRow>` 改为 `List<ActivityRow>`，逐行 `when` 分派；
+  新增 `TxTableRow`（单行、黄底、`TX` 顶替三段、`TextOverflow.Ellipsis`、行尾「未发完」）。
+- `OperateScreen`：`rxRows` + `mergeActivity` 得 `rows`；`newestKey` 改用 `ActivityRow.key`；
+  `[清除]` 的 `enabled` 兼顾 `txRecords`。
+
+### 37.2 单测
+
+- `ActivityRowTest`（6 例）：时间轴混排、两类**共用一个上限**、同一时隙稳定顺序、
+  TX 比全部 RX 新时置顶、`ABORTED` 随记录带到界面、`key` 两类不同且稳定。
+- 合计 **40 suite / 412 例 / 0 失败 0 错**，`:app:assembleDebug --rerun-tasks` 全量重编通过。
+
+### 37.3 有意偏离 / 遗留
+
+- 沿用「自行判断」：TX 行不参与忽略名单 / 关注 / 重复解码判定（它不是解码）；
+  `decodeEmptyHint` 仍只在**两类都为空**时出现。
+- `sendNow()` / `transmitTest()` 目前无调用点（历史遗留）；本轮已给 `sendNow()` 补记账，
+  `transmitTest()`（「仅用于验证音频通路」）**有意不记账**。是否删除二者留待清理轮。
 
 

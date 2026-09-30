@@ -74,6 +74,7 @@ fun OperateScreen(
 
     val status by viewModel.status.collectAsState()
     val messages by viewModel.messages.collectAsState()
+    val txRecords by viewModel.txRecords.collectAsState()
     val worked by viewModel.workedIndex.collectAsState()
 
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
@@ -93,7 +94,8 @@ fun OperateScreen(
         followedCalls = settings.followCalls,
     )
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
-    val rows = remember(
+    // 接收解码行
+    val rxRows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,
         status.txing, status.lastTxText, duplicateKeys,
     ) {
@@ -108,6 +110,8 @@ fun OperateScreen(
             DecodeRow(m, p, style)
         }
     }
+    // 与「我方发射行」按同一时间轴混排（docs/UI-MOBILE.md §37）；两类共用一个 200 条上限。
+    val rows = remember(rxRows, txRecords) { mergeActivity(rxRows, txRecords) }
 
     // ---- 自动翻到最新（docs/UI.md §3.3）----
     val listState = rememberLazyListState()
@@ -122,7 +126,7 @@ fun OperateScreen(
             if (idx == 0) followNewest = true
         }
     }
-    val newestKey = rows.firstOrNull()?.let { it.msg.text + "@" + it.msg.slotUtcMs }
+    val newestKey = rows.firstOrNull()?.key
     LaunchedEffect(newestKey) {
         if (newestKey != null && followNewest && !listState.isScrollInProgress) {
             listState.animateScrollToItem(0)
@@ -144,7 +148,7 @@ fun OperateScreen(
             JtdxButton(
                 text = "清除",
                 onClick = { viewModel.clearMessages() },
-                enabled = messages.isNotEmpty(),
+                enabled = messages.isNotEmpty() || txRecords.isNotEmpty(),
             )
             JtdxButton(
                 text = "关注 ${settings.followCalls.size}",

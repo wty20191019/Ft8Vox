@@ -191,7 +191,7 @@ private fun InfoText(
  */
 @Composable
 fun DecodeTable(
-    rows: List<DecodeRow>,
+    rows: List<ActivityRow>,
     myCall: String,
     listState: LazyListState,
     rowHeightMin: Int = 20,
@@ -211,22 +211,85 @@ fun DecodeTable(
 ) {
     LazyColumn(modifier = modifier.fillMaxSize()) {
         items(rows) { row ->
-            DecodeTableRow(
-                row = row,
-                myCall = myCall,
-                slotMs = slotMs,
-                minHeightDp = rowHeightMin,
-                myGrid = myGrid,
-                followed = row.parsed.from?.let(followed) ?: false,
-                onClick = { onRowClick(row) },
-                onDoubleClick = { onRowDoubleClick(row) },
-                onCall = { onCall(row) },
-                onReply = { onReply(row) },
-                onDetail = { onDetail(row) },
-                onOpenLog = { onOpenLog(row) },
-                onSwipeDelete = { onSwipeDelete(row) },
-                onCopy = { onCopy(row) },
-                onToggleFollow = { onToggleFollow(row) },
+            when (row) {
+                is ActivityRow.Rx -> DecodeTableRow(
+                    row = row.row,
+                    myCall = myCall,
+                    slotMs = slotMs,
+                    minHeightDp = rowHeightMin,
+                    myGrid = myGrid,
+                    followed = row.row.parsed.from?.let(followed) ?: false,
+                    onClick = { onRowClick(row.row) },
+                    onDoubleClick = { onRowDoubleClick(row.row) },
+                    onCall = { onCall(row.row) },
+                    onReply = { onReply(row.row) },
+                    onDetail = { onDetail(row.row) },
+                    onOpenLog = { onOpenLog(row.row) },
+                    onSwipeDelete = { onSwipeDelete(row.row) },
+                    onCopy = { onCopy(row.row) },
+                    onToggleFollow = { onToggleFollow(row.row) },
+                )
+
+                // 我方发射行（TX 行，§37）：只占一行、纯展示（无点击 / 无滑动手势）。
+                is ActivityRow.Tx -> TxTableRow(
+                    rec = row.rec,
+                    slotMs = slotMs,
+                    minHeightDp = rowHeightMin,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 我方发射行（TX 行，docs/UI-MOBILE.md §37）：`时隙 | TX | 报文`，**只占一行**。
+ *
+ * - 行底色＝ [HighlightRole.TX] 那一档（黄底，与「自己发的报文 / 正在发射的那条」一致）。
+ * - 「TX」顶替解码行的 **UTC / SNR / dT** 三段（合并居中）——发射没有信噪比与时差。
+ * - 被「停止发射」/ 换目标作废的那次在行尾标**「未发完」**。
+ * - **纯展示**：不加 `combinedClickable` / `pointerInput`，避免左滑误呼叫自己、右滑误删自己。
+ */
+@Composable
+private fun TxTableRow(rec: TxRecord, slotMs: Int, minHeightDp: Int) {
+    val slotLabel = slotParityOf(rec.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeightDp.dp)
+            .background(HlTx.copy(alpha = HL_ALPHA))
+            .padding(start = 8.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            slotLabel,
+            style = mono(MaterialTheme.typography.labelSmall),
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(COL_SLOT),
+        )
+        Text(
+            "TX",
+            style = mono(MaterialTheme.typography.labelSmall),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.width(COL_UTC + COL_SNR + COL_DT),
+        )
+        Text(
+            rec.text,
+            style = mono(MaterialTheme.typography.labelMedium),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 6.dp),
+        )
+        if (rec.outcome == TxOutcome.ABORTED) {
+            Text(
+                "未发完",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
     }

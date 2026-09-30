@@ -39,6 +39,7 @@ import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
 import com.example.ft8vox.qso.QsoProgress
 import com.example.ft8vox.qso.QsoState
+import com.example.ft8vox.qso.TxCompose
 import com.example.ft8vox.qso.TxScheduler
 import com.example.ft8vox.qso.WorkedIndex
 import kotlinx.coroutines.Dispatchers
@@ -182,6 +183,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _messages = MutableStateFlow<List<DecodeResult>>(emptyList())
     val messages: StateFlow<List<DecodeResult>> = _messages.asStateFlow()
+
+    /**
+     * 我方发射记录（接收列表里的「TX 行」，docs/UI-MOBILE.md §37）。
+     *
+     * 与 [_messages] 共用同一个条数上限 [ACTIVITY_LIMIT]（在界面层合并时统一截断）。
+     */
+    private val _txRecords = MutableStateFlow<List<TxRecord>>(emptyList())
+    val txRecords: StateFlow<List<TxRecord>> = _txRecords.asStateFlow()
+
+    /** [TxRecord.id] 的发号器（本次会话内单调递增）。 */
+    private var txRecordSeq = 0L
 
     private val _waterfall = MutableStateFlow<WaterfallFrame?>(null)
     val waterfall: StateFlow<WaterfallFrame?> = _waterfall.asStateFlow()
@@ -718,6 +730,47 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMessages() {
         _messages.value = emptyList()
+        _txRecords.value = emptyList()
+    }
+
+    // ---- 我方发射记录（接收列表的 TX 行，docs/UI-MOBILE.md §37） ----
+
+    /**
+     * 记一行「我方发射」（TX 行），初始状态 [TxOutcome.PLAYING]。
+     *
+     * 在真正开始播的那一刻调用（[transmit] / [sendNow]），所以 TX 行**一开播就出现**。
+     */
+    private fun beginTxRecord(text: String, slotUtcMs: Long): Long {
+        val id = ++txRecordSeq
+        val rec = TxRecord(
+            id = id,
+            text = text,
+            slotUtcMs = slotUtcMs,
+            order = TxCompose.kindOf(text, _status.value.myCall)?.order ?: 0,
+        )
+        _txRecords.update { (listOf(rec) + it).take(ACTIVITY_LIMIT) }
+        return id
+    }
+
+    /** 该次发射**已完整播出**。 */
+    private fun finishTxRecord(id: Long) {
+        _txRecords.update { list ->
+            list.map { if (it.id == id) it.copy(outcome = TxOutcome.DONE) else it }
+        }
+    }
+
+    /**
+     * 把**正在播**的那条标为 [TxOutcome.ABORTED]（行尾显示「未发完」）。
+     *
+     * 不按 id 定位：`abortTransmit()` 可能从主线程调用，而 [beginTxRecord] 在 IO 线程，
+     * 共享一个「当前 id」字段反而不安全；同一时刻只可能有一条在播，直接扫状态即可。
+     */
+    private fun abortPlayingTxRecord() {
+        _txRecords.update { list ->
+            list.map {
+                if (it.outcome == TxOutcome.PLAYING) it.copy(outcome = TxOutcome.ABORTED) else it
+            }
+        }
     }
 
     // ---- 前台服务（阶段 9：后台保活） ----
@@ -1068,8 +1121,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val st = _status.value
                 val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
+                // TX 行（§37）：「立即发」不对齐时隙，用当前 UTC 当作时间轴上的位置。
+                val recId = beginTxRecord(trimmed, AudioEngine.utcNowMs())
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
                 val written = AudioEngine.playTx(pcm, pttMs, leadMs)
+                if (abortAtPlan == txAbortGen && written > 0) {
+                    finishTxRecord(recId)
+                } else {
+                    abortPlayingTxRecord()
+                }
                 _status.update {
                     it.copy(
                         status = if (written > 0) "已发射「$trimmed」（$written 帧）"
@@ -1126,6 +1186,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         txJob?.cancel()
         txJob = null
         txAbortGen++
+        abortPlayingTxRecord()   // 被作废的那次发射 → TX 行标「未发完」（§37）
         AudioEngine.abortTx()
     }
 
@@ -1222,7 +1283,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 1) 解码结果（新→旧）
         val decoded = AudioEngine.pollDecoded()
         if (decoded.isNotEmpty()) {
-            _messages.update { current -> (decoded + current).take(200) }
+            _messages.update { current -> (decoded + current).take(ACTIVITY_LIMIT) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
             // U7d：有报文叫我呼号时短促提示
@@ -1762,13 +1823,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
 
         try {
+            // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/UI-MOBILE.md §37）。
+            val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
-            if (written <= 0) {
-                _status.update { it.copy(status = "发射失败：$OUT_STALLED_FAIL（写入 $written 帧）") }
+            // 仍是当前有效的那一次、且确实写进了声卡 → 算「已播完」；否则（被作废 / 写入失败）标「未发完」。
+            if (abortAtPlan == txAbortGen && written > 0) {
+                finishTxRecord(recId)
+            } else {
+                if (written <= 0) {
+                    _status.update { it.copy(status = "发射失败：$OUT_STALLED_FAIL（写入 $written 帧）") }
+                }
+                abortPlayingTxRecord()
             }
         } catch (e: Exception) {
             _status.update { it.copy(status = "发射异常: ${e.message}") }
+            abortPlayingTxRecord()
         } finally {
             // 只有「仍是当前有效的那一次」才收尾 / 记账：被「停止发射」或「发射途中换目标就地重发」
             // 作废的这次不再推进状态机 —— 否则会把没播完的旧报文当成已发出去，抢先推进 QSO。
