@@ -63,7 +63,7 @@ class TxComposeTest {
         assertNull(TxCompose.compose(TxMessageKind.RR73, null, "K1ABC", "FN42"))
     }
 
-    // ---- 六格报文槽（发射区，docs/UI-MOBILE.md §3.4「格内文字就是真发的报文」） ----
+    // ---- 六格报文槽（发射区，docs/Ft8Vox.md「格内文字就是真发的报文」） ----
 
     @Test
     fun slotsUseMyOwnReportForBothReportAndRoger() {

@@ -92,7 +92,7 @@ class WorkedIndex(
 }
 
 /**
- * 解码行的最高优先级高亮类别（docs/UI.md §3.1 色条）。
+ * 解码行的最高优先级高亮类别（docs/Ft8Vox.md 色条）。
  *
  * 优先级（高→低）：正在发射 / 自己发的报文 > 与我有关 > CQ > 已通联 > 重复 > 新网格 >
  * 新 DXCC/ITU > 新呼号 > 新解码。
@@ -163,7 +163,7 @@ data class DecodeStyle(
 /**
  * 解码行的高亮判定与去重键（纯 Kotlin，可 JVM 单测）。
  *
- * 「高亮与提醒」的开关已取消（docs/UI-MOBILE.md §29）：所有高亮类别**恒启用**，颜色含义改由
+ * 「高亮与提醒」的开关已取消（docs/Ft8Vox.md）：所有高亮类别**恒启用**，颜色含义改由
  * 设置页的「颜色说明」图例统一解释。
  */
 object DecodeHighlight {

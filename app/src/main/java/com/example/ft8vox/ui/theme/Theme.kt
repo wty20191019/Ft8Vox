@@ -10,7 +10,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 
 /**
- * docs/UI.md §1 的固定深色配色。
+ * docs/Ft8Vox.md 的固定深色配色。
  *
  * 有意**不使用** Material You 动态取色：设计指定了确定的色板与对比关系。
  */
@@ -36,7 +36,7 @@ private val VoxDarkColorScheme = darkColorScheme(
     onError = VoxBackground,
 )
 
-/** docs/UI.md §2.6「外观 · 亮」：深色板的对偶，用更深的强调蓝保证白底对比度。 */
+/** docs/Ft8Vox.md「外观 · 亮」：深色板的对偶，用更深的强调蓝保证白底对比度。 */
 private val VoxLightColorScheme = lightColorScheme(
     primary = VoxLightAccent,
     onPrimary = Color.White,

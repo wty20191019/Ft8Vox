@@ -10,7 +10,7 @@ import kotlin.math.tan
 
 /**
  * 昼夜分界（灰线）几何 —— 照 FT8CN `GridOsmMapView.computeDayNightTerminator`
- * （docs/UI-MOBILE.md §34）。
+ * （docs/Ft8Vox.md）。
  *
  * 纯 Kotlin（无 Android / Compose 依赖），可 JVM 单测。太阳位置用与 FT8CN 相同的低精度级数
  * （儒略日 → 平黄经 / 平近点角 → 黄道经度 → 赤纬），误差在角分量级 —— 画一条地图灰线足够。

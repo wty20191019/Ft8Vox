@@ -54,7 +54,7 @@ data class ParsedMessage(
 }
 
 /**
- * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/QSO.md` §7）。
+ * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/Ft8Vox.md`）。
  *
  * FT8CN 判「是否呼叫我」用 `callsign.contains(短呼号)`，判「目标带 `/`」用 `contains`：
  * `BG7ZJW/P` 与 `BG7ZJW` 互认，`F4FSY` 与 `F4FSY/P` 互认。这样复合呼号（便携/移动台）
@@ -80,7 +80,7 @@ object CallMatch {
      * 文本里是否出现我方呼号（宽松：含我方短呼号，`F4FSY/P` 与 `F4FSY` 视为同一个人）。
      *
      * 与 [isCallingMe] 同一口径，区别是看**整条报文文本**：地图连线用它判定「报文里有我 → 标红」
-     * （docs/UI-MOBILE.md §30）。
+     * （docs/Ft8Vox.md）。
      */
     fun mentions(text: String?, myCall: String): Boolean {
         val me = shortCall(myCall)

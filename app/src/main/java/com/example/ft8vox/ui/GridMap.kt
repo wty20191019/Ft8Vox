@@ -45,7 +45,7 @@ import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// ---- docs/UI.md §2.4 配色 ----
+// ---- docs/Ft8Vox.md 配色 ----
 private val Ocean = Color(0xFF0B0B12)
 private val World = Color(0xFF171C2B)
 private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
@@ -53,7 +53,7 @@ private val TierWorked = Color(0xFFF9E2AF) // 黄：日志已通联
 private val TierConfirmed = Color(0xFFE64553) // 红：日志已确认
 private val MyColor = Color(0xFF00E5FF)
 
-// ---- CQ 旗面：**通联状态**色（照 FT8CN `tracker_cq_marker_*`，docs/UI-MOBILE.md §34） ----
+// ---- CQ 旗面：**通联状态**色（照 FT8CN `tracker_cq_marker_*`，docs/Ft8Vox.md） ----
 // FT8CN 的第三档是「黑」（本波段已通联），在深色底图上不可见 → 本机改**灰**。
 private val CqNewColor = Color(0xFFFF5252) // 红：还没通过
 private val CqOtherBandColor = Color(0xFF64B5F6) // 蓝：只在别的波段通过
@@ -90,7 +90,7 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
 }
 
 /**
- * CQ 旗面颜色 = **通联状态**（照 FT8CN `tracker_cq_marker_*`，docs/UI-MOBILE.md §34）。
+ * CQ 旗面颜色 = **通联状态**（照 FT8CN `tracker_cq_marker_*`，docs/Ft8Vox.md）。
  *
  * 与 [tierColor] 的类别色**不共用**：网格方块的蓝/黄/红描述「这一格是解码/通联/确认」，
  * 旗色描述「这个喊 CQ 的呼号做过没有」—— 红旗=还没通过（优先应答）、蓝旗=别的波段做过、
@@ -103,7 +103,7 @@ private fun cqFlagColor(worked: CqWorked): Color = when (worked) {
 }
 
 /**
- * 离线深色地图（docs/UI.md §2.4）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
+ * 离线深色地图（docs/Ft8Vox.md）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
  * 按可见区域流式解码，乘 0.7 暗化），其上叠加网格标记、呼号、CQ 旗帜与信号连线，**无网格线图层**。
  *
  * 底图资产缺失/解码失败时退回原来的纯色世界矩形，保证地图页始终可用。
@@ -111,14 +111,14 @@ private fun cqFlagColor(worked: CqWorked): Color = when (worked) {
  * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动；**以 lambda 传入**，
  * 使其只在 Canvas 的绘制作用域被读取 —— 相位变化因此只触发重绘、不触发整页重组。
  *
- * 去密设计（docs/UI-MOBILE.md §31，手机屏小、标注一多就糊）：
+ * 去密设计（docs/Ft8Vox.md，手机屏小、标注一多就糊）：
  * 1. **一个台站只画一处标记**：喊过 CQ 的台站画旗子，其他台站画圆点；两者都与呼号文字一一对应，
  *    不会出现「同一个点又画旗又画点、还出两行文字」；
  * 2. **文字统一最后落位 + 防重叠**（[selectLabels]）：优先级 我的位置 > 选中台 > CQ 台 > 其余呼号，
  *    挤掉只挤文字，点/旗照旧（点一下仍能看详情）；
  * 3. **网格方块分级**：世界视野只画已通联/已确认，放大后才补上本会话解码的蓝格。
  *
- * 另有两项照 FT8CN（docs/UI-MOBILE.md §34）：
+ * 另有两项照 FT8CN（docs/Ft8Vox.md）：
  * - **昼夜灰线**（[grayLine]，`GrayLine.terminator` 算出的 `(lon, lat)` 折线）画在底图之上、所有标记之下；
  * - **CQ 旗面颜色 = 通联状态**（红=未通联 / 蓝=他波段 / 灰=本波段），与网格方块的类别色无关。
  */

@@ -85,7 +85,7 @@ data class ReceiverStatus(
     val slotParity: Int = 0,
     val slotsDecoded: Long = 0,
     val droppedSamples: Long = 0,
-    /** 本会话累计解码条数（docs/UI.md 底部状态条「总数」）。 */
+    /** 本会话累计解码条数（docs/Ft8Vox.md 底部状态条「总数」）。 */
     val decodedTotal: Long = 0,
     /** 最近一次解码耗时（ms，0=还没解码过）；顶栏「解码 nms」，用于调解码深度参数。 */
     val lastDecodeMs: Long = 0,
@@ -139,7 +139,7 @@ data class ReceiverStatus(
      * 一次性发射（自定义报文框 / 长按解码行「逐条发送」）的**拒绝原因**（红字，几秒后自动消失）。
      *
      * 以前这些拒绝只写进 [status] 字符串，而竖屏外壳里没有显示它的位置 —— 用户点「发送」
-     * 看上去什么都没发生（真机反馈）。现在统一显示在发射区底部，见 `docs/UI-MOBILE.md` §27。
+     * 看上去什么都没发生（真机反馈）。现在统一显示在发射区底部，见 `docs/Ft8Vox.md`。
      */
     val txNotice: String? = null,
     // ---- PTT / 输入电平（U7b） ----
@@ -186,7 +186,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val messages: StateFlow<List<DecodeResult>> = _messages.asStateFlow()
 
     /**
-     * 我方发射记录（接收列表里的「TX 行」，docs/UI-MOBILE.md §37）。
+     * 我方发射记录（接收列表里的「TX 行」，docs/Ft8Vox.md）。
      *
      * 与 [_messages] 共用同一个条数上限 [ACTIVITY_LIMIT]（在界面层合并时统一截断）。
      */
@@ -622,7 +622,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 保存 CQ 前缀格子**与选中项**（发射区「CQ 前缀」弹窗一次提交，docs/UI-MOBILE.md §28）。
+     * 保存 CQ 前缀格子**与选中项**（发射区「CQ 前缀」弹窗一次提交，docs/Ft8Vox.md）。
      *
      * 一次写完：分两次 `persist` 会各自读一次设置快照，选中项可能落到旧格子表上。
      */
@@ -649,7 +649,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 它自己也**不发任何报文** —— 发什么由「发送」按钮 / 解码卡片手势（手动）或自动程序（自动）决定。
      * **自动程序没有独立开关**：打开总开关即启动自动发射（无任何确认框），
-     * 关闭总开关即让自动程序停发（见 docs/QSO.md §4.2）。
+     * 关闭总开关即让自动程序停发（见 docs/Ft8Vox.md）。
      *
      * - 开启：允许发射、清空自动程序队列并复位发射监管计时；总开关此前未锁定时按手机 UTC
      *   时间锁定「下一个来得及准备的时隙」。
@@ -760,7 +760,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _txRecords.value = emptyList()
     }
 
-    // ---- 我方发射记录（接收列表的 TX 行，docs/UI-MOBILE.md §37） ----
+    // ---- 我方发射记录（接收列表的 TX 行，docs/Ft8Vox.md） ----
 
     /**
      * 记一行「我方发射」（TX 行），初始状态 [TxOutcome.PLAYING]。
@@ -1657,7 +1657,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 显示 / 自动程序共用的呼号名单（docs/UI-MOBILE.md §20）。
+     * 显示 / 自动程序共用的呼号名单（docs/Ft8Vox.md）。
      *
      * 操作页的筛选与搜索已整体删除，因此这里**不再带 tags / query**（恒为 `ALL` + 空搜索），
      * 只保留忽略名单（隐藏）与跟踪名单（自动程序例外）。`AppSettings.filterTags` / `callFilter`
@@ -1867,7 +1867,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
 
         try {
-            // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/UI-MOBILE.md §37）。
+            // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/Ft8Vox.md）。
             val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)

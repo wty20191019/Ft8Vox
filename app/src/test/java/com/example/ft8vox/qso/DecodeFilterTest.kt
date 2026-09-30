@@ -19,7 +19,7 @@ class DecodeFilterTest {
         slotUtcMs = 0L,
     )
 
-    // ---- DecodeFilterState.toggle（docs/UI.md §3.3） ----
+    // ---- DecodeFilterState.toggle（docs/Ft8Vox.md） ----
 
     @Test
     fun allIsExclusive() {

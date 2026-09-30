@@ -62,7 +62,7 @@ data class AudioState(
  * 负责：采集（优先 48 kHz，native 重采样到 12 kHz）、按时隙累积与解码、
  * 以及按时隙播放发射 PCM。解码结果通过 [pollDecoded] 拉取（不引入 native 回调）。
  *
- * 接口契约见 docs/UI.md §5。
+ * 接口契约见 docs/Ft8Vox.md。
  */
 object AudioEngine {
 

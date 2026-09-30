@@ -1,7 +1,7 @@
 package com.example.ft8vox.qso
 
 /**
- * 呼号前缀 → 归属地坐标（docs/UI.md §2.4）。
+ * 呼号前缀 → 归属地坐标（docs/Ft8Vox.md）。
  *
  * 仅用于「报文里没有网格信息」时在地图上立标。实体判定与坐标统一由 [Dxcc] 提供，
  * 本对象保留 [Place] / [locate] 供地图与既有调用方使用（U7 起改为精确实体表）。

@@ -43,7 +43,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 底部发射区（docs/UI-MOBILE.md §3.4）：竖屏**常驻**，不再折叠。
+ * 底部发射区（docs/Ft8Vox.md）：竖屏**常驻**，不再折叠。
  *
  * - 第 1 行：`自定义报文 · CQ 前缀 · 发送`（§28 去掉了「生成信息」键）
  * - 第 2 行：`停止发射 · 自动程序 · 正在发送`
@@ -80,7 +80,7 @@ fun TxPanel(
     val reportSent = status.qso.reportSent ?: TxCompose.reportFor(messages, target)
     val cqPrefix = settings.cqPrefix
 
-    // 六个槽的报文：每帧现算，永远与六步序列**逐字一致**（docs/UI-MOBILE.md §3.4：
+    // 六个槽的报文：每帧现算，永远与六步序列**逐字一致**（docs/Ft8Vox.md：
     // 「格内文字就是真发的报文」）；组装规则统一在 `TxCompose.slots`，
     // 由单测锁死「槽内文字 == 引擎渲染的 txText」（红/绿点靠文本相等匹配）。
     val slots = remember(target, myCall, myGrid, reportSent, cqPrefix) {

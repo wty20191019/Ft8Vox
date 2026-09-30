@@ -40,7 +40,7 @@ import com.example.ft8vox.ui.theme.JtdxPanelHi
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * JTDX 风格方块控件集（docs/UI-JTDX.md §1）。
+ * JTDX 风格方块控件集（docs/Ft8Vox.md）。
  *
  * 借的是 JTDX 的**形态**：方角、1dp 描边、灰底、激活时整块绿色高亮；
  * **配色仍用本项目的深色板**，不照搬 JTDX 的浅灰 Windows 风。

@@ -49,7 +49,7 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * 频谱独立页（docs/UI-MOBILE.md §4）：整页瀑布 + 频率刻度 + 发射频率读数 + **解码呼号映射**。
+ * 频谱独立页（docs/Ft8Vox.md）：整页瀑布 + 频率刻度 + 发射频率读数 + **解码呼号映射**。
  *
  * 交互：**按住水平拖动红线 = 设发射频率（红线 = 报文下边频）**；
  * 长按 = 先把红线移到按下处，再打开最近一条解码的详情。
@@ -149,7 +149,7 @@ fun SpectrumScreen(
             // 解码报文叠加（**竖排**：横排会互相叠字，顺转 90° 后只占一条窄缝）：
             // x 按频率定位、y 按「信号实际结束时刻」锚定 —— 文字底端压在信号结束处、
             // 自上而下读，随瀑布向上滚，滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失。
-            // 颜色＝JTDX 类别色；不垫底块（docs/UI-MOBILE.md §15）。
+            // 颜色＝JTDX 类别色；不垫底块（docs/Ft8Vox.md）。
             val frame = waterfall
             val span = frame?.let { it.bins * it.binHz }
             val windowMs = (WF_ROWS * WF_ROW_MS).toFloat()

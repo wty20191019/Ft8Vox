@@ -6,7 +6,7 @@ import com.example.ft8vox.engine.DecodeResult
 enum class QsoRole { NONE, CALLER, RESPONDER }
 
 /**
- * QSO 状态机的对外状态（[QsoProgress.order] 的可读化；`docs/QSO.md` §2.2）。
+ * QSO 状态机的对外状态（[QsoProgress.order] 的可读化；`docs/Ft8Vox.md`）。
  */
 enum class QsoState {
     IDLE,
@@ -22,7 +22,7 @@ enum class QsoState {
 
     /**
      * 已发出序号 4（RR73）并**已落库**；照 FT8CN 本段**仍未结束**：还要等对方的 73，
-     * 等不到就按「无回应上限 / 对方转呼别人 / 20 次硬上限」收尾（`docs/QSO.md` §3.4）。
+     * 等不到就按「无回应上限 / 对方转呼别人 / 20 次硬上限」收尾（`docs/Ft8Vox.md`）。
      */
     WAIT_FINAL,
 
@@ -79,7 +79,7 @@ data class QsoProgress(
      * 最近一次 [QsoEngine.onDecoded] 是否发生了推进（收到**当前对手**的有效回复）。
      *
      * 第 2 层据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
-     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/QSO.md` §3.1）。
+     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/Ft8Vox.md`）。
      */
     val advanced: Boolean = false,
     /**

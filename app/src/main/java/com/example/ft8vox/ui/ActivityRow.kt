@@ -6,7 +6,7 @@ package com.example.ft8vox.ui
  * 两类行按**同一时间轴**（[slotUtcMs] 新→旧）混排，见 [mergeActivity]；条数上限
  * [ACTIVITY_LIMIT] 由两类共用（谁更旧谁先被淘汰）。
  *
- * 实机口径见 docs/UI-MOBILE.md §37。
+ * 实机口径见 docs/Ft8Vox.md。
  */
 sealed interface ActivityRow {
 

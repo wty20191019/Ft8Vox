@@ -26,7 +26,7 @@ import com.example.ft8vox.qso.NO_REPLY_LIMIT_RANGE
 import com.example.ft8vox.qso.SUPERVISION_MINUTES
 
 /**
- * 「自动程序」设置弹窗（顶栏菜单入口），照 FT8CN 四项重做（见 `docs/QSO.md` §5.1）。
+ * 「自动程序」设置弹窗（顶栏菜单入口），照 FT8CN 四项重做（见 `docs/Ft8Vox.md`）。
  *
  * **没有档位、也没有启用确认**：自动程序的唯一闸门是「发送总开关」，打开即自动发射。
  * 本弹窗只改策略（发射监管 / 无回应次数 / 两个开关）。

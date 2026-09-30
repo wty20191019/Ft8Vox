@@ -4,7 +4,7 @@ import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Maidenhead
 
 /**
- * 地图标记的三种状态（docs/UI.md §2.4）。
+ * 地图标记的三种状态（docs/Ft8Vox.md）。
  *
  * 优先级：**确认 > 通联 > 解码**。蓝色由本会话解码派生（重启即清空）；
  * 黄色/红色来自日志（已通联 / 已确认）。
@@ -39,7 +39,7 @@ data class CallMarker(
 )
 
 /**
- * CQ 旗的「通联状态」三档（照 FT8CN `tracker_cq_marker_*`，docs/UI-MOBILE.md §34）。
+ * CQ 旗的「通联状态」三档（照 FT8CN `tracker_cq_marker_*`，docs/Ft8Vox.md）。
  *
  * 旗面颜色回答的是「**这个台我还要不要通联**」，与网格方块的类别色（解码/通联/确认）
  * **语义不同**：网格色描述「这一格是什么状态」，旗色描述「这个 CQ 台的呼号做过没有」。
@@ -56,7 +56,7 @@ enum class CqWorked(val label: String) {
 }
 
 /**
- * CQ 旗（docs/UI-MOBILE.md §31/§34）：形状=旗表示「在 CQ」，旗面颜色 = [worked]（通联状态）。
+ * CQ 旗（docs/Ft8Vox.md）：形状=旗表示「在 CQ」，旗面颜色 = [worked]（通联状态）。
  */
 data class CqFlag(
     val call: String,
@@ -68,7 +68,7 @@ data class CqFlag(
     val worked: CqWorked = CqWorked.NONE,
 )
 
-/** 信号连线（docs/UI.md §2.4）：方向由 [fromCall] 指向 [toCall]。 */
+/** 信号连线（docs/Ft8Vox.md）：方向由 [fromCall] 指向 [toCall]。 */
 data class SignalLink(
     val fromCall: String,
     val toCall: String?,
@@ -80,7 +80,7 @@ data class SignalLink(
     val label: String?,
     val utcMs: Long,
     /**
-     * 是否**与我有关**（收发任一方是我方呼号，docs/UI-MOBILE.md §29）。
+     * 是否**与我有关**（收发任一方是我方呼号，docs/Ft8Vox.md）。
      *
      * 地图上把这类连线的**线身与文字都画成红色**，一眼看出哪条是本台正在进行的 QSO。
      */
@@ -189,7 +189,7 @@ object MapModel {
      * **最近一个时隙**的时间戳（没有任何解码时返回 null）。
      *
      * 地图上的「现在」层（CQ 旗、信号连线）都只取这一个时隙的解码；「历史」层（网格方块、
-     * 呼号点）才是整会话累计（docs/UI-MOBILE.md §33）。
+     * 呼号点）才是整会话累计（docs/Ft8Vox.md）。
      */
     fun latestSlotMs(messages: List<DecodeResult>): Long? =
         messages.filter { it.slotUtcMs > 0L }.maxOfOrNull { it.slotUtcMs }
@@ -251,7 +251,7 @@ object MapModel {
      * **CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用旗子表示，见 [cqFlags]），
      * 所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
      *
-     * 端点位置（docs/UI-MOBILE.md §30）：**本条报文的网格 > 本会话解码收到的网格 > 日志网格 >
+     * 端点位置（docs/Ft8Vox.md）：**本条报文的网格 > 本会话解码收到的网格 > 日志网格 >
      * 呼号前缀归属地**（前三级都是真收到过的网格，最后一级只是近似，只做兜底）；
      * 任一端是「我」时一律用 [myGrid]（避免把「我」定位到呼号前缀归属地）。`myGrid` 为空又不认识
      * 那一端时，这条线画不出来（宁可不画，也不把我摆到几百公里外）。
@@ -307,7 +307,7 @@ object MapModel {
         return out
     }
 
-    /** 连线内容（docs/UI.md §2.4）：报告数字 / `RR73` / `73`；其余返回 null（移动方块）。 */
+    /** 连线内容（docs/Ft8Vox.md）：报告数字 / `RR73` / `73`；其余返回 null（移动方块）。 */
     fun labelOf(p: ParsedMessage): String? = when {
         p.isRr73 -> "RR73"
         p.is73 -> "73"
@@ -316,7 +316,7 @@ object MapModel {
     }
 
     /**
-     * 本会话解码里**收到过**的网格：呼号 → 最近一次报文里的网格（docs/UI-MOBILE.md §30）。
+     * 本会话解码里**收到过**的网格：呼号 → 最近一次报文里的网格（docs/Ft8Vox.md）。
      *
      * 报文里的网格永远属于**发方**（`CQ JA1ABC PM95` 是 JA1ABC 在 PM95），所以按 `from` 归档；
      * 同一呼号后收到的覆盖先收到的（对方换格子/带 `/P` 出门时以最新的为准）。

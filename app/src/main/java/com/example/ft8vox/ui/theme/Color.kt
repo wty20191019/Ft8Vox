@@ -2,7 +2,7 @@ package com.example.ft8vox.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ---- docs/UI.md §1 深色板 ----
+// ---- docs/Ft8Vox.md 深色板 ----
 /** 背景。 */
 val VoxBackground = Color(0xFF12121A)
 /** 卡片 / 表面。 */
@@ -26,7 +26,7 @@ val VoxTxRed = Color(0xFFF44336)
 /** 错误粉。 */
 val VoxError = Color(0xFFF38BA8)
 
-// ---- docs/UI.md §2.6 亮色板（深色板的对偶，供「外观 · 亮」使用） ----
+// ---- docs/Ft8Vox.md 亮色板（深色板的对偶，供「外观 · 亮」使用） ----
 val VoxLightBackground = Color(0xFFF4F4FA)
 val VoxLightCard = Color(0xFFFFFFFF)
 val VoxLightText = Color(0xFF1E1E2E)
@@ -35,7 +35,7 @@ val VoxLightOnSurfaceVariant = Color(0xFF5A5A6E)
 val VoxLightOutline = Color(0xFFB8B8C8)
 val VoxLightAccent = Color(0xFF3A6FD8)
 
-// ---- JTDX 风格外壳（docs/UI-JTDX.md §1） ----
+// ---- JTDX 风格外壳（docs/Ft8Vox.md） ----
 // 只借 JTDX 的「方块控件 + 绿色高亮 + 面板分割」形态，主色仍沿用上面的深色板。
 /** 面板底色（信息头 / 表格 / 发射区）。 */
 val JtdxPanel = Color(0xFF171722)
@@ -52,14 +52,14 @@ val JtdxValue = Color(0xFF7FE3FF)
 /** 表格行底色（比卡片略深，贴近 JTDX 列表）。 */
 val JtdxRow = Color(0xFF1A1A26)
 
-// ---- 地图页信号连线（docs/UI-MOBILE.md §29） ----
+// ---- 地图页信号连线（docs/Ft8Vox.md） ----
 /** 台站之间的信号连线（蓝）。 */
 val MapLinkColor = Color(0x9989B4FA)
 
 /** 「与我有关」的连线与连线文字（红）。 */
 val MapLinkMine = Color(0xFFFF5252)
 
-// ---- JTDX/WSJT-X 默认解码高亮底色（docs/UI-MOBILE.md §6） ----
+// ---- JTDX/WSJT-X 默认解码高亮底色（docs/Ft8Vox.md） ----
 // 取 WSJT-X `DecodeHighlightingModel::defaults_` 的原值；深色板上按 alpha 铺整行底。
 /** 自己发的（Transmitted）。 */
 val HlTx = Color(0xFFFFF200)
@@ -74,7 +74,7 @@ val HlGrid = Color(0xFFFF8000)
 /** 新呼号。 */
 val HlCall = Color(0xFF00FFFF)
 
-// ---- 解码卡片左侧色条（docs/UI.md §3.1） ----
+// ---- 解码卡片左侧色条（docs/Ft8Vox.md） ----
 val BarNewDecode = Color(0xFF4CAF50) // 绿：新解码
 val BarToMe = Color(0xFF89B4FA) // 蓝：与我有关
 val BarCq = Color(0xFFFF9800) // 橙：CQ

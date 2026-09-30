@@ -19,13 +19,13 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** 外观主题（docs/UI.md §2.6）。 */
+/** 外观主题（docs/Ft8Vox.md）。 */
 enum class ThemeMode(val label: String) {
     DARK("暗"),
     LIGHT("亮"),
 }
 
-/** 字体档位，作为 sp 的缩放系数（docs/UI.md §2.6）。 */
+/** 字体档位，作为 sp 的缩放系数（docs/Ft8Vox.md）。 */
 enum class FontSize(val label: String, val scale: Float) {
     SMALL("小", 0.9f),
     MEDIUM("中", 1f),
@@ -99,7 +99,7 @@ data class DecodeSettings(
     val ldpcIterations: Int = 20,
     val maxCandidates: Int = 120,
     val maxDecoded: Int = 100,
-    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/UI.md §5.4.2。 */
+    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/Ft8Vox.md。 */
     val passes: Int = 2,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
@@ -189,7 +189,7 @@ data class AppSettings(
     /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
 
-    // ---- 解码列表过滤（显示层，docs/UI.md §3.3） ----
+    // ---- 解码列表过滤（显示层，docs/Ft8Vox.md） ----
     /** 已选中的筛选项；空集表示「一个都没开」。 */
     val filterTags: Set<DecodeFilterTag> = setOf(DecodeFilterTag.ALL),
     /** 呼号/前缀过滤串（逗号分隔）。 */
@@ -217,7 +217,7 @@ data class AppSettings(
      */
     val autoFollowOrder: List<String> = emptyList(),
 
-    // ---- 发射抽屉（docs/UI.md §2.3） ----
+    // ---- 发射抽屉（docs/Ft8Vox.md） ----
     /**
      * CQ 前缀（4×2 = 8 个可编辑格子）。
      *
@@ -228,7 +228,7 @@ data class AppSettings(
     /** 当前选中的 CQ 前缀在 [cqPrefixes] 中的下标（越界按 0 处理）。 */
     val cqPrefixIndex: Int = 0,
 
-    // ---- 地图页（docs/UI.md §2.4） ----
+    // ---- 地图页（docs/Ft8Vox.md） ----
     /** CQ 旗帜是否显示呼号。 */
     val mapCqFlagShowCall: Boolean = true,
     /** CQ 旗帜是否显示信号强度。 */
@@ -236,7 +236,7 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / PTT（docs/UI.md §2.6） ----
+    // ---- 电台 / PTT（docs/Ft8Vox.md） ----
     /** 发射前导音开关。 */
     val txLeadTone: Boolean = false,
     /** 前导音时长（ms，0–2000）。 */
@@ -253,13 +253,13 @@ data class AppSettings(
     /** 看门狗超时（ms，1000–60000）。 */
     val watchdogMs: Int = 10000,
 
-    // ---- 音频（docs/UI.md §2.6） ----
+    // ---- 音频（docs/Ft8Vox.md） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
     val inputDevice: String = "",
     /** 输入增益（dB，−12…+30；生效依赖 U7）。 */
     val inputGainDb: Int = 0,
 
-    // ---- FT8（docs/UI.md §2.6） ----
+    // ---- FT8（docs/Ft8Vox.md） ----
     /**
      * 时隙偏移（ms，−2500…+2500）：**整个时隙一起偏移**（解码窗口起点 + 发射起点）。
      *
@@ -268,11 +268,11 @@ data class AppSettings(
      */
     val slotOffsetMs: Int = 0,
 
-    // ---- 高亮与提醒（docs/UI-MOBILE.md §29/§31：颜色与末端标记恒启用，不再提供开关） ----
+    // ---- 高亮与提醒（docs/Ft8Vox.md：颜色与末端标记恒启用，不再提供开关） ----
     /** 含我呼号时哔声提醒（依赖音频，U7）。 */
     val beepOnMyCall: Boolean = false,
 
-    // ---- 外观（docs/UI.md §2.6） ----
+    // ---- 外观（docs/Ft8Vox.md） ----
     val themeMode: ThemeMode = ThemeMode.DARK,
     val fontSize: FontSize = FontSize.MEDIUM,
 

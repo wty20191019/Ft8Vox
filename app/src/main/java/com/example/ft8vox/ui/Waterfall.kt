@@ -51,7 +51,7 @@ class WaterfallFrame(
 }
 
 /**
- * 瀑布配色：把归一化强度 t∈[0,1] 映射为 深蓝→青→绿→黄→橙→红（docs/UI.md §2.3）。
+ * 瀑布配色：把归一化强度 t∈[0,1] 映射为 深蓝→青→绿→黄→橙→红（docs/Ft8Vox.md）。
  *
  * 注意：实际使用时不做固定阈值，而是按“滚动峰值”做自适应拉伸
  * （见 [SessionViewModel.pollWaterfall]），因此不同设备增益下都能看清。
@@ -112,7 +112,7 @@ object WaterfallColors {
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
  * [txing] 为真时画红色边框表示正在发射。
  *
- * **基线常驻**（docs/UI-MOBILE.md §23）：频率网格 + 刻度 + 发射红线**不依赖瀑布帧**。
+ * **基线常驻**（docs/Ft8Vox.md）：频率网格 + 刻度 + 发射红线**不依赖瀑布帧**。
  * 刚启动 / 还没收到第一帧时（[frame] == null）用 [fallbackFMinHz]–[fallbackMaxHz] 这套频率轴
  * 照画，否则启动瞬间整片区域是黑的，连红线都看不到。
  */

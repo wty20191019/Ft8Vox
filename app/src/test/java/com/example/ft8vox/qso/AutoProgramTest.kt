@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 「自动程序」第 2 层调度与选台的 JVM 单测（照 FT8CN 模型，见 docs/QSO.md §4）。 */
+/** 「自动程序」第 2 层调度与选台的 JVM 单测（照 FT8CN 模型，见 docs/Ft8Vox.md）。 */
 class AutoProgramTest {
 
     private fun decoded(text: String, snr: Int = -10, df: Int = 1000, slotUtcMs: Long = 0L) =

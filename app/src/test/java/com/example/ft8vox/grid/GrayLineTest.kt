@@ -6,7 +6,7 @@ import org.junit.Test
 import kotlin.math.abs
 
 /**
- * 昼夜灰线几何的 JVM 单测（docs/UI-MOBILE.md §34）。
+ * 昼夜灰线几何的 JVM 单测（docs/Ft8Vox.md）。
  *
  * 时间基准用 `QsoTime` 的口径：**UTC 毫秒**（`System.currentTimeMillis()`）。测试里用
  * `java.time.Instant.parse(...).toEpochMilli()` 换算，避免手写魔法数字。

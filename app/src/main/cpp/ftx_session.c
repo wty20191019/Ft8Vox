@@ -37,7 +37,7 @@
 // SIC（多趟减谱重解）默认趟数与上限：1 = 关闭（单趟）。实测单趟无论怎么放宽候选
 // 数 / LDPC 迭代 / 得分门槛都涨不了，而「同频被强台压住」的弱信号要靠抹掉强信号
 // 才露得出来：官方 60 个测试音频 956 → 989（+33）条，零回归；同频且强度差大的
-// 相干泄漏仍解不出，那部分要时域相减（见 docs/UI.md §5.4.2）。
+// 相干泄漏仍解不出，那部分要时域相减（见 docs/Ft8Vox.md）。
 #define K_DEFAULT_DECODE_PASSES 2
 #define K_MAX_DECODE_PASSES     4
 
@@ -444,7 +444,7 @@ void ftx_session_waterfall_info(const ftx_session_t* session, int* bins, float* 
 //      (rbw_db + 26.5)（freq_osr=2 时 = +0.77 dB，「快」/「深」预设各自不同），
 //      避免把窗函数差异算成信号。后续若按实测得到按 SNR 分段的经验曲线，也在此叠加。
 //
-// 已知代价（照搬原式的固有结果，harness 实测，见 docs/UI.md §5.4）：
+// 已知代价（照搬原式的固有结果，harness 实测，见 docs/Ft8Vox.md）：
 //   JTDX 的分析窗是 **1 个符号 + 矩形加权**，8 个音调在窗内严格正交，其余音调 bin
 //   只含噪声。本项目瀑布窗是 **周期 Hann、窗长 = 1 符号周期 × freq_osr**（默认
 //   freq_osr=2，约 2 个符号），音调不再正交，其余音调 bin 会被**信号自身的泄漏**污染。

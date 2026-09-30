@@ -62,7 +62,7 @@ import com.example.ft8vox.ui.theme.VoxRxGreen
 import java.util.Locale
 
 /**
- * 日志页（docs/UI.md §2.5）。
+ * 日志页（docs/Ft8Vox.md）。
  *
  * 顶部搜索 + 波段 / 模式 / 日期筛选；表格化卡片列表（呼号 / 网格 / 时间 / RST / 模式）；
  * 长按卡片编辑或删除（**删除需二次确认**）；底部常驻统计（QSO / DXCC / 网格 / 波段柱图）；
@@ -101,7 +101,7 @@ fun LogScreen(
     val adif = rememberAdifActions(log, myCall, myGrid) { statusText = it }
 
     Column(modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
-        // 统计卡在顶部（设计稿「统计卡 + 卡片列表」；docs/UI-MOBILE.md §16）
+        // 统计卡在顶部（设计稿「统计卡 + 卡片列表」；docs/Ft8Vox.md）
         StatsPanel(stats)
 
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -566,7 +566,7 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
     }
 }
 
-/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 一行波段分布（docs/UI-MOBILE.md §17：去掉柱图省高度）。 */
+/** 顶部统计卡：QSO / DXCC / 网格 / 确认 + 一行波段分布（docs/Ft8Vox.md：去掉柱图省高度）。 */
 @Composable
 private fun StatsPanel(stats: LogStats) {
     Surface(

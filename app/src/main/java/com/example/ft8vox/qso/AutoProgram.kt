@@ -16,7 +16,7 @@ val SUPERVISION_MINUTES: List<Int> = listOf(0) + (5..95 step 10).toList()
 val NO_REPLY_LIMIT_RANGE: IntRange = 0..30
 
 /**
- * 自动程序策略（持久化于设置；**照 FT8CN 四项重做**，见 `docs/QSO.md` §5.1）。
+ * 自动程序策略（持久化于设置；**照 FT8CN 四项重做**，见 `docs/Ft8Vox.md`）。
  *
  * 已**没有档位**：自动程序的开关就是「发送总开关」`txEnabled`（见方案 §2.4）。
  */

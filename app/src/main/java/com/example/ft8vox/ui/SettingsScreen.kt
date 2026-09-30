@@ -76,10 +76,10 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 
 /**
- * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
+ * 设置页（安卓 Preference 风格，docs/Ft8Vox.md）。
  *
  * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 日志 / 地图 / 关于
- * （「外观」组已随新竖屏外壳去掉，见 docs/UI-MOBILE.md §1）。
+ * （「外观」组已随新竖屏外壳去掉，见 docs/Ft8Vox.md）。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -118,7 +118,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/UI-MOBILE.md §15）
+        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/Ft8Vox.md）
 
         // ---------- 台站（设计外补充：无 CAT，台站信息必填） ----------
         SettingsGroup("台站") {
@@ -245,7 +245,7 @@ fun SettingsScreen(
 
         // ---------- 6.2 音频 ----------
         SettingsGroup("音频") {
-            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/UI-MOBILE.md §16）
+            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/Ft8Vox.md）
             AudioQuickPanel(sessionStatus, app)
             PrefDivider()
             PrefDropdown(
@@ -443,7 +443,7 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.4 高亮与提醒（docs/UI-MOBILE.md §29：颜色恒启用，开关全部取消） ----------
+        // ---------- 6.4 高亮与提醒（docs/Ft8Vox.md：颜色恒启用，开关全部取消） ----------
         SettingsGroup("高亮与提醒") {
             PrefNote(
                 "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
@@ -461,7 +461,7 @@ fun SettingsScreen(
             PrefDivider()
         }
 
-        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/UI-MOBILE.md §1：无亮/暗主题、无字体档位） ----------
+        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/Ft8Vox.md：无亮/暗主题、无字体档位） ----------
 
         // ---------- 6.6 日志 ----------
         SettingsGroup("日志") {
@@ -495,7 +495,7 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/UI-MOBILE.md §16） ----------
+        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/Ft8Vox.md） ----------
         SettingsGroup("地图") {
             PrefSwitch(
                 title = "CQ 旗帜显示呼号",
@@ -682,7 +682,7 @@ private fun PrefNote(text: String) {
 /**
  * 开关行。
  *
- * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/UI.md §3.1）。
+ * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/Ft8Vox.md）。
  */
 @Composable
 private fun PrefSwitch(
@@ -705,7 +705,7 @@ private fun PrefSwitch(
     })
 }
 
-/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/UI-MOBILE.md §12：从旧操作页控制行搬来）。 */
+/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/Ft8Vox.md：从旧操作页控制行搬来）。 */
 @Composable
 private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
     var dxCall by remember { mutableStateOf("") }
@@ -760,7 +760,7 @@ private fun ColorDot(color: Color) {
 }
 
 /**
- * 「颜色说明」图例（docs/UI-MOBILE.md §29）：列出每个颜色的含义。
+ * 「颜色说明」图例（docs/Ft8Vox.md）：列出每个颜色的含义。
  *
  * 这些颜色**全部固定启用**（原来的逐个开关已取消），所以这里既是说明、也是唯一的口径来源。
  */

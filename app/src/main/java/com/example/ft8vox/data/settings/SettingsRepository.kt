@@ -61,7 +61,7 @@ private object Keys {
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val sameFreqTx = booleanPreferencesKey("same_freq_tx")
-    // 自动程序（照 FT8CN 四项，见 docs/QSO.md §5.1）
+    // 自动程序（照 FT8CN 四项，见 docs/Ft8Vox.md）
     val autoSupervisionMinutes = intPreferencesKey("auto_supervision_minutes")
     val autoNoReplyLimit = intPreferencesKey("auto_no_reply_limit")
     val autoFollowCq = booleanPreferencesKey("auto_follow_cq")
@@ -112,7 +112,7 @@ private object Keys {
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
-    // 解码高亮开关与「已通联呈现方式」不再持久化（docs/UI-MOBILE.md §29：颜色恒启用）
+    // 解码高亮开关与「已通联呈现方式」不再持久化（docs/Ft8Vox.md：颜色恒启用）
     val beepOnMyCall = booleanPreferencesKey("beep_on_my_call")
     val themeMode = stringPreferencesKey("theme_mode")
     val fontSize = stringPreferencesKey("font_size")

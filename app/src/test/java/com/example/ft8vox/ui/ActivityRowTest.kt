@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 接收列表两类行（接收解码 / 我方发射）混排的 JVM 单测（docs/UI-MOBILE.md §37）。
+ * 接收列表两类行（接收解码 / 我方发射）混排的 JVM 单测（docs/Ft8Vox.md）。
  *
  * 口径：**按同一时间轴（slotUtcMs 新→旧）混排**，两类**共用一个条数上限**（一起淘汰最旧的）。
  */

@@ -50,7 +50,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 操作页（docs/UI-MOBILE.md §3）：**控制行 + 解码表 + 常驻发射区**。
+ * 操作页（docs/Ft8Vox.md）：**控制行 + 解码表 + 常驻发射区**。
  *
  * 信息头/底部导航/状态条由 [MainShell] 统一提供，本页只负责「控制行 + 表格 + 发射区」。
  * 第五轮起无筛选 / 搜索（§20），解码表永远显示全部解码。
@@ -88,7 +88,7 @@ fun OperateScreen(
         cm.setPrimaryClip(ClipData.newPlainText("FT8 消息", text))
     }
 
-    // 高亮 + 忽略名单（docs/UI-MOBILE.md §20：操作页不再做筛选 / 搜索，解码表永远显示全部）
+    // 高亮 + 忽略名单（docs/Ft8Vox.md：操作页不再做筛选 / 搜索，解码表永远显示全部）
     val filter = DecodeFilterState(
         ignoredCalls = settings.ignoredCalls,
         followedCalls = settings.followCalls,
@@ -110,10 +110,10 @@ fun OperateScreen(
             DecodeRow(m, p, style)
         }
     }
-    // 与「我方发射行」按同一时间轴混排（docs/UI-MOBILE.md §37）；两类共用一个 200 条上限。
+    // 与「我方发射行」按同一时间轴混排（docs/Ft8Vox.md）；两类共用一个 200 条上限。
     val rows = remember(rxRows, txRecords) { mergeActivity(rxRows, txRecords) }
 
-    // ---- 自动翻到最新（docs/UI.md §3.3）----
+    // ---- 自动翻到最新（docs/Ft8Vox.md）----
     val listState = rememberLazyListState()
     var followNewest by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
@@ -163,7 +163,7 @@ fun OperateScreen(
             }
         }
 
-        // 表头已去掉（两行制里含义自明，省一行高度，docs/UI-MOBILE.md §14）
+        // 表头已去掉（两行制里含义自明，省一行高度，docs/Ft8Vox.md）
 
         // ---- 解码表格（竖屏整宽）----
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -228,7 +228,7 @@ fun OperateScreen(
 
         Spacer(Modifier.height(3.dp))
 
-        // ---- 底发射区（竖屏常驻，docs/UI-MOBILE.md §3.4）----
+        // ---- 底发射区（竖屏常驻，docs/Ft8Vox.md）----
         TxPanel(
             status = status,
             settings = settings,
