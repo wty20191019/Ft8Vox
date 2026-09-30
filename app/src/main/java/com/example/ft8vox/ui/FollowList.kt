@@ -61,7 +61,7 @@ fun FollowListPanel(
     onUnfollow: (String) -> Unit,
     /** 点「全部清除」时回调（弹确认框的逻辑由调用方负责）。 */
     onClearAll: () -> Unit,
-    /** 由「自动收录 CQ 台」自动加入的呼号（行内显示「自动」标记）。 */
+    /** **旧版遗留**：由已删除的「自动收录 CQ 台」写过的呼号（行内显示「自动」标记）。 */
     autoFollowed: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
@@ -129,7 +129,7 @@ private data class FollowRow(
     val df: Int? = null,
     val slotUtcMs: Long? = null,
     val distKm: Double? = null,
-    /** 由「自动收录 CQ 台」自动加入。 */
+    /** **旧版遗留**：由已删除的「自动收录 CQ 台」自动加入。 */
     val auto: Boolean = false,
 )
 

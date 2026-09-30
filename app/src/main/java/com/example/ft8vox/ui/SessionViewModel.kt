@@ -34,7 +34,6 @@ import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
 import com.example.ft8vox.qso.DEFAULT_CQ_PREFIXES
 import com.example.ft8vox.qso.DecodeFilterState
-import com.example.ft8vox.qso.FollowRoster
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.QsoEngine
 import com.example.ft8vox.qso.QsoLogEntry
@@ -201,7 +200,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * **当前波段**已通联呼号（键＝波段名大写），照 FT8CN `checkQSLCallsign`
      * （`DatabaseOpr.GetAllQSLCallsign` 的 `where band=?`）。
      *
-     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选 / 是否自动收录）；界面高亮与
+     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选）；界面高亮与
      * 「已通联」筛选仍用跨波段的 [_worked]。
      */
     private var workedCallsByBand: Map<String, Set<String>> = emptyMap()
@@ -391,8 +390,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (_status.value.running && s.protocol != _status.value.protocol) {
             restartForProtocol(s.protocol)
         }
-        qsoEngine.configure(s.myCall, s.myGrid)
-        scheduler.configure(s.auto, s.myCall, s.myGrid)
+        qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit)
+        scheduler.configure(s.auto, s.myCall)
         applyDecodeParams(s)
         applyVox(s)
         applyAudio(s)
@@ -560,7 +559,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         persist { it.copy(followCalls = it.followCalls + c) }
     }
 
-    /** 取消关注（⭐ 关注列表右滑 / 长按菜单；自动收录的也一并从淘汰顺序里摘掉）。 */
+    /** 取消关注（⭐ 关注列表右滑 / 长按菜单；旧版自动收录遗留的顺序也一并摘掉）。 */
     fun unfollowCall(call: String) {
         val c = call.trim().uppercase()
         persist { it.copy(followCalls = it.followCalls - c, autoFollowOrder = it.autoFollowOrder - c) }
@@ -578,35 +577,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 清空关注名单（关注列表里的「全部清除」，手动关注与自动收录一并清掉）。 */
+    /** 清空关注名单（关注列表里的「全部清除」）。 */
     fun clearFollowCalls() {
         persist { it.copy(followCalls = emptySet(), autoFollowOrder = emptyList()) }
-    }
-
-    /**
-     * 「自动收录 CQ 台」：把本批解到的、**当前波段还没通联过**的**新** CQ 呼号并入关注名单
-     * （超出 `FollowRoster.AUTO_MAX` 时淘汰最早收录的；手动关注的永不被淘汰）。
-     *
-     * 波段口径照 FT8CN `checkQSLCallsign`（`where band=?`）：跨波段通联过的台在本波段仍算没通联过。
-     * 与 FT8CN 的**有意偏离**：FT8CN 只推送到「呼叫」列表、不写关注名单，见 [FollowRoster] 文档。
-     */
-    private fun autoCollectCqToFollow(batch: List<DecodeResult>) {
-        if (batch.isEmpty()) return
-        val s = latestSettings
-        if (!s.auto.autoAddCqToFollow) return
-        val incoming = FollowRoster.pickCqCalls(
-            messages = batch,
-            myCall = _status.value.myCall,
-            ignoredCalls = s.ignoredCalls,
-            followedCalls = s.followCalls,
-            workedCalls = workedCallsOnBand(_status.value.band),
-        )
-        if (incoming.isEmpty()) return
-        persist { cur ->
-            val (calls, order) = FollowRoster.merge(cur.followCalls, cur.autoFollowOrder, incoming)
-            if (calls == cur.followCalls && order == cur.autoFollowOrder) cur
-            else cur.copy(followCalls = calls, autoFollowOrder = order)
-        }
     }
 
     /**
@@ -1252,8 +1225,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _messages.update { current -> (decoded + current).take(200) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
             pendingDecodes.addAll(decoded)
-            // 「自动收录 CQ 台」：把本批新解到的 CQ 呼号并入关注名单
-            autoCollectCqToFollow(decoded)
             // U7d：有报文叫我呼号时短促提示
             val my = _status.value.myCall
             if (shouldAlertMyCall(latestSettings.beepOnMyCall, my, decoded.map { it.text })) {
@@ -1336,7 +1307,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                     "state=${st.qso.state} -> ${p.state} noReply=${p.noReplyCount} " +
                                     "msgs=${incoming.map { it.text }}",
                             )
-                            applyQsoProgress(p, s.utcNowMs)
+                            applyQsoProgress(p, s.utcNowMs, incoming)
                             // FT8CN `checkCQMeOrFollowCQMessage` 循环 2：当前目标本批沉默时，
                             // 也要应答「其他呼叫我方」的定向台（避免忙起来就漏应答）。
                             val takeover = if (p.active && !p.advanced && _status.value.txEnabled) {
@@ -1353,7 +1324,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                                 Log.i(TAG_QSO, "听到其他定向呼叫 → 换台 ${takeover.call}（${takeover.kind}）")
                                 startAutoTarget(takeover)
                             } else {
-                                maybeGiveUpTarget(p, incoming, s.utcNowMs)
+                                // 本批没有其他定向呼叫；「无回应 / 对方转呼别人」的兜底判据
+                                // 已在 QsoEngine 内（照 FT8CN 的 5 路完成判据）判定并收尾，
+                                // 收尾动作由 applyQsoProgress 按 p.gaveUp 派发。
                             }
                         }
                     } else if (st.txEnabled && st.qso.txText == null) {
@@ -1391,7 +1364,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 落库：**会话内同一呼号只写一条**（收到 73/RR73 立即落库、不弹确认、不关 TX），
      * 完成即写「已通联」索引（方案 §4.2 / §4.4）。
      */
-    private fun applyQsoProgress(p: QsoProgress, utcNowMs: Long = AudioEngine.utcNowMs()) {
+    private fun applyQsoProgress(
+        p: QsoProgress,
+        utcNowMs: Long = AudioEngine.utcNowMs(),
+        incoming: List<DecodeResult> = emptyList(),
+    ) {
         val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
         // 完成时**保留发射周期**：还要用同一周期把最后一条 RR73/73 发出去；
         // 失败时只解除「目标时隙固定」（保留当前周期，避免下一段跳时隙）。
@@ -1435,53 +1412,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val bandKey = st.band.trim().uppercase()
             workedCallsByBand = workedCallsByBand +
                 (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
-            // 「关注的呼号通联完成后取消关注」：本段通联已落库，无需再盯这个台
-            //（名单与自动收录顺序一并移除；幂等）
-            val wasFollowed = key in latestSettings.followCalls
-            if (wasFollowed) {
-                persist {
-                    it.copy(followCalls = it.followCalls - key, autoFollowOrder = it.autoFollowOrder - key)
-                }
-            }
-            _status.update {
-                it.copy(
-                    status = if (wasFollowed) {
-                        "已记录通联：${entry.theirCall}（已取消关注）"
-                    } else {
-                        "已记录通联：${entry.theirCall}"
-                    },
-                )
-            }
+            // 名单不因通联自动变动（照 FT8CN：⭐ 关注名单只由用户手动增删）
+            _status.update { it.copy(status = "已记录通联：${entry.theirCall}") }
         }
         if (!finished) return
         if (!_status.value.txEnabled) return
-        if (p.txText == null) {
+        when {
+            // 照 FT8CN 的兜底判据收尾（发过 RR73 后对方消失 / 转呼别人）→ **优先换台**，
+            // 没有可换的台才回 CQ（FT8CN `getNewTargetCallsign`）。
+            p.gaveUp -> runAutoAction(
+                scheduler.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
+            )
             // 没有收尾报文：立刻让第 2 层决定下一步
-            runAutoAction(scheduler.onQsoFinished(utcNowMs))
-        } else {
+            p.txText == null -> runAutoAction(scheduler.onQsoFinished(utcNowMs))
             // 还有 RR73/73 要发：发完再收口（见 txTick）
-            pendingAutoFinish = true
+            else -> pendingAutoFinish = true
         }
-    }
-
-    /**
-     * 无回应超限 → 目标作废，交给第 2 层**换台 / 回 CQ**（照 FT8CN，方案 §3.4）。
-     *
-     * 仅在 `noReplyLimit > 0`（不是「忽略」）时生效；默认 0＝对静默伙伴永久重试（FT8CN 原行为）。
-     */
-    private fun maybeGiveUpTarget(p: QsoProgress, incoming: List<DecodeResult>, utcNowMs: Long) {
-        if (!p.active) return
-        if (!_status.value.txEnabled) return
-        val limit = latestSettings.auto.noReplyLimit
-        if (limit <= 0 || p.noReplyCount <= limit) return
-        Log.i(TAG_QSO, "noReply ${p.noReplyCount} > $limit → 目标作废，换台/回 CQ")
-        val p2 = qsoEngine.stop()
-        _status.update {
-            it.copy(qso = p2, txArmed = false, status = "无回应超限：换台 / 回 CQ")
-        }
-        runAutoAction(
-            scheduler.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
-        )
     }
 
     /**
@@ -1550,8 +1496,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 自动应答选中的目标，并把整段 QSO 交给状态机跑完。
      *
-     * 支持四类目标：[AutoTargetKind.CQ]（应答 CQ）、[AutoTargetKind.CALL]（对方呼叫我）、
-     * [AutoTargetKind.REPORT]（对方给我报告）、[AutoTargetKind.ROGER]（对方 Roger 我的报告）。
+     * 支持五类目标：[AutoTargetKind.CQ]（应答 CQ）、[AutoTargetKind.CALL]（对方呼叫我）、
+     * [AutoTargetKind.REPORT]（对方给我报告）、[AutoTargetKind.ROGER]（对方 Roger 我的报告）、
+     * [AutoTargetKind.RR73]（对方直接给我 RR73 → 我回 73 收尾）。
      */
     private fun startAutoTarget(t: AutoTarget) {
         val st = _status.value
@@ -1566,10 +1513,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         val nowMs = AudioEngine.utcNowMs()
         val p = when (t.kind) {
-            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid, nowMs)
+            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid, nowMs, t.snr)
             AutoTargetKind.CALL -> qsoEngine.startCallerQso(t.call, t.grid, t.snr, nowMs)
             AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr, nowMs)
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
+            AutoTargetKind.RR73 -> qsoEngine.respondToRr73(t.call, t.snr, t.slotUtcMs)
         }
         if (!p.active && p.state != QsoState.DONE) return
         Log.i(TAG_QSO, "auto start kind=${t.kind} call=${t.call} -> ${p.state} tx=${p.txText}")
@@ -1577,7 +1525,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
         }
         tryRetargetNow(p.txText, manual = false)
-        // ROGER 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
+        // ROGER / RR73 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
     }
 
@@ -1618,7 +1566,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /** 指定波段的已通联呼号（照 FT8CN `checkQSLCallsign`）；自动程序的 CQ 闸门与「自动收录」共用。 */
+    /** 指定波段的已通联呼号（照 FT8CN `checkQSLCallsign`）；自动程序的 CQ 闸门用。 */
     private fun workedCallsOnBand(band: String): Set<String> =
         workedCallsByBand[band.trim().uppercase()].orEmpty()
 
@@ -1678,7 +1626,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 而上一时隙的解码（可能把 qso 推进到收尾的 73/RR73）随后才处理 ——
                 // 把真实文本交给引擎，它就不会把还没发出去的收尾报文误清掉。
                 val sentText = _status.value.lastTxText
-                qsoEngine.onTransmitted(sentText)
+                qsoEngine.onTransmitted(sentText, AudioEngine.utcNowMs())
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
                 // 收尾报文（RR73/73）**还没真正发出去** → 保留武装与周期，等下一个我方时隙。

@@ -91,27 +91,26 @@ fun AutoProgramPanel(
             onChange = { v -> onOption { it.copy(supervisionMinutes = v) } },
         )
 
-        // 无回应次数（FT8CN noReplyLimit：0=忽略，1..30）
+        // 无回应次数（FT8CN noReplyLimit：0＝用内置硬上限 20 个批次；1..30＝2×该值）
         AutoStepperRow(
             title = "无回应次数（换台阈值）",
             value = program.noReplyLimit,
             range = NO_REPLY_LIMIT_RANGE,
-            unit = if (program.noReplyLimit <= 0) " 次（忽略）" else " 次",
+            unit = if (program.noReplyLimit <= 0) " 次（内置 20）" else " 次",
             enabled = true,
             onChange = { v -> onOption { it.copy(noReplyLimit = v) } },
         )
         Text(
-            "对方连续无回应达到该次数后放弃当前目标：优先换到别的 CQ 台，没有就自己发 CQ。" +
-                "0＝忽略（对同一目标一直重发，FT8CN 默认）。",
+            "我发出 RR73 后对方连续无回应达到该次数，就放弃当前目标：优先换到别的 CQ 台，" +
+                "没有就自己发 CQ。0＝用 FT8CN 的内置硬上限（20 个解码批次）。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         AutoOptionRow(
-            title = "自动收录 CQ 台（本波段）",
-            subtitle = "每解到一个本波段还没通联过的 CQ 台就自动加入 ⭐ 关注列表（" +
-                "跨波段通联过的台在本波段仍会收录；自动收录最多 100 个，超出淘汰最早加入的；" +
-                "手动关注的不受此限）",
+            title = "自动跟踪 CQ（本波段）",
+            subtitle = "把本波段还没通联过的 CQ 台纳入可自动呼叫的候选" +
+                "（照 FT8CN：不写 ⭐ 关注列表，名单只手动增删；跨波段通联过的台在本波段仍算没通联过）",
             checked = program.autoAddCqToFollow,
             onChange = { v -> onOption { it.copy(autoAddCqToFollow = v) } },
         )
@@ -123,10 +122,11 @@ fun AutoProgramPanel(
         )
 
         Text(
-            "「关注」名单：在解码列表长按某台 →「关注」，或由「自动收录 CQ 台」自动加入；" +
-                "点操作页的「关注 N」按钮可查看 / 删除（右滑取消关注，右上「全部清除」清空）；关注的台通联完成后会自动取消关注。\n" +
-                "「自动收录 CQ 台」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
-                "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动收录 CQ 台」＝只呼叫关注的台；" +
+            "「关注」名单：在解码列表长按某台 →「关注」手动加入（照 FT8CN：名单只会手动增删，" +
+                "「自动跟踪 CQ」不写名单，通联完成也不会自动取消关注）；" +
+                "点操作页的「关注 N」按钮可查看 / 删除（右滑取消关注，右上「全部清除」清空）。\n" +
+                "「自动跟踪 CQ」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
+                "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动跟踪 CQ」＝只呼叫关注的台；" +
                 "关掉「自动呼叫 CQ 台」＝完全不应答 CQ。无论怎样，自己发 CQ、" +
                 "对方直接呼叫我方一定应答；本波段已通联的 CQ 台不再主动呼叫。",
             style = MaterialTheme.typography.labelSmall,
@@ -270,8 +270,8 @@ private fun AutoStepButton(label: String, enabled: Boolean, onClick: () -> Unit)
 /** 发射抽屉里的一行自动程序摘要。 */
 internal fun autoProgramSummary(p: AutoProgramSettings): String {
     val supervision = if (p.supervisionMinutes <= 0) "监管关" else "监管 ${p.supervisionMinutes} 分"
-    val noReply = if (p.noReplyLimit <= 0) "无回应不限" else "无回应 ${p.noReplyLimit} 次换台"
-    val follow = if (p.autoAddCqToFollow) "收录本波段新 CQ" else "不收录 CQ"
+    val noReply = if (p.noReplyLimit <= 0) "无回应内置 20 次换台" else "无回应 ${p.noReplyLimit} 次换台"
+    val follow = if (p.autoAddCqToFollow) "跟踪本波段新 CQ" else "不跟踪 CQ"
     val call = if (p.autoCallFollow) "自动呼叫" else "不自动呼叫"
     return "$supervision｜$noReply｜$follow｜$call"
 }

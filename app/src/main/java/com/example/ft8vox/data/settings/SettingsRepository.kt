@@ -15,12 +15,16 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.DecodeFilterTag
-import com.example.ft8vox.qso.FollowRoster
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 private const val STORE_NAME = "ft8vox_settings"
+
+/**
+ * 「自动收录」遗留字段的容量上限（旧版 `FollowRoster.AUTO_MAX`；该逻辑已删除，仅用于读旧数据时夹一下）。
+ */
+private const val LEGACY_AUTO_FOLLOW_MAX = 100
 
 private val Context.settingsStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
 
@@ -168,12 +172,13 @@ private fun Preferences.toAppSettings(): AppSettings {
     val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
     val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
         .coerceIn(0, (cqPrefixes.size - 1).coerceAtLeast(0))
-    // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
+    // 「自动收录」顺序（**旧版遗留**：新版照 FT8CN 不再自动写名单，此字段不再有新写入）：
+    // 去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
     val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
         .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
         .distinct()
         .filter { it in followCalls }
-        .take(FollowRoster.AUTO_MAX)
+        .take(LEGACY_AUTO_FOLLOW_MAX)
     return AppSettings(
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,

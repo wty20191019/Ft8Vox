@@ -442,7 +442,7 @@
 | 反馈 | 处理 |
 | --- | --- |
 | 操作页不需要「忽略」 | 解码行长按菜单去掉「忽略」项，`DecodeTable` 的 `onIgnore` 参数链一并删除。后端忽略名单（`ignoredCalls` / `ignoreCall`）保留但不再有 UI 入口（`DecodeFilter` / 自动程序仍会读它）。 |
-| 关注列表要能一键清空 | 关注列表标题栏加「全部清除」（名单非空时才显示），带**二次确认**弹窗；新增 `SessionViewModel.clearFollowCalls()`，手动关注与自动收录一并清掉。 |
+| 关注列表要能一键清空 | 关注列表标题栏加「全部清除」（名单非空时才显示），带**二次确认**弹窗；新增 `SessionViewModel.clearFollowCalls()`（当时会把「自动收录」的遗留顺序一并清掉；该自动收录逻辑已在 §35 删除）。 |
 | 手势速查同步 | `JtdxHelpDialog` 里删掉「忽略」，补上「关注列表：左滑呼叫 / 右滑取消关注 / 右上全部清除」，并把频谱说明改成「叠加最近解码的报文」。 |
 
 ---
@@ -886,5 +886,59 @@ FT8CN 的旗面颜色回答的是「**这个台我还要不要通联**」，与�
   181 点全经度、夏至极圈纬度、关于直射点经线对称、春分退化成经线、步长控制点数）+
   `MapModelTest.cqFlagsCarryWorkedStatusForFlagColor` / `cqFlagsDefaultToNotWorked`。
 - 合计 **39 suite / 398 例 / 0 失败 0 错**，`:app:assembleDebug` 通过。
+
+---
+
+## 35. 实机第二十二轮：QSO 层照 FT8CN **复看重做**（2026-09-30，已完成）
+
+§34 记的「QSO：已对齐，另作复看」——本轮就是那次复看。结论：**此前的「对齐」其实是把 FT8CN 的机制
+换成了自定机制**（自定收敛阶梯、DX/区域分级选台、自动收录名单），并非照搬。用户拍板：
+**照 FT8CN 原样重做，不自作聪明**。逐条差异与处理：
+
+| 环节 | 改前（自定） | FT8CN（`ft8cn/.../FT8TransmitSignal.java`、`GeneralVariables.java`） | 改后 |
+| --- | --- | --- | --- |
+| 序号判据 | 报文 → `kind` 映射表 + 自定「收敛阶梯」优先级 | `checkFunOrder`（先判 CQ，再 **5→4→3→2→1**），`:391`/`:399-445` | 新 `qso/FunctionOrder.kt` 逐条移植 |
+| 推进规则 | 阶梯表（按「收到什么」分支） | **我下一条 = 对方这条的序号 + 1**（`:862`） | 同（一条规则） |
+| 收尾判据 | 第 2 层按 `noReplyLimit` 判；序号 4 直接 `DONE` | **5 路 OR**（`:832-843`）：对方 73 / 我方序号 5 沉默 / 序号 4×阈值×2 / 序号 4 对方转呼别人 / 序号 4 且 `noReplyLimit==0` 时 `>20` | 全部进**引擎**；`QsoProgress.gaveUp` 告诉第 2 层换台 |
+| 序号 4（RR73） | 收到即 `DONE`（自认「结构上不滞留」） | **不滞留、继续等对方 73**，等不到每周期重发 RR73 | 新增 `QsoState.WAIT_FINAL`；进入即落库 |
+| 收敛阶梯 4a | 收到纯报告而己方已回过 R → **直接 RR73** | 无此分支（会重发序号 3） | 删除；改回「对方序号 + 1」 |
+| `RR73` 可否作为起点 | 排除 `RR73`/`73`/`RRR` | 只排除 `73`（循环 2） | 新 `AutoTargetKind.RR73` + `QsoEngine.respondToRr73`（回 73 收尾） |
+| 无回应计数 | **空批也计** | 空批直接返回、**不计数**（`:812`）；弱信号不计 | 同 FT8CN |
+| 报告值（我方发） | Tx3 复用 Tx2 **实际发出的快照**（有意偏离） | 序号 2/3 取**同一个**「定台时测到的强度」（`:260`/`:266`） | 同 FT8CN（固定首次测得） |
+| 报告值（对方给） | 首个 / 保留 | 命中即覆盖（`receiveTargetReport`，`:621`） | 同 FT8CN |
+| 选台排序 | `DX` ＞ 我所在区域 ＞ 其它修饰符 ＞ 无（稳定保序） | **无 DX / 区域分级** | 删除 `modifierPriority`/`areaOfGrid`；`rank` 保持解码顺序 |
+| `autoFollowCQ` | 「自动收录 CQ 台」**真写关注名单** + 通联后自动取消关注 | 只把 CQ 推送到「呼叫」列表，**不写名单**（`auto_follow_help.txt` 明确） | 只作 CQ 候选闸门；⭐ 名单**只手动增删** |
+
+### 35.1 代码增删
+
+- **新增**：`qso/FunctionOrder.kt`（序号判据）、`FunctionOrderTest`；
+  `QsoState.WAIT_FINAL`、`QsoProgress.gaveUp`、`AutoTargetKind.RR73`、
+  `QsoEngine.respondToRr73` / `targetCallingOthers`、`configure(myCall, myGrid, noReplyLimit)`。
+- **删除**：`qso/FollowRoster.kt` + `FollowRosterTest`、`AutoProgramSelector.modifierPriority` / `areaOfGrid`、
+  `AutoScheduler` 的 `myGrid`、`SessionViewModel.autoCollectCqToFollow` / `maybeGiveUpTarget`、
+  收敛阶梯 4a、`AutoScheduler.rank(candidates, myGrid)` 的重载。
+  **`QsoEngine.Step` 收敛阶梯表**整段删除，改为序号模型。
+- **收口路径改向**：`applyQsoProgress` 现在按 `p.gaveUp` 派发——
+  `true` → `scheduler.onTargetGaveUp`（换台 / 回 CQ）；`false` → `onQsoFinished`（队列空回 CQ）。
+  收尾判定不再由 `SessionViewModel` 判 `noReplyLimit`。
+
+### 35.2 设置项与文案
+
+- 设置面板第二项改名 **「自动跟踪 CQ（本波段）」**，说明改成「纳入候选、**不写** ⭐ 名单」；
+  「无回应次数」的 0 档文案由「忽略」改为 **「内置 20」**（FT8CN 的 0 不是不限，而是 20 个批次硬上限）。
+- ⭐「关注呼号列表」不再有新增来源；旧数据里的「自动」标记与 `autoFollowOrder` 只读保留
+  （`LEGACY_AUTO_FOLLOW_MAX = 100`），不再有新写入；通联完成也**不再**自动取消关注。
+- 抽屉摘要同步：`监管 10 分｜无回应内置 20 次换台｜跟踪本波段新 CQ｜自动呼叫`。
+
+### 35.3 文档与验收
+
+- `docs/QSO.md` **整篇重写**：§2 改为「报文序号与状态机」（序号判据表、对方序号+1、5 路 OR、`WAIT_FINAL`），
+  §3 补 `checkTargetCallMe` / `setCurrentFunctionOrder` / `checkFunctionOrdFromMessages` 行号，
+  §6/§7/§8 的对照与偏离清单按本轮事实重列（原「有意偏离 12 条」里 6 条已变回「照搬」）。
+- 单测：`QsoEngineTest` 重写到 39 例（新增 `rr73KeepsResendingUntilPeerSeventyThree`、
+  `givesUpAfterTwentySilentBatchesWhileWaitingFinal73`、`noReplyLimitDoubledGivesUpWhileWaitingFinal73`、
+  `targetCallingOthersGivesUpWhileWaitingFinal73`、`giveUpOnlyHappensWhileWaitingFinal73`、
+  `respondToRr73SendsSeventyThreeAndLogs` 等），`FunctionOrderTest` 6 例。
+- 合计 **39 suite / 401 例 / 0 失败 0 错**，`:app:assembleDebug` 通过。
 
 

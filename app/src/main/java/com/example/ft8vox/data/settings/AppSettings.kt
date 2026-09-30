@@ -197,17 +197,21 @@ data class AppSettings(
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
     /**
-     * 关注的呼号（长按菜单「关注 / 取消关注」手动加入，或「自动收录 CQ 台」自动加入）。
+     * 关注的呼号（长按菜单「关注 / 取消关注」**手动**加入）。
+     *
+     * 照 FT8CN：关注名单**只由用户手动增删**（「自动跟踪 CQ」不写名单，其帮助文件明确说明
+     * 「该呼号不会被长久保存到关注的呼号数据库中」）。
      *
      * - ⭐「关注呼号列表」显示这些台；
-     * - 照 FT8CN：`autoAddCqToFollow`（自动收录）关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
+     * - 照 FT8CN：`autoAddCqToFollow`（自动跟踪 CQ）关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
      */
     val followCalls: Set<String> = emptySet(),
 
     /**
-     * [followCalls] 中**由「自动收录 CQ 台」自动加入**的那些呼号，**最近加入在前**；恒为 [followCalls] 子集。
+     * **旧版遗留**：「自动收录 CQ 台」写过的呼号（最近加入在前）。
      *
-     * 只用于超出 `FollowRoster.AUTO_MAX` 时按「最早收录」淘汰。手动关注的呼号不在此列，永不被淘汰。
+     * 自 2026-09-30 起已改为照 FT8CN **不再自动写名单**，本字段不再有新写入，仅为兼容旧数据保留
+     * （⭐ 面板据此给旧条目显示「自动」标记）。见 `docs/QSO.md` §7。
      */
     val autoFollowOrder: List<String> = emptyList(),
 

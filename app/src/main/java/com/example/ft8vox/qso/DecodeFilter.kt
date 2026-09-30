@@ -25,7 +25,7 @@ data class DecodeFilterState(
     /** 被用户忽略的呼号（右滑忽略 / 长按菜单忽略），一律不显示。 */
     val ignoredCalls: Set<String> = emptySet(),
     /**
-     * 关注的呼号（**长按「关注 / 取消关注」**，或「自动收录 CQ 台」自动加入）。
+     * 关注的呼号（**长按「关注 / 取消关注」手动加入**；照 FT8CN 不由解码自动写入）。
      *
      * **不参与显示过滤**，只作为自动程序的输入：在 [com.example.ft8vox.qso.AutoProgramSelector.collect]
      * 里它们是 `autoAddCqToFollow` 的例外（照 FT8CN，关掉开关仍会呼叫其 CQ）。操作页的「关注呼号列表」

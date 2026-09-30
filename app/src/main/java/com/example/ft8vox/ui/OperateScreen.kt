@@ -267,7 +267,7 @@ fun OperateScreen(
         AlertDialog(
             onDismissRequest = { clearFollowConfirm = false },
             title = { Text("清空关注名单") },
-            text = { Text("将移除全部 ${settings.followCalls.size} 个关注呼号（手动关注与自动收录的都会清掉），不可撤销。") },
+            text = { Text("将移除全部 ${settings.followCalls.size} 个关注呼号，不可撤销。") },
             confirmButton = {
                 Button(
                     onClick = {

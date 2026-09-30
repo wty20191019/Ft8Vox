@@ -25,10 +25,9 @@ class AutoProgramTest {
     private fun scheduler(
         settings: AutoProgramSettings = program,
         myCall: String = "F4FSY",
-        myGrid: String = "JN25",
         nowMs: Long = 1_000L,
     ): AutoScheduler = AutoScheduler().apply {
-        configure(settings, myCall, myGrid)
+        configure(settings, myCall)
         enable(nowMs)
     }
 
@@ -57,12 +56,11 @@ class AutoProgramTest {
     }
 
     @Test
-    fun collectSkipsRanOutPlus73AndSelfAndIgnored() {
+    fun collectSkipsSelfSeven3AndIgnored() {
         val list = AutoProgramSelector.collect(
             listOf(
                 decoded("CQ F4FSY JN25"), // 自己发的 CQ
-                decoded("F4FSY W1AW RR73"), // 73 类不开启新 QSO
-                decoded("F4FSY K1XYZ 73"),
+                decoded("F4FSY K1XYZ 73"), // 73 = 通联已结束，不开启新 QSO
                 decoded("CQ JA1ABC PM95"), // 被忽略
             ),
             program,
@@ -73,9 +71,31 @@ class AutoProgramTest {
     }
 
     @Test
+    fun collectAcceptsRr73AsFinalReply() {
+        // 照 FT8CN `checkCQMeOrFollowCQMessage`（只排除 73）：指名给我的 RR73 / RRR 也要接，
+        // 回 73 收尾 —— 这正是「App 重启 / 丢状态后把尾巴接回来」的路径。
+        val rr73 = AutoProgramSelector.collect(
+            listOf(decoded("F4FSY W1AW RR73")),
+            program,
+            myCall = "F4FSY",
+        )
+        assertEquals(1, rr73.size)
+        assertEquals(AutoTargetKind.RR73, rr73[0].kind)
+        assertEquals("W1AW", rr73[0].call)
+        assertNull(rr73[0].report)
+
+        val rrr = AutoProgramSelector.collect(
+            listOf(decoded("F4FSY W1AW RRR")),
+            program,
+            myCall = "F4FSY",
+        )
+        assertEquals(AutoTargetKind.RR73, rrr[0].kind)
+    }
+
+    @Test
     fun collectCqGovernedByFollowSwitch() {
         val msgs = listOf(decoded("CQ W1AW FN42"))
-        // 关闭「自动收录 CQ 台」→ 不收集 CQ
+        // 关闭「自动跟踪 CQ」→ 不收集 CQ
         assertEquals(
             0,
             AutoProgramSelector.collect(
@@ -93,7 +113,7 @@ class AutoProgramTest {
 
     @Test
     fun collectKeepsFollowedCqWhenSwitchOff() {
-        // 照 FT8CN：关掉「自动收录 CQ 台」，但该台在关注名单里 → 仍纳入候选
+        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在关注名单里 → 仍纳入候选
         val list = AutoProgramSelector.collect(
             listOf(decoded("CQ W1AW FN42"), decoded("CQ JA1ABC PM95")),
             program.copy(autoAddCqToFollow = false),
@@ -152,54 +172,33 @@ class AutoProgramTest {
         assertEquals(AutoTargetKind.REPORT, report?.kind)
         assertEquals(-12, report?.report)
         assertEquals(AutoTargetKind.ROGER, AutoProgramSelector.toTarget(decoded("F4FSY W1AW R-12"), "F4FSY")?.kind)
+        // 指名给我的 RR73 → 回 73 收尾（照 FT8CN）
+        assertEquals(AutoTargetKind.RR73, AutoProgramSelector.toTarget(decoded("F4FSY W1AW RR73"), "F4FSY")?.kind)
     }
 
     @Test
     fun toTargetRejectsUnusableMessages() {
         assertNull(AutoProgramSelector.toTarget(decoded("CQ F4FSY JN25"), "F4FSY")) // 自听
-        assertNull(AutoProgramSelector.toTarget(decoded("F4FSY W1AW RR73"), "F4FSY")) // 收尾
-        assertNull(AutoProgramSelector.toTarget(decoded("F4FSY W1AW 73"), "F4FSY"))
+        assertNull(AutoProgramSelector.toTarget(decoded("F4FSY W1AW 73"), "F4FSY")) // 73 已互相收尾
         assertNull(AutoProgramSelector.toTarget(decoded("K1ABC W9XYZ IO90"), "F4FSY")) // 别人的 QSO
     }
 
-    // ---- CQ 修饰符优先级（方案 §3.3） ----
+    // ---- 排序（照 FT8CN：不做 DX / 区域分级） ----
 
     @Test
-    fun modifierPriorityDxMyAreaThenOther() {
-        assertEquals(3, AutoProgramSelector.modifierPriority("DX", "EU"))
-        assertEquals(3, AutoProgramSelector.modifierPriority("DX NA", "EU"))
-        assertEquals(2, AutoProgramSelector.modifierPriority("EU", "EU"))
-        assertEquals(1, AutoProgramSelector.modifierPriority("TEST", "EU"))
-        assertEquals(0, AutoProgramSelector.modifierPriority(null, "EU"))
-        assertEquals(0, AutoProgramSelector.modifierPriority("  ", "EU"))
-    }
-
-    @Test
-    fun areaOfGridRoughContinents() {
-        assertEquals("EU", AutoProgramSelector.areaOfGrid("JN25"))
-        assertEquals("NA", AutoProgramSelector.areaOfGrid("FN42"))
-        assertEquals("AS", AutoProgramSelector.areaOfGrid("PM95"))
-        assertNull(AutoProgramSelector.areaOfGrid("n/a"))
-    }
-
-    @Test
-    fun rankPrefersDxThenMyAreaStableOtherwise() {
+    fun rankKeepsDecodeOrder() {
         val cqs = AutoProgramSelector.collect(
             listOf(
-                decoded("CQ W1AW FN42"),        // 无修饰符
-                decoded("CQ DX JA1ABC PM95"),   // DX
-                decoded("CQ NA K1XYZ FN31"),    // 与我同区（EU？否，我的网格 JN25 → EU）
-                decoded("CQ VK2ABC QF56"),      // 无修饰符
+                decoded("CQ DX JA1ABC PM95"),
+                decoded("CQ W1AW FN42"),
+                decoded("CQ NA K1XYZ FN31"),
             ),
             program,
             myCall = "F4FSY",
         )
-        val ranked = AutoProgramSelector.rank(cqs, myGrid = "JN25")
-        assertEquals("JA1ABC", ranked[0].call) // DX 最高
-        // 其余按解码顺序稳定：无修饰符的 W1AW、VK2ABC（NA 修饰符不是我所在区，优先级 1）
-        assertEquals("K1XYZ", ranked[1].call) // 其它修饰符 > 无修饰符
-        assertEquals("W1AW", ranked[2].call)
-        assertEquals("VK2ABC", ranked[3].call)
+        val ranked = AutoProgramSelector.rank(cqs)
+        // 照 FT8CN：候选顺序 = 解码顺序，不按 DX / 区域加权
+        assertEquals(listOf("JA1ABC", "W1AW", "K1XYZ"), ranked.map { it.call })
     }
 
     // ---- 调度：onDecoded ----
@@ -232,7 +231,7 @@ class AutoProgramTest {
 
     @Test
     fun autoAddCqToFollowOffMeansSendCq() {
-        // 「自动收录 CQ 台」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
+        // 「自动跟踪 CQ」关、且不在关注名单里 ⇒ CQ 台不进候选 ⇒ 不自动呼叫
         val s = scheduler(program.copy(autoAddCqToFollow = false))
         assertEquals(
             AutoAction.SendCq,
@@ -242,7 +241,7 @@ class AutoProgramTest {
 
     @Test
     fun followedCqIsExceptionToAutoFollowCqSwitch() {
-        // 照 FT8CN：关掉「自动收录 CQ 台」，但该台在关注名单里 → 仍自动呼叫
+        // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在关注名单里 → 仍自动呼叫
         val s = scheduler(program.copy(autoAddCqToFollow = false))
         val action = s.onDecoded(
             listOf(decoded("CQ W1AW FN42")),
@@ -299,8 +298,8 @@ class AutoProgramTest {
             utcNowMs = 1_000L,
         )
         assertTrue(action is AutoAction.AnswerCq)
-        // DX 优先
-        assertEquals("JA1ABC", (action as AutoAction.AnswerCq).target.call)
+        // 照 FT8CN 无 DX 分级：取解码顺序里第一个可用 CQ 台
+        assertEquals("W1AW", (action as AutoAction.AnswerCq).target.call)
     }
 
     @Test
@@ -337,11 +336,13 @@ class AutoProgramTest {
     }
 
     @Test
-    fun directedTakeoverIgnoresEndOfQsoReports() {
+    fun directedTakeoverTakesRr73ButIgnores73() {
         val s = scheduler()
-        // RR73 / 73 表示通联已结束，不作为新 QSO 起点
-        assertNull(s.directedTakeover(listOf(decoded("F4FSY DL1ABC RR73")), currentTarget = "JA1ABC"))
+        // 73（已互相收尾）不作为新 QSO 起点；RR73 / RRR 要接（回 73 收尾，照 FT8CN）
         assertNull(s.directedTakeover(listOf(decoded("F4FSY DL1ABC 73")), currentTarget = "JA1ABC"))
+        val rr73 = s.directedTakeover(listOf(decoded("F4FSY DL1ABC RR73")), currentTarget = "JA1ABC")
+        assertEquals("DL1ABC", rr73?.call)
+        assertEquals(AutoTargetKind.RR73, rr73?.kind)
     }
 
     @Test
