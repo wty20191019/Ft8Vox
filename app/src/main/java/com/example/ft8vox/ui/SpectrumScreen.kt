@@ -148,7 +148,7 @@ fun SpectrumScreen(
 
             // 解码报文叠加（**竖排**：横排会互相叠字，顺转 90° 后只占一条窄缝）：
             // x 按频率定位、y 按「信号实际结束时刻」锚定 —— 文字底端压在信号结束处、
-            // 自上而下读，随瀑布向上滚，滚出 24 s 窗口（WF_ROWS × WF_ROW_MS）即消失。
+            // 自上而下读，随瀑布向上滚，滚出窗口（WF_ROWS × WF_ROW_MS ≈ 48 s，FT8 默认档约 3 个时隙）即消失。
             // 颜色＝JTDX 类别色；不垫底块（docs/Ft8Vox.md）。
             val frame = waterfall
             val span = frame?.let { it.bins * it.binHz }

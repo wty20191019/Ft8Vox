@@ -25,8 +25,13 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.ceil
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** 瀑布可见行数（约 300 * 0.08 s ≈ 24 s 的滚动窗口）。 */
-const val WF_ROWS = 300
+/**
+ * 瀑布可见行数（约 600 * 0.08 s ≈ 48 s 的滚动窗口）。
+ *
+ * 按 FT8 默认档（`time_osr=2` → 80 ms/行）约等于 **3 个时隙**（3 × 15 s = 45 s）；
+ * FT4 或改「时间 OSR」时，秒数会随行时间变化（见 [WF_ROW_MS]）。
+ */
+const val WF_ROWS = 600
 
 /**
  * 瀑布每一行对应的时间（毫秒）＝ 80 ms（native 侧 `K_WF_RING_ROWS=600 ≈ 48 s` 同源）。
