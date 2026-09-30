@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
@@ -49,8 +50,23 @@ private val World = Color(0xFF171C2B)
 private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
 private val TierWorked = Color(0xFFF9E2AF) // 黄：日志已通联
 private val TierConfirmed = Color(0xFFE64553) // 红：日志已确认
-private val CqRed = Color(0xFFE64553)
 private val MyColor = Color(0xFF00E5FF)
+
+/**
+ * 层次细节（§31）：低于该缩放（相对「适应窗口」）不画**本会话解码**的网格方块。
+ *
+ * 世界视野下这些蓝格数量最大、只是糊成一片；放大到看清一片区域后再出现。
+ */
+private const val GRID_DECODED_ZOOM = 1.6
+
+/** 呼号文字只在放大到该倍数（相对「适应窗口」）以上才参与落位（沿用手感，未改）。 */
+private const val CALL_LABEL_ZOOM = 2.2
+
+/** 文字落位优先级（§31）：小的先落位，落不下就不画。 */
+private const val LABEL_MY_GRID = 0
+private const val LABEL_SELECTED = 1
+private const val LABEL_CQ = 2
+private const val LABEL_CALL = 3
 
 /** 底图暗化：卫星影像偏亮，乘 0.7 让它退到 UI 之后（不透明度不变）。 */
 private val BaseMapDarken: ColorFilter = ColorFilter.colorMatrix(
@@ -71,6 +87,13 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
  * 本组件只负责绘制，视口（缩放/平移）与命中测试由 [GridScreen] 管理。
  * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动；**以 lambda 传入**，
  * 使其只在 Canvas 的绘制作用域被读取 —— 相位变化因此只触发重绘、不触发整页重组。
+ *
+ * 去密设计（docs/UI-MOBILE.md §31，手机屏小、标注一多就糊）：
+ * 1. **一个台站只画一处标记**：喊过 CQ 的台站画旗子，其他台站画圆点；两者都与呼号文字一一对应，
+ *    不会出现「同一个点又画旗又画点、还出两行文字」；
+ * 2. **文字统一最后落位 + 防重叠**（[selectLabels]）：优先级 我的位置 > 选中台 > CQ 台 > 其余呼号，
+ *    挤掉只挤文字，点/旗照旧（点一下仍能看详情）；
+ * 3. **网格方块分级**：世界视野只画已通联/已确认，放大后才补上本会话解码的蓝格。
  */
 @Composable
 fun GridMap(
@@ -189,9 +212,13 @@ fun GridMap(
                 }
             }
 
-            // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸；只画离视口中心最近的一份） ----
+            // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸） ----
+            // 层次细节（§31）：全球视野**不画「本会话解码」的蓝格** —— 它们数量最大，缩到世界尺度
+            // 只会糊成一片；已通联（黄）/ 已确认（红）数量少且是重点，任何缩放都画。
             val minCell = 2.4.dp.toPx()
+            val showDecodedGrids = p.scale >= p.fitScale * GRID_DECODED_ZOOM
             for (m in gridMarkers) {
+                if (m.tier == MapTier.DECODED && !showDecodedGrids) continue
                 val rect = p.cellRect(m.bounds.minLat, m.bounds.maxLat, m.bounds.minLon, m.bounds.maxLon)
                 val w = rect.w.toFloat()
                 val h = rect.h.toFloat()
@@ -254,19 +281,54 @@ fun GridMap(
                 }
             }
 
-            // ---- 呼号标记（蓝/黄/红，半径随 SNR） ----
+            // ---- 台站标记：**一个台站只画一处**（§31） ----
+            // 喊过 CQ 的台站用「旗子」当标记：不再叠一个圆点、也不再出两行文字；其余台站画圆点。
+            // 旗面与圆点同色，颜色始终表示**类别**（蓝=本会话解码 / 黄=已通联 / 红=已确认），
+            // 「在 CQ」由**形状**（旗）表达 —— 这样「红花+红点」那种重合就没了。
+            // 遍历以**呼号标记**为准：CQ 台一定也有呼号标记（同一张定位表、且呼号标记的时间窗更宽，
+            // 见 MapModel.gridLookup）；极端情况（标记数超过 maxMarkers 上限被截断）下宁可不画旗，
+            // 也不画一面没有对应台站的旗。
+            val flagByCall = HashMap<String, CqFlag>(cqFlags.size * 2)
+            for (f in cqFlags) flagByCall[f.call.trim().uppercase()] = f
             val baseR = 3.2.dp.toPx()
             val spanR = 5.0.dp.toPx()
-            // 注意：用下标倒序，避免每帧 `toList().asReversed()` 的额外分配
-            for (ci in callMarkers.indices.reversed()) { // 旧的先画，新的压在上面
+            val poleH = 12.dp.toPx()
+            val flagW = 9.dp.toPx()
+            val flagH = 6.dp.toPx()
+            val showCall = p.scale >= p.fitScale * CALL_LABEL_ZOOM
+            // 文字统一最后画：这里只收集，最后一起防重叠落位
+            val pending = ArrayList<PendingLabel>(callMarkers.size + 1)
+            // 注意：用下标倒序，避免每帧 `toList().asReversed()` 的额外分配（旧的先画，新的压在上面）
+            for (ci in callMarkers.indices.reversed()) {
                 val m = callMarkers[ci]
                 val s = p.toScreen(m.lat, m.lon)
                 val x = s.x.toFloat()
                 val y = s.y.toFloat()
                 if (x < -20f || x > size.width + 20f || y < -20f || y > size.height + 20f) continue
-                val r = baseR + spanR * ((m.snr + 24).coerceIn(0, 34) / 34f)
+                val flag = flagByCall[m.call.trim().uppercase()]
+                val snr = flag?.snr ?: m.snr
+                val r = baseR + spanR * ((snr + 24).coerceIn(0, 34) / 34f)
                 val color = tierColor(m.tier)
-                drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = Offset(x, y))
+                if (flag != null) {
+                    // 旗子（杆 + 三角旗面）
+                    drawLine(
+                        color = Color(0xFFB0BEC5),
+                        start = Offset(x, y),
+                        end = Offset(x, y - poleH),
+                        strokeWidth = 1.2.dp.toPx(),
+                    )
+                    drawPath(
+                        Path().apply {
+                            moveTo(x, y - poleH)
+                            lineTo(x + flagW, y - poleH + flagH / 2f)
+                            lineTo(x, y - poleH + flagH)
+                            close()
+                        },
+                        color = color,
+                    )
+                } else {
+                    drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = Offset(x, y))
+                }
                 if (m.call == selectedCall) {
                     drawCircle(
                         color = Color.White,
@@ -275,56 +337,34 @@ fun GridMap(
                         style = Stroke(2.dp.toPx()),
                     )
                 }
-                val showCall = p.scale >= p.fitScale * 2.2
-                if (showCall) {
-                    val txt = if (m.fromPrefix) "${m.call}~" else m.call
-                    drawText(
-                        textMeasurer = measurer,
-                        text = txt,
-                        topLeft = Offset(x + r + 2.dp.toPx(), y - 6.dp.toPx()),
-                        style = callStyle,
-                    )
-                }
-            }
-
-            // ---- CQ 红旗（docs/UI.md §2.4） ----
-            val poleH = 12.dp.toPx()
-            val flagW = 9.dp.toPx()
-            val flagH = 6.dp.toPx()
-            for (f in cqFlags) {
-                val s = p.toScreen(f.lat, f.lon)
-                val x = s.x.toFloat()
-                val y = s.y.toFloat()
-                if (x < -30f || x > size.width + 30f || y < -30f || y > size.height + 30f) continue
-                drawLine(
-                    color = Color(0xFFB0BEC5),
-                    start = Offset(x, y),
-                    end = Offset(x, y - poleH),
-                    strokeWidth = 1.2.dp.toPx(),
-                )
-                val path = Path().apply {
-                    moveTo(x, y - poleH)
-                    lineTo(x + flagW, y - poleH + flagH / 2f)
-                    lineTo(x, y - poleH + flagH)
-                    close()
-                }
-                drawPath(path, color = CqRed)
-                if (showCqCall || showCqSnr) {
-                    val txt = buildString {
-                        if (showCqCall) append(f.call)
+                // 一个台站只出一条文字：CQ 台是「呼号 + 可选强度」，其余只出呼号（放大后）
+                val callTxt = if (m.fromPrefix) "${m.call}~" else m.call
+                val txt = buildString {
+                    if (flag == null) {
+                        if (showCall) append(callTxt)
+                    } else {
+                        if (showCqCall || showCall) append(callTxt)
                         if (showCqSnr) {
                             if (isNotEmpty()) append(' ')
-                            append(if (f.snr >= 0) "+" else "")
-                            append(f.snr)
+                            append(if (snr >= 0) "+" else "")
+                            append(snr)
                         }
                     }
-                    drawText(
-                        textMeasurer = measurer,
-                        text = txt,
-                        topLeft = Offset(x + flagW + 2.dp.toPx(), y - poleH),
-                        style = cqStyle,
-                    )
                 }
+                if (txt.isEmpty()) continue
+                val laid = measurer.measure(AnnotatedString(txt), if (flag != null) cqStyle else callStyle)
+                pending.add(
+                    PendingLabel(
+                        priority = when {
+                            m.call == selectedCall -> LABEL_SELECTED
+                            flag != null -> LABEL_CQ
+                            else -> LABEL_CALL
+                        },
+                        layout = laid,
+                        left = x + (if (flag != null) flagW else r) + 2.dp.toPx(),
+                        top = if (flag != null) y - poleH else y - 6.dp.toPx(),
+                    ),
+                )
             }
 
             // ---- 我方台站 ----
@@ -337,14 +377,42 @@ fun GridMap(
                     drawCircle(MyColor, radius = r, center = Offset(x, y), style = Stroke(2.dp.toPx()))
                     drawLine(MyColor, Offset(x - r, y), Offset(x + r, y), strokeWidth = 1.5.dp.toPx())
                     drawLine(MyColor, Offset(x, y - r), Offset(x, y + r), strokeWidth = 1.5.dp.toPx())
-                    drawText(
-                        textMeasurer = measurer,
-                        text = myGrid.uppercase(),
-                        topLeft = Offset(x + r + 2.dp.toPx(), y - 6.dp.toPx()),
-                        style = myLabelStyle,
+                    val laid = measurer.measure(AnnotatedString(myGrid.uppercase()), myLabelStyle)
+                    pending.add(
+                        PendingLabel(
+                            priority = LABEL_MY_GRID,
+                            layout = laid,
+                            left = x + r + 2.dp.toPx(),
+                            top = y - 6.dp.toPx(),
+                        ),
                     )
                 }
+            }
+
+            // ---- 文字统一落位（防重叠，§31） ----
+            // 优先级：我的位置 > 选中的台站 > CQ 台 > 其余呼号；同优先级内**新解码的优先**。
+            // 挤掉的只是文字，点/旗仍在，点一下照样看详情。
+            pending.reverse() // 上面是「旧→新」收集的，倒过来变成「新→旧」
+            val ordered = pending.sortedBy { it.priority } // sortedBy 稳定，同优先级保持「新→旧」
+            val boxes = ordered.map {
+                LabelBox(it.left, it.top, it.left + it.layout.size.width, it.top + it.layout.size.height)
+            }
+            val keep = selectLabels(boxes, gap = 1.dp.toPx())
+            for (i in ordered.indices) {
+                if (!keep[i]) continue
+                drawText(
+                    textLayoutResult = ordered[i].layout,
+                    topLeft = Offset(ordered[i].left, ordered[i].top),
+                )
             }
         }
     }
 }
+
+/** 待落位的地图文字（§31）：[priority] 小的先落位，落不下的（与已落位文字重叠）直接不画。 */
+private data class PendingLabel(
+    val priority: Int,
+    val layout: TextLayoutResult,
+    val left: Float,
+    val top: Float,
+)

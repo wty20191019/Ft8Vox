@@ -418,7 +418,11 @@ private fun MapOverlay(
                 LegendDot(LegendDecoded, "解码")
                 LegendDot(LegendWorked, "通联")
                 LegendDot(LegendConfirmed, "确认")
-                LegendDot(LegendConfirmed, "CQ")
+                Text(
+                    "旗=CQ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     "大小=SNR",
                     style = MaterialTheme.typography.labelSmall,

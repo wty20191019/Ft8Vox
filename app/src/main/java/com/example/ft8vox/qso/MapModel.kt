@@ -38,7 +38,7 @@ data class CallMarker(
     val fromPrefix: Boolean,
 )
 
-/** CQ 红旗（docs/UI.md §2.4）。 */
+/** CQ 旗（docs/UI.md §2.4）：形状=旗表示「在 CQ」，旗面颜色在绘制时取该台的类别色（§31）。 */
 data class CqFlag(
     val call: String,
     val lat: Double,
@@ -164,7 +164,11 @@ object MapModel {
         return byCall.values.sortedByDescending { it.utcMs }.take(maxMarkers)
     }
 
-    /** 解码到的 CQ 红旗；同一呼号取最近一次，过滤掉自己。 */
+    /**
+     * 解码到的 CQ 台（同一呼号取最近一次，过滤掉自己）。
+     *
+     * 绘制时这些呼号用**旗子**当标记（替代圆点），旗面颜色取该台的类别色（§31）。
+     */
     fun cqFlags(
         messages: List<DecodeResult>,
         myCall: String = "",
@@ -196,7 +200,7 @@ object MapModel {
      *
      * 方向为 `发方 → 收方`，**两个方向都画**：对端发给我的（收方是我）与我发出去的（发方是我，
      * 本地回采 / 对端转发时会解码到自己）都会出现在地图上。
-     * **CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用红旗表示，见 [cqFlags]），
+     * **CQ 报文不连线** —— CQ 只有发方、没有收方（对端位置用旗子表示，见 [cqFlags]），
      * 所以 `CQ …` 会被跳过，避免一堆线全汇到「我」身上。
      *
      * 端点位置（docs/UI-MOBILE.md §30）：**本条报文的网格 > 本会话解码收到的网格 > 日志网格 >

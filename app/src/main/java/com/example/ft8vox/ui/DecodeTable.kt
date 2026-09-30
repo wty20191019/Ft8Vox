@@ -204,8 +204,6 @@ fun DecodeTable(
     onSwipeDelete: (DecodeRow) -> Unit,
     onCopy: (DecodeRow) -> Unit,
     onToggleFollow: (DecodeRow) -> Unit,
-    endMarkMyCall: Boolean,
-    endMarkActive: Boolean,
     slotMs: Int,
     myGrid: String,
     modifier: Modifier = Modifier,
@@ -217,8 +215,6 @@ fun DecodeTable(
                 myCall = myCall,
                 slotMs = slotMs,
                 minHeightDp = rowHeightMin,
-                endMarkMyCall = endMarkMyCall,
-                endMarkActive = endMarkActive,
                 myGrid = myGrid,
                 followed = row.parsed.from?.let(followed) ?: false,
                 onClick = { onRowClick(row) },
@@ -242,8 +238,6 @@ private fun DecodeTableRow(
     myCall: String,
     slotMs: Int,
     minHeightDp: Int,
-    endMarkMyCall: Boolean,
-    endMarkActive: Boolean,
     myGrid: String,
     followed: Boolean,
     onClick: () -> Unit,
@@ -402,8 +396,8 @@ private fun DecodeTableRow(
                         decoration = if (style.worked) workedDecoration else null,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
-                    if (style.toMe && endMarkMyCall) Marker(VoxError)
-                    if (style.current && endMarkActive) Marker(MaterialTheme.colorScheme.primary)
+                    if (style.toMe) Marker(VoxError)
+                    if (style.current) Marker(MaterialTheme.colorScheme.primary)
                     if (style.newGrid) Marker(BarNewGrid)
                     if (style.hasNewEntityMark) Marker(BarNewEntity)
                     if (followed) Marker(BarNewCall)
