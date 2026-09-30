@@ -109,8 +109,7 @@ fun AutoProgramPanel(
 
         AutoOptionRow(
             title = "自动跟踪 CQ（本波段）",
-            subtitle = "把本波段还没通联过的 CQ 台纳入可自动呼叫的候选" +
-                "（照 FT8CN：不写 ⭐ 关注列表，名单只手动增删；跨波段通联过的台在本波段仍算没通联过）",
+            subtitle = "把本波段还没通联过的 CQ 台纳入可自动呼叫的候选",
             checked = program.autoAddCqToFollow,
             onChange = { v -> onOption { it.copy(autoAddCqToFollow = v) } },
         )
@@ -122,8 +121,7 @@ fun AutoProgramPanel(
         )
 
         Text(
-            "「关注」名单：在解码列表长按某台 →「关注」手动加入（照 FT8CN：名单只会手动增删，" +
-                "「自动跟踪 CQ」不写名单，通联完成也不会自动取消关注）；" +
+            "「关注」名单：在解码列表长按某台 →「关注」手动加入；" +
                 "点操作页的「关注 N」按钮可查看 / 删除（右滑取消关注，右上「全部清除」清空）。\n" +
                 "「自动跟踪 CQ」关掉时仍会自动呼叫名单里 CQ 台的 CQ。\n" +
                 "两个开关都开＝自动应答本波段任何未通联的 CQ 台；只关「自动跟踪 CQ」＝只呼叫关注的台；" +

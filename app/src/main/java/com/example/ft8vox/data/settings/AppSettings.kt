@@ -208,10 +208,11 @@ data class AppSettings(
     val followCalls: Set<String> = emptySet(),
 
     /**
-     * **旧版遗留**：「自动收录 CQ 台」写过的呼号（最近加入在前）。
+     * **旧版遗留字段**：「自动收录 CQ 台」（已于 `3ed6562` 删除）写过的呼号。
      *
-     * 自 2026-09-30 起已改为照 FT8CN **不再自动写名单**，本字段不再有新写入，仅为兼容旧数据保留
-     * （⭐ 面板据此给旧条目显示「自动」标记）。见 `docs/QSO.md` §7。
+     * 现在**恒为空**：读设置时按旧值把残留条目从 [followCalls] 里剔除（见
+     * [purgeLegacyAutoFollow]），并在下一次写回时清空持久化键 —— 否则这些残留会被
+     * 「自动跟踪 CQ」的「⭐ 名单例外」放行，让那个开关看起来关不掉。
      */
     val autoFollowOrder: List<String> = emptyList(),
 

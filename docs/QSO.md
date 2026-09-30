@@ -458,8 +458,10 @@
 旧键常量保留但不再读写。
 
 > **已删除**：`autoCollectCqToFollow`（自动写关注名单）与 `qso/FollowRoster.kt`。
-> `AppSettings.autoFollowOrder` 与持久化键 `auto_follow_order` 保留**只读**（旧版遗留，
-> 读入时夹到 `LEGACY_AUTO_FOLLOW_MAX = 100`），⭐ 面板据此给旧条目显示「自动」标记。
+> `AppSettings.autoFollowOrder` **恒为空**：读设置时按持久化键 `auto_follow_order` 把旧版
+> **自动收录**写进 `follow_calls` 的残留条目一次性剔除（手动关注的台不动，见
+> `purgeLegacyAutoFollow`），下一次写回时清空该键。否则这些残留会被下面 §5.2 的
+> 「⭐ 名单例外」放行，让「自动跟踪 CQ」开关看起来关不掉。
 
 ### 5.2 两个开关的语义（照 FT8CN）
 
@@ -473,6 +475,8 @@
   筛选条最右 **⭐** 打开面板，列表里**左滑＝呼叫、右滑＝取消关注**，右上「全部清除」）。
   它**不是解码筛选**；照 FT8CN，名单里的台**不受** `autoAddCqToFollow` 限制。
   **通联完成后不会自动取消关注**（名单只手动变动）。
+  旧版「自动收录」写进去的残留条目已由 §5.1 的清理剔除，因此名单里的台只可能是手动加的 ——
+  否则那个「例外」会让关掉「自动跟踪 CQ」也照叫，看起来像开关坏了。
 
 ### 5.3 关键常量与默认值
 
@@ -480,7 +484,7 @@
 | --- | --- | --- |
 | 发送总开关 `txEnabled` | `false`（不持久化） | 自动程序的**唯一闸门** |
 | `QsoEngine.NO_REPLY_HARD_LIMIT` | `20` | `noReplyLimit == 0` 时，序号 4 的兜底批次上限（FT8CN `:840`） |
-| `LEGACY_AUTO_FOLLOW_MAX` | `100` | 旧「自动收录」遗留字段读入上限（`SettingsRepository`） |
+| `purgeLegacyAutoFollow` | — | 读设置时把旧版「自动收录」残留从关注名单剔除（`SettingsRepository`） |
 | `TX_START_WINDOW_MS` | `1200L` | 时隙起始的发射窗口（`ui/SessionViewModel.kt`） |
 | `MIN_SEND_NOW_MS` | `2500L` | 立即发射所需最小余量（`TxCompose.TxScheduler`） |
 | `AUTO_PARITY_LEAD_MARGIN_MS` | `500L` | 前导对齐余量 |

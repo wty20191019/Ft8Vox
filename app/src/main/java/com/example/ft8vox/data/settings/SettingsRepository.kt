@@ -21,11 +21,6 @@ import kotlinx.coroutines.flow.map
 
 private const val STORE_NAME = "ft8vox_settings"
 
-/**
- * 「自动收录」遗留字段的容量上限（旧版 `FollowRoster.AUTO_MAX`；该逻辑已删除，仅用于读旧数据时夹一下）。
- */
-private const val LEGACY_AUTO_FOLLOW_MAX = 100
-
 private val Context.settingsStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
 
 /**
@@ -164,21 +159,20 @@ private fun readPrefixSlots(s: String?): List<String>? =
 
 private fun Preferences.toAppSettings(): AppSettings {
     val defaults = AppSettings()
-    val followCalls = this[Keys.followCalls]
-        ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
-        ?.toSet()
-        ?: defaults.followCalls
+    // 旧版「自动收录 CQ 台」写进名单的呼号（3ed6562 已删除该功能）是遗留脏数据：它会被
+    // 「自动跟踪 CQ」的「⭐ 名单例外」放行，让那个开关看起来关不掉。这里一次性剔除。
+    val legacyAutoFollow = splitLines(this[Keys.autoFollowOrder]) ?: emptyList()
+    val followCalls = purgeLegacyAutoFollow(
+        this[Keys.followCalls]
+            ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
+            ?.toSet()
+            ?: defaults.followCalls,
+        legacyAutoFollow,
+    )
     // CQ 前缀格子：保留空格子（空串＝普通 CQ），最后按格子数夹一下选中的下标
     val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
     val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
         .coerceIn(0, (cqPrefixes.size - 1).coerceAtLeast(0))
-    // 「自动收录」顺序（**旧版遗留**：新版照 FT8CN 不再自动写名单，此字段不再有新写入）：
-    // 去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
-    val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
-        .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
-        .distinct()
-        .filter { it in followCalls }
-        .take(LEGACY_AUTO_FOLLOW_MAX)
     return AppSettings(
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,
@@ -204,7 +198,8 @@ private fun Preferences.toAppSettings(): AppSettings {
             ?.toSet()
             ?: defaults.ignoredCalls,
         followCalls = followCalls,
-        autoFollowOrder = autoFollowOrder,
+        // 旧版「自动收录」顺序不再有写入方：恒空（写回时会把持久化键一并清空）
+        autoFollowOrder = emptyList(),
         cqPrefixes = cqPrefixes,
         cqPrefixIndex = cqPrefixIndex,
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
