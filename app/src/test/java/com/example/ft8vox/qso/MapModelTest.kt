@@ -40,6 +40,21 @@ class MapModelTest {
         assertEquals(setOf("PM95", "FN42"), squares)
     }
 
+    // ---- decodedGrids ----
+
+    @Test
+    fun decodedGridsKeepLatestGridPerCall() {
+        val grids = MapModel.decodedGrids(
+            listOf(
+                decoded("CQ JA1ABC PM95", slotUtcMs = 1000),
+                decoded("CQ JA1ABC PM96", slotUtcMs = 2000),
+                decoded("W1AW K1ABC FN42", slotUtcMs = 3000),
+                decoded("F4FSY JA1ABC -12", slotUtcMs = 4000),
+            ),
+        )
+        assertEquals(mapOf("JA1ABC" to "PM96", "K1ABC" to "FN42"), grids)
+    }
+
     // ---- gridMarkers ----
 
     @Test
@@ -95,6 +110,22 @@ class MapModelTest {
         assertTrue(m.fromPrefix)
         // 日本近似坐标
         assertTrue(m.lat in 30.0..40.0 && m.lon in 130.0..145.0)
+    }
+
+    @Test
+    fun callMarkerUsesGridReceivedElsewhereInSession() {
+        // 本会话里收到过 JA1ABC 的网格（PM95）→ 后面那条没有网格的报文也按 PM95 定位，
+        // 不再退到呼号前缀归属地（§30）
+        val markers = MapModel.callMarkers(
+            messages = listOf(
+                decoded("CQ JA1ABC PM95", slotUtcMs = 1000),
+                decoded("F4FSY JA1ABC -08", slotUtcMs = 2000),
+            ),
+            myCall = "F4FSY",
+        )
+        assertEquals(1, markers.size)
+        assertEquals("PM95", markers[0].grid)
+        assertFalse(markers[0].fromPrefix)
     }
 
     @Test
@@ -223,6 +254,39 @@ class MapModelTest {
             gridCache = mapOf("JA1ABC" to "PM95"),
         )
         assertEquals(0, links.size)
+    }
+
+    @Test
+    fun linkEndpointPrefersReceivedGridOverPrefixLocation() {
+        // 先收到 JA1ABC 的网格 PM95；之后那条报文里没有网格 → 端点仍落在 PM95，
+        // 而不是呼号前缀归属地（日本近似坐标）
+        val links = MapModel.signalLinks(
+            messages = listOf(
+                decoded("CQ JA1ABC PM95", slotUtcMs = 1000),
+                decoded("F4FSY JA1ABC -12", slotUtcMs = 2000),
+            ),
+            myCall = "F4FSY",
+            myGrid = "JN25",
+        )
+        assertEquals(1, links.size)
+        val pm95 = Maidenhead.center("PM95")!!
+        assertEquals(pm95.first, links[0].fromLat, 1e-9)
+        assertEquals(pm95.second, links[0].fromLon, 1e-9)
+    }
+
+    @Test
+    fun linkMineWhenMessageMentionsMyCallWithPortableSuffix() {
+        // 我带 /P 出门：报文里写的是 F4FSY/P，仍算「报文里有我」→ 标红，并用我的网格定位
+        val links = MapModel.signalLinks(
+            messages = listOf(decoded("JA1ABC F4FSY/P -12", slotUtcMs = 1000)),
+            myCall = "F4FSY",
+            myGrid = "JN25",
+            gridCache = mapOf("JA1ABC" to "PM95"),
+        )
+        assertEquals(1, links.size)
+        assertTrue(links[0].mine)
+        val my = Maidenhead.center("JN25")!!
+        assertEquals(my.first, links[0].fromLat, 1e-9)
     }
 
     @Test
