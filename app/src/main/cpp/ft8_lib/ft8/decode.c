@@ -30,7 +30,7 @@ static const float db_power_sum[40] = {
 // ftx_normalize_logl() 把一条候选的 174 个 LLR 归一到「方差 = 本值」。ft8_lib 原为
 // 24.0（标准差 ≈ 4.9）。WSJT-X ft8b.f90 的 normalizebmet() 归一到标准差 1，再乘
 // scalefac = 2.83，等效方差 2.83² ≈ 8.0。两者只差一个常数，但会与 BP 的 tanh
-// 非线性相互作用。离线语料实测（69 个 wav / 期望 1298 条，passes=2）：
+// 非线性相互作用。离线语料实测（69 个 wav / 期望 1298 条）：
 // 4 → 899、8 → 974、24 → 989、48 → 982，即 24 已是峰值，故保持不动。
 // -----------------------------------------------------------------------------
 #ifndef FTX_LLR_NORM_VARIANCE
@@ -211,11 +211,14 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
     // Here we allow time offsets that exceed signal boundaries, as long as we still have all data bits.
     // I.e. we can afford to skip the first 7 or the last 7 Costas symbols, as long as we track how many
     // sync symbols we included in the score, so the score is averaged.
+    //
+    // 时间搜索窗 [-12, 24)（单位＝1/(2 * 符号率) 的半步）：照 FT8CN `ft8_find_sync`，
+    // 比 ft8_lib 原版（[-10, 20)）更宽，能捞到晚到/早到的信号。FT8/FT4 共用此窗。
     for (candidate.time_sub = 0; candidate.time_sub < wf->time_osr; ++candidate.time_sub)
     {
         for (candidate.freq_sub = 0; candidate.freq_sub < wf->freq_osr; ++candidate.freq_sub)
         {
-            for (candidate.time_offset = -10; candidate.time_offset < 20; ++candidate.time_offset)
+            for (candidate.time_offset = -12; candidate.time_offset < 24; ++candidate.time_offset)
             {
                 for (candidate.freq_offset = 0; (candidate.freq_offset + num_tones - 1) < wf->num_bins; ++candidate.freq_offset)
                 {

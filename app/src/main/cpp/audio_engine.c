@@ -635,7 +635,7 @@ JNIEXPORT void JNICALL
 Java_com_example_ft8vox_engine_AudioEngine_nativeSetDecodeParams(
     JNIEnv* env, jobject thiz, jlong handle,
     jint min_score, jint max_candidates, jint ldpc_iterations, jint max_decoded,
-    jint passes)
+    jboolean deep)
 {
     audio_engine_t* e = (audio_engine_t*)(intptr_t)handle;
     if (e == NULL || e->session == NULL)
@@ -645,7 +645,7 @@ Java_com_example_ft8vox_engine_AudioEngine_nativeSetDecodeParams(
         .max_candidates = max_candidates,
         .ldpc_iterations = ldpc_iterations,
         .max_decoded = max_decoded,
-        .passes = passes,
+        .deep = deep ? 1 : 0,
     };
     ftx_session_set_decode_params(e->session, &p);
 }

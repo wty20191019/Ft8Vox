@@ -6,11 +6,12 @@
 #include "ftx_session.h"
 
 // 与 Kotlin data class com.example.ft8vox.engine.DecodeResult 对应：
-//   DecodeResult(text: String, snr: Int, dt: Float, df: Int, score: Int, slotUtcMs: Long)
-// 构造器签名 (Ljava/lang/String;IFIIJ)V。
+//   DecodeResult(text: String, snr: Int, dt: Float, df: Int, score: Int, slotUtcMs: Long,
+//                deep: Boolean)
+// 构造器签名 (Ljava/lang/String;IFIIJZ)V。
 // 修改 Kotlin 侧字段/顺序时，务必同步更新此处。
 #define FT8VOX_DECODE_RESULT_CLASS "com/example/ft8vox/engine/DecodeResult"
-#define FT8VOX_DECODE_RESULT_CTOR  "(Ljava/lang/String;IFIIJ)V"
+#define FT8VOX_DECODE_RESULT_CTOR  "(Ljava/lang/String;IFIIJZ)V"
 
 static inline jclass ft8vox_decode_result_class(JNIEnv* env)
 {
@@ -22,7 +23,8 @@ static inline jobject ft8vox_make_decode_result(JNIEnv* env, jclass cls, jmethod
 {
     jstring text = (*env)->NewStringUTF(env, r->text);
     jobject obj = (*env)->NewObject(env, cls, ctor, text, (jint)r->snr, (jfloat)r->dt,
-                                    (jint)r->df, (jint)r->score, slot_utc_ms);
+                                    (jint)r->df, (jint)r->score, slot_utc_ms,
+                                    (jboolean)(r->deep != 0));
     if (text != NULL)
         (*env)->DeleteLocalRef(env, text);
     return obj;

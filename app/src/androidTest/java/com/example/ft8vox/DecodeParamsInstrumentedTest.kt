@@ -43,19 +43,20 @@ class DecodeParamsInstrumentedTest {
 
     @Test
     fun decodesWithFastPreset() {
-        // passes = 1（关 SIC）也要能解出：顺带覆盖 JNI 第 5 个参数（SIC 趟数）
+        // deep=false（快档，单趟不减谱）也要能解出：顺带覆盖 JNI 第 5 个参数（深解开关）
         assertDecoded(
             DecodeParams.of(
-                minScore = 12, maxCandidates = 80, ldpcIterations = 10, maxDecoded = 30, passes = 1,
+                minScore = 12, maxCandidates = 80, ldpcIterations = 10, maxDecoded = 30, deep = false,
             ),
         )
     }
 
     @Test
     fun decodesWithDeepPreset() {
+        // deep=true：走「高迭代深跑 + 减谱重解循环」，同样要能解出
         assertDecoded(
             DecodeParams.of(
-                minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80, passes = 4,
+                minScore = 8, maxCandidates = 250, ldpcIterations = 50, maxDecoded = 80, deep = true,
             ),
         )
     }

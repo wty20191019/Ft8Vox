@@ -765,7 +765,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 记一行「我方发射」（TX 行），初始状态 [TxOutcome.PLAYING]。
      *
-     * 在真正开始播的那一刻调用（[transmit] / [sendNow]），所以 TX 行**一开播就出现**。
+     * 在真正开始播的那一刻调用（[transmit]），所以 TX 行**一开播就出现**。
      */
     private fun beginTxRecord(text: String, slotUtcMs: Long): Long {
         val id = ++txRecordSeq
@@ -1121,57 +1121,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 立即发射一条报文（**不按时隙对齐**，用于发射抽屉的「立即发」）。
-     *
-     * 正式按时隙发射请用 [sendOnce]（排到下一个我方周期）。
-     */
-    fun sendNow(text: String) {
-        if (!canOperate) {
-            _status.update { it.copy(status = "请先填写呼号") }
-            return
-        }
-        if (!_status.value.txEnabled) {
-            _status.update { it.copy(status = "请先打开「发射」开关") }
-            return
-        }
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
-        if (!_status.value.running) start()
-        if (!_status.value.running) return
-        if (!armPlayback()) return
-
-        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
-        val (pttMs, leadMs) = txPreambleParts()
-        val abortAtPlan = txAbortGen
-        txJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val st = _status.value
-                val pcm = Ft8Engine.encode(trimmed, st.selectedFreqHz.toFloat(), st.protocol, 12000)
-                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
-                // TX 行（§37）：「立即发」不对齐时隙，用当前 UTC 当作时间轴上的位置。
-                val recId = beginTxRecord(trimmed, AudioEngine.utcNowMs())
-                _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
-                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
-                if (abortAtPlan == txAbortGen && written > 0) {
-                    finishTxRecord(recId)
-                } else {
-                    abortPlayingTxRecord()
-                }
-                _status.update {
-                    it.copy(
-                        status = if (written > 0) "已发射「$trimmed」（$written 帧）"
-                        else "发射失败：$OUT_STALLED_FAIL",
-                    )
-                }
-            } catch (e: Exception) {
-                _status.update { it.copy(status = "发射失败: ${e.message}") }
-            } finally {
-                _status.update { it.copy(txing = false) }
-            }
-        }
-    }
-
-    /**
      * 紧急停止发射：解除武装并中止可能正在进行的播放。
      *
      * **只停本次发射，不动自动程序**：发送总开关仍开着时，下一时隙自动程序会继续
@@ -1215,42 +1164,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         txAbortGen++
         abortPlayingTxRecord()   // 被作废的那次发射 → TX 行标「未发完」（§37）
         AudioEngine.abortTx()
-    }
-
-    /**
-     * 立即播放一段测试波形（**不按时隙对齐**，仅用于验证音频通路与音量）。
-     *
-     * 正式发射请用 [startCq] / [answer]。
-     */
-    fun transmitTest() {
-        val st = _status.value
-        val text = st.qso.txText
-            ?: if (canOperate) listOf("CQ", st.myCall, st.myGrid).filter { it.isNotEmpty() }.joinToString(" ")
-            else "CQ TEST"
-        if (!armPlayback()) return
-        abortTransmit()   // 作废可能正在响的那一段（非阻塞）
-        val (pttMs, leadMs) = txPreambleParts()
-        val genAtPlan = engineGen
-        val abortAtPlan = txAbortGen
-        txJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                if (genAtPlan != engineGen) return@launch   // 期间重建过引擎：丢弃
-                val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
-                if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
-                _status.update { it.copy(txing = true) }
-                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
-                _status.update {
-                    it.copy(
-                        status = if (written > 0) "已发射测试「$text」（$written 帧）"
-                        else "发射失败：$OUT_STALLED_FAIL",
-                    )
-                }
-            } catch (e: Exception) {
-                _status.update { it.copy(status = "发射失败: ${e.message}") }
-            } finally {
-                _status.update { it.copy(txing = false) }
-            }
-        }
     }
 
     /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */

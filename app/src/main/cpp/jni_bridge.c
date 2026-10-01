@@ -64,12 +64,12 @@ Java_com_example_ft8vox_engine_Ft8Engine_nativeRelease(JNIEnv* env, jobject thiz
     ftx_session_free((ftx_session_t*)(intptr_t)handle);
 }
 
-// 热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限/SIC 趟数）。
+// 热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限/深度解码）。
 JNIEXPORT void JNICALL
 Java_com_example_ft8vox_engine_Ft8Engine_nativeSetDecodeParams(
     JNIEnv* env, jobject thiz, jlong handle,
     jint min_score, jint max_candidates, jint ldpc_iterations, jint max_decoded,
-    jint passes)
+    jboolean deep)
 {
     ftx_session_t* session = (ftx_session_t*)(intptr_t)handle;
     if (session == NULL)
@@ -79,7 +79,7 @@ Java_com_example_ft8vox_engine_Ft8Engine_nativeSetDecodeParams(
         .max_candidates = max_candidates,
         .ldpc_iterations = ldpc_iterations,
         .max_decoded = max_decoded,
-        .passes = passes,
+        .deep = deep ? 1 : 0,
     };
     ftx_session_set_decode_params(session, &p);
 }

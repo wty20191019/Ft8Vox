@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include <stdatomic.h>
 
 #include <ft8/decode.h>
@@ -34,12 +35,11 @@
 #define K_DEFAULT_LDPC_ITERATIONS 20
 #define K_DEFAULT_MAX_DECODED    100
 
-// SIC（多趟减谱重解）默认趟数与上限：1 = 关闭（单趟）。实测单趟无论怎么放宽候选
-// 数 / LDPC 迭代 / 得分门槛都涨不了，而「同频被强台压住」的弱信号要靠抹掉强信号
-// 才露得出来：官方 60 个测试音频 956 → 989（+33）条，零回归；同频且强度差大的
-// 相干泄漏仍解不出，那部分要时域相减（见 docs/Ft8Vox.md）。
-#define K_DEFAULT_DECODE_PASSES 2
-#define K_MAX_DECODE_PASSES     4
+// 深度解码（照 FT8CN 深档 `deep_kLDPC_iterations`）：快跑之外再以高迭代深跑一趟，
+// 随后做减谱重解循环，直到不再出新解或超过时间预算（FT8CN 的
+// `DEEP_DECODE_TIMEOUT = 7000 ms`，从本次解码开始计时）。
+#define K_DEEP_LDPC_ITERATIONS 200
+#define K_DEEP_TIME_BUDGET_MS  7000
 
 /// 候选/解码结果数组的静态上限，必须 ≥ 允许设置的最大值（见 Kotlin 侧 RANGE）。
 #define K_MAX_CANDIDATES_LIMIT 512
@@ -186,8 +186,8 @@ struct ftx_session
 
     ftx_decode_params_t decode; ///< 热生效的解码参数（每次 decode 读取）
 
-    /// SIC（多趟减谱重解）用的瀑布幅度副本：与 mon.wf.mag 同尺寸，第 2 趟起
-    /// 先拷贝原始幅度、再把已解报文的音调置零，在残留谱上找被掩盖的弱信号。
+    /// 深档减谱循环用的瀑布幅度副本：与 mon.wf.mag 同尺寸；先拷贝原始幅度，
+    /// 再把已解报文的音调 bin（±2）置零，在残留谱上重搜重解被掩盖的弱信号。
     WF_ELEM_T* sic_mag;
     size_t sic_elems; ///< sic_mag 的元素个数（= max_blocks * block_stride）
     size_t sic_bytes; ///< sic_mag 的字节数（memcpy 用）
@@ -205,6 +205,14 @@ static int clamp_int(int v, int lo, int hi)
     return v;
 }
 
+/// 单调时钟（ms）：深档减谱循环的时间预算用；不受校时/改表影响。
+static int64_t ftx_monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
 ftx_decode_params_t ftx_decode_params_default(void)
 {
     ftx_decode_params_t p = {
@@ -212,7 +220,7 @@ ftx_decode_params_t ftx_decode_params_default(void)
         .max_candidates = K_DEFAULT_MAX_CANDIDATES,
         .ldpc_iterations = K_DEFAULT_LDPC_ITERATIONS,
         .max_decoded = K_DEFAULT_MAX_DECODED,
-        .passes = K_DEFAULT_DECODE_PASSES,
+        .deep = 0,
     };
     return p;
 }
@@ -227,8 +235,8 @@ static ftx_decode_params_t sanitize_decode_params(const ftx_decode_params_t* in)
     p.max_candidates = clamp_int(in->max_candidates, 20, K_MAX_CANDIDATES_LIMIT);
     p.ldpc_iterations = clamp_int(in->ldpc_iterations, 5, 60);
     p.max_decoded = clamp_int(in->max_decoded, 5, K_MAX_DECODED_LIMIT);
-    // passes 未下发（0，例如 JNI 侧只填了前 4 个字段）时用默认 2 趟。
-    p.passes = (in->passes >= 1) ? clamp_int(in->passes, 1, K_MAX_DECODE_PASSES) : K_DEFAULT_DECODE_PASSES;
+    // 深度解码：非 0 即开（旧调用方只填前 4 个字段时为 0 ⇒ 快档）。
+    p.deep = (in->deep != 0) ? 1 : 0;
     return p;
 }
 
@@ -544,35 +552,18 @@ static float measure_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
 }
 
 // -----------------------------------------------------------------------------
-// SIC：多趟减谱重解
+// 深档减谱（SIC，照 FT8CN `ReBuildSignal.doSubtractSignal`）
 //
-// 单趟解码只能看到「最强的一层」。实测在官方 60 个测试音频上放宽候选数
-// （120→500）、LDPC 迭代（20→60）、得分门槛（10→4）、过采样（2/2→2/4、4/4）
-// 都一条不涨；把「期望里有、我们没解出」的 369 条做分类后发现 266 条（72%）都
-// 与某条已解出报文同频（相距 0~3 Hz）——即同频串扰，只能靠抹掉强信号才露得出
-// 弱信号，这就是本函数据以生效的场景。
+// 单趟解码只能看到「最强的一层」；被强台压住的同频弱信号要靠抹掉已解信号才露得出。
+// FT8CN 深档做法：对每条已解报文，用它的 payload 重新编码出真实音调序列，把每个
+// 符号在瀑布幅度谱上占用的频点连同左右各 2 个 bin（共 5 个）置零，覆盖两个 time_sub
+// 行；随后在残留谱上重新搜候选、重解，直到不再出新解或超时。
 //
-// 做法：对每条已解报文，用它的 payload 重新编码出真实音调序列，逐符号只抹掉该
-// 符号实际使用的那 1 个音调 bin，抹平到该 bin 附近的本地最低幅度。在残留谱上重
-// 新搜候选再解一趟，即可多解出同频被压住的弱信号。
-//
-// 三个坑（都实测踩过，故数值写死）：
-//   1) 不能把整段 8 个音调 bin 全程一起抹平——同频伙伴正住在这段带宽里，会被一
-//      起毁掉：60 个音频合计一条都不多解。
-//   2) 不能把 bin 置零——sync 得分是「相邻 bin 相减」的差值指标，置零会凿出深坑，
-//      坑沿的「实测值 − 0」造出比真信号还高的假分（实测假分 74 vs 真信号 32），
-//      候选名额被占光。压平到本地最低幅度不产生边沿。
-//   3) 「本地最低幅度」的窗口取 ±1 bin（4 个 bin）最好；取整个 8 音调带宽反而更
-//      差（test_11 21→20、test_25 22→21、websdr_test5 19→17）。
-//
-// 效果（60 个官方测试音频，期望 1298 条）：单趟 956 → 2 趟 989（+33 / +3.5%），
-// 21 个文件有增益、零回归；+33 条中 32 条在期望清单内（即真报文），另 1 条属
-// 「我们解出但参考清单没有」的那一类，该类在单趟时本来就有 27 条（2.8%），比例
-// 不变。耗时每时隙 +约 10 ms。
+// 实现说明：FT8CN 是直接就地改 `wf.mag`；这里改的是 `sic_mag`（`wf->mag` 的副本），
+// 实时瀑布不受影响，故可与采集线程并发。
 // -----------------------------------------------------------------------------
 
-/// 用报文真实音调序列，把该信号在每个符号上占用的那 1 个音调 bin「抹平」
-/// （dst = wf->mag 的副本）。
+/// 用报文真实音调序列，把该信号在瀑布幅度副本上占用的频点（±2 bin）置零。
 static void sic_subtract_message(const ftx_waterfall_t* wf, WF_ELEM_T* dst, size_t dst_elems,
                                  const ftx_message_t* msg, const ftx_candidate_t* cand)
 {
@@ -580,12 +571,9 @@ static void sic_subtract_message(const ftx_waterfall_t* wf, WF_ELEM_T* dst, size
     const int num_tones = is_ft4 ? 4 : 8;
     const int num_symbols = is_ft4 ? FT4_NN : FT8_NN;
 
-    // 抹平区间（相对音调 bin）：只抹音调 bin 自身
-    const int erase_lo = -1;
-    const int erase_hi = 1;
-    // 取本地最低幅度时向两侧多看的区间：tone-2 .. tone+1
-    const int floor_lo = -2;
-    const int floor_hi = 2;
+    // 置零区间（相对音调 bin）：±2 个 bin（共 5 个），照 FT8CN。
+    const int zero_lo = -2;
+    const int zero_hi = 2;
 
     uint8_t tones[FT4_NN];
     if (is_ft4)
@@ -607,38 +595,136 @@ static void sic_subtract_message(const ftx_waterfall_t* wf, WF_ELEM_T* dst, size
         const int tone_bin = cand->freq_offset + tone;
 
         // 布局为 [block][time_sub][freq_sub][bin]；同一信号在每个 time_sub / freq_sub
-        // 子谱里都占同一段 bin，故四处都抹平。
+        // 子谱里都占同一段 bin，故四处都置零。
         for (int ts = 0; ts < wf->time_osr; ++ts)
         {
             for (int fs = 0; fs < wf->freq_osr; ++fs)
             {
                 const int base = block * wf->block_stride + ts * ts_stride + fs * wf->num_bins;
-
-                int floor_mag = 255;
-                for (int b = tone_bin + floor_lo; b < tone_bin + floor_hi; ++b)
-                {
-                    const int idx = base + b;
-                    if (idx < 0 || (size_t)idx >= dst_elems)
-                        continue;
-                    if (dst[idx] < floor_mag)
-                        floor_mag = dst[idx];
-                }
-                if (floor_mag == 255)
-                    continue;
-
-                for (int b = tone_bin + erase_lo; b < tone_bin + erase_hi; ++b)
+                for (int b = tone_bin + zero_lo; b <= tone_bin + zero_hi; ++b)
                 {
                     const int idx = base + b;
                     if (idx >= 0 && (size_t)idx < dst_elems)
-                        dst[idx] = (WF_ELEM_T)floor_mag;
+                        dst[idx] = 0;
                 }
             }
         }
     }
 }
 
+/// 解码编排的共享状态：去重哈希表 + 输出缓冲，跨「快跑 / 深跑 / 减谱循环」共用。
+typedef struct
+{
+    const ftx_session_t* session;
+    const ftx_waterfall_t* base_wf; ///< 原始瀑布（估 SNR 用；残留谱已被抹零）
+    int max_candidates;
+    int min_score;
+    int hash_size;
+    ftx_message_t* decoded;            ///< 哈希表槽位（按 idx_hash 散放）
+    ftx_message_t** decoded_hashtable; ///< 槽位指针；NULL = 空
+    ftx_candidate_t* decoded_cand;     ///< 各槽位报文对应的候选位置（减谱用）
+    ftx_decode_result_t* results;
+    int out_cap;
+    int num_decoded;
+    int num_out;
+    bool deep; ///< 本次扫描产生的报文是否标记为深档
+} decode_ctx_t;
+
+/// 在一份瀑布上「搜候选 + 逐条解码 + 去重」：新解出的报文写入结果缓冲并登记到共享
+/// 哈希表；返回本次**新增**的条数。`ldpc_iterations` 由调用方给（快档/深档）。
+static int decode_scan(decode_ctx_t* ctx, const ftx_waterfall_t* cur, int ldpc_iterations)
+{
+    ftx_candidate_t candidates[K_MAX_CANDIDATES_LIMIT];
+    const ftx_session_t* session = ctx->session;
+    const int hash_size = ctx->hash_size;
+
+    // 按 Costas 同步得分定位候选（候选数与最低得分可调）
+    const int num_candidates =
+        ftx_find_candidates(cur, ctx->max_candidates, candidates, ctx->min_score);
+    int newly = 0;
+
+    for (int idx = 0; idx < num_candidates; ++idx)
+    {
+        const ftx_candidate_t* cand = &candidates[idx];
+
+        ftx_message_t message;
+        ftx_decode_status_t status;
+        if (!ftx_decode_candidate(cur, cand, ldpc_iterations, &message, &status))
+            continue;
+
+        // 去重（探测次数以表长为界，防止表满时死循环）
+        int idx_hash = message.hash % hash_size;
+        bool found_empty = false;
+        bool found_duplicate = false;
+        int probes = 0;
+        do
+        {
+            if (ctx->decoded_hashtable[idx_hash] == NULL)
+            {
+                found_empty = true;
+            }
+            else if ((ctx->decoded_hashtable[idx_hash]->hash == message.hash) &&
+                     (0 == memcmp(ctx->decoded_hashtable[idx_hash]->payload, message.payload,
+                                  sizeof(message.payload))))
+            {
+                found_duplicate = true;
+            }
+            else
+            {
+                idx_hash = (idx_hash + 1) % hash_size;
+            }
+        } while (!found_empty && !found_duplicate && (++probes < hash_size));
+
+        if (!found_empty)
+            continue;
+
+        // 注意 decoded[] 是哈希表（按 idx_hash 散列存放），必须遍历槽位，
+        // 不能按 0..num_decoded-1 顺序取。
+        memcpy(&ctx->decoded[idx_hash], &message, sizeof(message));
+        ctx->decoded_hashtable[idx_hash] = &ctx->decoded[idx_hash];
+        ctx->decoded_cand[idx_hash] = *cand;
+        ++ctx->num_decoded;
+        ++newly;
+
+        char text[FTX_MAX_MESSAGE_LENGTH];
+        ftx_message_offsets_t offsets;
+        if (ftx_message_decode(&message, &hash_if, text, &offsets) != FTX_MESSAGE_RC_OK)
+            continue;
+
+        if (ctx->num_out >= ctx->out_cap)
+            continue;
+
+        ftx_decode_result_t* out = &ctx->results[ctx->num_out];
+        strncpy(out->text, text, FTX_MAX_MESSAGE_LENGTH - 1);
+        out->text[FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
+
+        float freq_hz = (session->mon.min_bin + cand->freq_offset +
+                         (float)cand->freq_sub / cur->freq_osr) / session->mon.symbol_period;
+        float time_sec = (cand->time_offset + (float)cand->time_sub / cur->time_osr) *
+                         session->mon.symbol_period;
+
+        out->df = (int)lroundf(freq_hz);
+        // 发射/接收的名义起点在时隙起点后 0.5 s；减去它以得到 WSJT-X 口径的 DT
+        out->dt = time_sec - 0.5f;
+        out->score = cand->score;
+        // SNR 一律用原始瀑布估：残留谱上信号已被抹零，拿它算会偏低。
+        out->snr = (int)lroundf(measure_snr(ctx->base_wf, cand, &message));
+        out->deep = ctx->deep ? 1 : 0;
+
+        ++ctx->num_out;
+    }
+
+    return newly;
+}
+
 /// 解码一份瀑布：`wf` 既可以是实时瀑布（`&session->mon.wf`），也可以是后台解码线程的
 /// 冻结快照。只读 `session` 的解码参数与 SIC 缓冲、**不碰实时瀑布**，故可与采集线程并发。
+///
+/// 编排照 FT8CN 深档（`FT8SignalListener.decodeFt8`）：
+///   1) 快跑：原始瀑布上按快档迭代解一趟；
+///   2) 深档：再用高迭代（200）深跑一趟，补回快跑迭代不够而漏掉的弱候选；
+///   3) 深档：把已解报文在瀑布幅度副本上置零，在残留谱上反复深跑，直到不再出新解
+///      或超过时间预算（从本次解码开始计 7 s）。
 static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
                             ftx_decode_result_t* results, int max_results)
 {
@@ -647,7 +733,7 @@ static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
 
     const ftx_decode_params_t p = session->decode;
 
-    // 本时隙已解码消息的哈希表（去重），decoded_cand 记录各自的位置供 SIC 减谱
+    // 本时隙已解码消息的哈希表（去重），decoded_cand 记录各自的位置供减谱
     ftx_message_t decoded[K_MAX_DECODED_LIMIT];
     ftx_message_t* decoded_hashtable[K_MAX_DECODED_LIMIT];
     ftx_candidate_t decoded_cand[K_MAX_DECODED_LIMIT];
@@ -655,112 +741,61 @@ static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
     for (int i = 0; i < hash_size; ++i)
         decoded_hashtable[i] = NULL;
 
-    // 输出同时受调用方缓冲（max_results）与设置（max_decoded）限制
-    const int out_cap = (p.max_decoded < max_results) ? p.max_decoded : max_results;
+    const int64_t t0 = ftx_monotonic_ms();
 
-    ftx_candidate_t candidates[K_MAX_CANDIDATES_LIMIT];
-    int num_decoded = 0; // 去重后的已解条数（可能多于写入 results 的条数）
-    int num_out = 0;
+    decode_ctx_t ctx = {
+        .session = session,
+        .base_wf = wf,
+        .max_candidates = p.max_candidates,
+        .min_score = p.min_score,
+        .hash_size = hash_size,
+        .decoded = decoded,
+        .decoded_hashtable = decoded_hashtable,
+        .decoded_cand = decoded_cand,
+        .results = results,
+        // 输出同时受调用方缓冲（max_results）与设置（max_decoded）限制
+        .out_cap = (p.max_decoded < max_results) ? p.max_decoded : max_results,
+        .num_decoded = 0,
+        .num_out = 0,
+        .deep = false,
+    };
 
-    const int passes = (p.passes < 1) ? 1 : p.passes;
-    for (int pass = 0; pass < passes; ++pass)
+    // 1) 快跑（原始瀑布，快档迭代）
+    decode_scan(&ctx, wf, p.ldpc_iterations);
+
+    if (p.deep && session->sic_mag != NULL)
     {
-        // 第 1 趟用原始瀑布；后续趟先在「抹掉已解报文」的副本上搜候选
-        ftx_waterfall_t residual;
-        const ftx_waterfall_t* cur = wf;
-        if (pass > 0)
+        // 2) 深跑（原始瀑布，高迭代）——不先减谱
+        ctx.deep = true;
+        decode_scan(&ctx, wf, K_DEEP_LDPC_ITERATIONS);
+
+        // 3) 减谱循环：残留谱上反复「置零已解 → 深跑」
+        memcpy(session->sic_mag, wf->mag, session->sic_bytes);
+        ftx_waterfall_t residual = *wf;
+        residual.mag = session->sic_mag;
+
+        for (;;)
         {
-            if (session->sic_mag == NULL)
+            // 超时检测放在减谱之前（照 FT8CN：时间算的是整个解码过程）
+            if (ftx_monotonic_ms() - t0 >= K_DEEP_TIME_BUDGET_MS)
                 break;
-            memcpy(session->sic_mag, wf->mag, session->sic_bytes);
+
             for (int i = 0; i < hash_size; ++i)
             {
-                // 注意 decoded[] 是哈希表（按 idx_hash 散列存放），必须遍历槽位，
-                // 不能按 0..num_decoded-1 顺序取。
                 if (decoded_hashtable[i] != NULL)
                     sic_subtract_message(wf, session->sic_mag, session->sic_elems,
                                          decoded_hashtable[i], &decoded_cand[i]);
             }
-            residual = *wf;
-            residual.mag = session->sic_mag;
-            cur = &residual;
-        }
 
-        // 按 Costas 同步得分定位候选（候选数与最低得分可调）
-        const int num_candidates = ftx_find_candidates(cur, p.max_candidates, candidates, p.min_score);
-
-        for (int idx = 0; idx < num_candidates; ++idx)
-        {
-            const ftx_candidate_t* cand = &candidates[idx];
-
-            ftx_message_t message;
-            ftx_decode_status_t status;
-            if (!ftx_decode_candidate(cur, cand, p.ldpc_iterations, &message, &status))
-                continue;
-
-            // 去重（探测次数以表长为界，防止表满时死循环）
-            int idx_hash = message.hash % hash_size;
-            bool found_empty = false;
-            bool found_duplicate = false;
-            int probes = 0;
-            do
-            {
-                if (decoded_hashtable[idx_hash] == NULL)
-                {
-                    found_empty = true;
-                }
-                else if ((decoded_hashtable[idx_hash]->hash == message.hash) &&
-                         (0 == memcmp(decoded_hashtable[idx_hash]->payload, message.payload,
-                                      sizeof(message.payload))))
-                {
-                    found_duplicate = true;
-                }
-                else
-                {
-                    idx_hash = (idx_hash + 1) % hash_size;
-                }
-            } while (!found_empty && !found_duplicate && (++probes < hash_size));
-
-            if (!found_empty)
-                continue;
-
-            memcpy(&decoded[idx_hash], &message, sizeof(message));
-            decoded_hashtable[idx_hash] = &decoded[idx_hash];
-            decoded_cand[idx_hash] = *cand;
-            ++num_decoded;
-
-            char text[FTX_MAX_MESSAGE_LENGTH];
-            ftx_message_offsets_t offsets;
-            if (ftx_message_decode(&message, &hash_if, text, &offsets) != FTX_MESSAGE_RC_OK)
-                continue;
-
-            if (num_out >= out_cap)
-                continue;
-
-            ftx_decode_result_t* out = &results[num_out];
-            strncpy(out->text, text, FTX_MAX_MESSAGE_LENGTH - 1);
-            out->text[FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
-
-            float freq_hz = (session->mon.min_bin + cand->freq_offset +
-                             (float)cand->freq_sub / wf->freq_osr) / session->mon.symbol_period;
-            float time_sec = (cand->time_offset + (float)cand->time_sub / wf->time_osr) *
-                             session->mon.symbol_period;
-
-            out->df = (int)lroundf(freq_hz);
-            // 发射/接收的名义起点在时隙起点后 0.5 s；减去它以得到 WSJT-X 口径的 DT
-            out->dt = time_sec - 0.5f;
-            out->score = cand->score;
-            // SNR 一律用原始瀑布估：残留谱上信号已被抹掉，拿它算会偏低。
-            out->snr = (int)lroundf(measure_snr(wf, cand, &message));
-
-            ++num_out;
+            if (decode_scan(&ctx, &residual, K_DEEP_LDPC_ITERATIONS) == 0)
+                break;
         }
     }
 
     // 呼号哈希表老化（跨时隙保留）
     hashtable_cleanup(10);
 
-    return num_out;
+    return ctx.num_out;
 }
 
 int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int max_results)

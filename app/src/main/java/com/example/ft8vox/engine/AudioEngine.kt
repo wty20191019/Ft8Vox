@@ -98,7 +98,7 @@ object AudioEngine {
     }
 
     /**
-     * 更新热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限/SIC 趟数）。
+     * 更新热生效的解码参数（候选数/最低得分/LDPC 迭代/单时隙上限/深度解码）。
      * 需先 [initialize]；未初始化时静默忽略。
      */
     fun setDecodeParams(params: DecodeParams) {
@@ -110,7 +110,7 @@ object AudioEngine {
                 p.maxCandidates,
                 p.ldpcIterations,
                 p.maxDecoded,
-                p.passes,
+                p.deep,
             )
         }
     }
@@ -293,7 +293,7 @@ object AudioEngine {
         maxCandidates: Int,
         ldpcIterations: Int,
         maxDecoded: Int,
-        passes: Int,
+        deep: Boolean,
     )
 
     private external fun nativeDestroy(handle: Long)

@@ -20,6 +20,7 @@ typedef struct
     float dt;                          ///< 相对时隙起点的时间偏移（秒），名义 0
     int df;                            ///< 音频频率偏移（Hz）
     int score;                         ///< Costas 同步得分
+    int deep;                          ///< 是否来自深档（0=快跑，1=深跑/减谱循环）
 } ftx_decode_result_t;
 
 /// 可调解码参数（**热生效**：每次 ftx_session_decode 读取，无需重建会话）。
@@ -30,15 +31,16 @@ typedef struct
 {
     int min_score;       ///< Costas 同步最低得分，越高候选越少越快
     int max_candidates;  ///< 单时隙候选上限
-    int ldpc_iterations; ///< LDPC 最大迭代次数，越高越慢但弱信号更有机会
+    int ldpc_iterations; ///< 快档 LDPC 最大迭代次数，越高越慢但弱信号更有机会
     int max_decoded;     ///< 单时隙最多解出的报文条数
-    /// SIC 解码趟数：1 = 单趟（不做减谱重解）；2 = 解完一趟后把所有已解报文
-    /// 在瀑布幅度上抹掉、再搜一趟，把被强信号掩盖的弱信号挖出来。
-    /// 0（未下发，例如旧调用方只填了前 4 个字段）按默认 2 趟处理。
-    int passes;
+    /// 深度解码开关（0=快 / 1=深），照 FT8CN `setDecodeMode(isDeep)`：
+    /// - 快：只跑一趟（快档迭代），不做减谱；
+    /// - 深：快跑后再用高迭代深跑一趟，随后把已解报文从瀑布幅度上抹零、在残留谱上
+    ///   反复重解，直到不再出新解或超过时间预算（`ftx_session.c` 里的 7 s）。
+    int deep;
 } ftx_decode_params_t;
 
-/// 默认解码参数（与 Kotlin 侧 DecodeSettings「快」预设一致：10/120/20/100、2 趟）。
+/// 默认解码参数（与 Kotlin 侧 DecodeSettings「快」预设一致：10/120/20/100、快档）。
 ftx_decode_params_t ftx_decode_params_default(void);
 
 /// 解码会话：封装 monitor（STFT/瀑布）、分块缓冲、waterfall 行流与呼号哈希表，

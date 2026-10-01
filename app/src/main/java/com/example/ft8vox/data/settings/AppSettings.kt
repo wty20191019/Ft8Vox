@@ -51,11 +51,14 @@ enum class WaterfallHeight(val label: String, val fraction: Float) {
 /**
  * 解码预设档位。
  *
- * **只有一个真预设 [FAST]（默认）**：参数照搬 FT8CN 的「快速解码」；原「标准 / 深」
- * 两档已删除 —— 想要更全的解码时逐项手改下面 6 个高级参数（改后会自动显示 [CUSTOM]）。
+ * - [FAST]「快」（默认）：照 FT8CN「快速解码」，一趟（LDPC 20）不减谱；
+ * - [DEEP]「深」：照 FT8CN「多次解码」，快跑后再高迭代深跑，并做减谱重解循环
+ *   （更全、更慢、更耗电）；
+ * - [CUSTOM]「自定义」：下面高级参数被手改过。只改频率范围不算手改。
  */
 enum class DecodePreset(val label: String) {
     FAST("快"),
+    DEEP("深"),
     CUSTOM("自定义"),
 }
 
@@ -87,20 +90,26 @@ fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAI
  * 候选上限 120 / 单时隙上限 100 / 频率范围 100–3000 Hz（FT8CN 的 `libft8cn.so` 里
  * `init_decoder` 写死的正是 `f_min=100`、`f_max=3000`、`time_osr=2`、`freq_osr=2`，
  * 「快」的 LDPC 迭代 20、候选 120，见 `fast_kLDPC_iterations` / `kMax_candidates`）。
- * 想更全就逐项调大（会显示「自定义」）。
+ * 想更全就选「深」或逐项调大（手改会显示「自定义」）。
  *
  * - [timeOsr]/[freqOsr]/[fMinHz]/[fMaxHz] 属于 `monitor_config_t`，改动需**重建引擎**；
- * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded]/[passes] 每次解码读取，**热生效**。
+ * - [minScore]/[ldpcIterations]/[maxCandidates]/[maxDecoded]/[deep] 每次解码读取，**热生效**。
  */
 data class DecodeSettings(
     val timeOsr: Int = 2,
     val freqOsr: Int = 2,
     val minScore: Int = 10,
+    /** 快档 LDPC 迭代次数，越高越慢但弱信号更有机会。 */
     val ldpcIterations: Int = 20,
     val maxCandidates: Int = 120,
     val maxDecoded: Int = 100,
-    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/Ft8Vox.md。 */
-    val passes: Int = 2,
+    /**
+     * 深度解码开关（照 FT8CN `setDecodeMode(isDeep)`）。
+     *
+     * `false`（默认「快」）＝一趟不减谱；`true`（「深」）＝快跑后高迭代深跑，并做减谱
+     * 重解循环直到不再出新解或超时。见 docs/Ft8Vox.md。
+     */
+    val deep: Boolean = false,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
 ) {
@@ -109,7 +118,13 @@ data class DecodeSettings(
         // 「快」＝构造函数默认值（改这里必须同步改上面的默认值，单测会卡住漂移）
         DecodePreset.FAST -> DecodeSettings(
             timeOsr = 2, freqOsr = 2, minScore = 10,
-            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, passes = 2,
+            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, deep = false,
+            fMinHz = fMinHz, fMaxHz = fMaxHz,
+        )
+        // 「深」＝快档参数 + 打开深度解码（深档的高迭代值由 native 决定）
+        DecodePreset.DEEP -> DecodeSettings(
+            timeOsr = 2, freqOsr = 2, minScore = 10,
+            ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, deep = true,
             fMinHz = fMinHz, fMaxHz = fMaxHz,
         )
         DecodePreset.CUSTOM -> this
@@ -124,7 +139,7 @@ data class DecodeSettings(
     fun samePresetValues(other: DecodeSettings): Boolean =
         timeOsr == other.timeOsr && freqOsr == other.freqOsr && minScore == other.minScore &&
             ldpcIterations == other.ldpcIterations && maxCandidates == other.maxCandidates &&
-            maxDecoded == other.maxDecoded && passes == other.passes
+            maxDecoded == other.maxDecoded && deep == other.deep
 
     /**
      * 把各字段钳制到允许范围。
@@ -139,7 +154,6 @@ data class DecodeSettings(
         ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
         maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
         maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
-        passes = passes.coerceIn(PASSES_RANGE),
         fMinHz = fMinHz.coerceIn(F_MIN_RANGE),
         fMaxHz = fMaxHz.coerceIn(F_MAX_RANGE),
     ).let { if (it.fMaxHz < it.fMinHz + 100) it.copy(fMaxHz = it.fMinHz + 100) else it }
@@ -152,8 +166,6 @@ data class DecodeSettings(
         val LDPC_RANGE = 5..60
         val MAX_CANDIDATES_RANGE = 20..500
         val MAX_DECODED_RANGE = 5..100
-        /** SIC 趟数范围；上与 native `K_MAX_DECODE_PASSES` 一致。 */
-        val PASSES_RANGE = 1..4
         val F_MIN_RANGE = 100..2000
         val F_MAX_RANGE = 1000..5000
     }
@@ -284,13 +296,20 @@ data class AppSettings(
     val decode: DecodeSettings = DecodeSettings(),
 ) {
     /**
-     * 当前解码预设：**由 [decode] 反推**（不再单独持久化，避免与新默认值漂移）。
+     * 当前解码预设：**由 [decode] 反推**（不单独持久化，避免与新默认值漂移）。
      *
-     * 只有 [DecodePreset.FAST] 一个真预设（＝[DecodeSettings] 的默认值，即「快」）；
-     * 6 项高级参数被手改过就是 [DecodePreset.CUSTOM]；只改频率范围不算手改（频率范围不随预设变化）。
+     * 与 [DecodeSettings] 默认值（6 项都未改）相同＝ [DecodePreset.FAST]；仅 `deep` 不同
+     * ＝ [DecodePreset.DEEP]；其余手改＝ [DecodePreset.CUSTOM]。只改频率范围不算手改
+     * （频率范围不随预设变化）。
      */
     val decodePreset: DecodePreset
-        get() = if (decode.samePresetValues(DecodeSettings())) DecodePreset.FAST else DecodePreset.CUSTOM
+        get() = DecodeSettings().let { base ->
+            when {
+                decode.samePresetValues(base) -> DecodePreset.FAST
+                decode.samePresetValues(base.copy(deep = true)) -> DecodePreset.DEEP
+                else -> DecodePreset.CUSTOM
+            }
+        }
 
     /** [protocolName] 对应的枚举；非法回落 FT8。 */
     val protocol: Protocol
@@ -325,6 +344,6 @@ data class AppSettings(
             maxCandidates = decode.maxCandidates,
             ldpcIterations = decode.ldpcIterations,
             maxDecoded = decode.maxDecoded,
-            passes = decode.passes,
+            deep = decode.deep,
         )
 }

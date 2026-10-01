@@ -7,7 +7,7 @@ package com.example.ft8vox.engine
  * （见 [AudioEngine.setDecodeParams] / [Ft8Engine.setDecodeParams]）；而 [Ft8Config] 里的
  * 频率范围与 OSR 需要重建引擎。
  *
- * 默认值＝设置的「快」预设，照搬 FT8CN「快速解码」（10 / 120 / 20 / 100）；
+ * 默认值＝设置的「快」预设，照搬 FT8CN「快速解码」（10 / 120 / 20 / 100、快档）；
  * 该默认只在设置下发前的极短窗口内生效，正常运行时用的是设置页的值。
  */
 data class DecodeParams(
@@ -15,17 +15,18 @@ data class DecodeParams(
     val minScore: Int = 10,
     /** 单时隙候选上限。 */
     val maxCandidates: Int = 120,
-    /** LDPC 最大迭代次数，越高越慢但弱信号解码率更高。 */
+    /** 快档 LDPC 最大迭代次数，越高越慢但弱信号解码率更高。 */
     val ldpcIterations: Int = 20,
     /** 单时隙最多解出的报文条数。 */
     val maxDecoded: Int = 100,
     /**
-     * 多趟减谱重解（SIC）趟数：1 = 单趟（不做减谱重解），2 = 默认。
+     * 深度解码开关（照 FT8CN `setDecodeMode(isDeep)`）。
      *
-     * 见 docs/Ft8Vox.md：解完一趟后把已解报文在瀑布幅度上抹掉、再搜一趟，
-     * 把被强信号压住的弱信号挖出来；趟数每加一趟解码耗时约合再乘一次。
+     * - `false`（默认）＝快：只跑一趟（快档迭代），不做减谱；
+     * - `true`＝深：快跑后再用高迭代深跑一趟，随后把已解报文从瀑布幅度上抹零、
+     *   在残留谱上反复重解，直到不再出新解或超时（native 里 7 s）。
      */
-    val passes: Int = 2,
+    val deep: Boolean = false,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {
@@ -33,8 +34,6 @@ data class DecodeParams(
         val MAX_CANDIDATES_RANGE = 20..500
         val LDPC_RANGE = 5..60
         val MAX_DECODED_RANGE = 5..100
-        /** SIC 趟数上与 native 的 `K_MAX_DECODE_PASSES` 一致。 */
-        val PASSES_RANGE = 1..4
 
         /** 钳制到安全范围，避免越界值传到 native。 */
         fun of(
@@ -42,17 +41,17 @@ data class DecodeParams(
             maxCandidates: Int,
             ldpcIterations: Int,
             maxDecoded: Int,
-            passes: Int = 2,
+            deep: Boolean = false,
         ): DecodeParams = DecodeParams(
             minScore = minScore.coerceIn(MIN_SCORE_RANGE),
             maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
             ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
             maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
-            passes = passes.coerceIn(PASSES_RANGE),
+            deep = deep,
         )
     }
 
     /** 钳制到安全范围。 */
     fun clamped(): DecodeParams =
-        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes)
+        of(minScore, maxCandidates, ldpcIterations, maxDecoded, deep)
 }

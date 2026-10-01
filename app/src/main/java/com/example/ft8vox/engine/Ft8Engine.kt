@@ -91,7 +91,7 @@ object Ft8Engine {
                 p.maxCandidates,
                 p.ldpcIterations,
                 p.maxDecoded,
-                p.passes,
+                p.deep,
             )
         }
     }
@@ -172,7 +172,7 @@ object Ft8Engine {
         maxCandidates: Int,
         ldpcIterations: Int,
         maxDecoded: Int,
-        passes: Int,
+        deep: Boolean,
     )
     private external fun nativeWaterfallInfo(handle: Long): IntArray
     private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
