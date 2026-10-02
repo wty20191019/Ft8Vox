@@ -31,7 +31,9 @@ typedef struct
 } jtdx_metric_result_t;
 
 /// 从下变频信号 cd0（起点 ibest）提取符号并计算四组 LLR。
-void jtdx_metric_compute(const kiss_fft_cpx* cd0, int ibest, jtdx_metric_result_t* out);
+/// @param[in] lreverse 非 0 时使用反相符号谱（对应 ft8b.f90 的 lreverse，ipass=2）
+void jtdx_metric_compute(const kiss_fft_cpx* cd0, int ibest, int lreverse,
+                         jtdx_metric_result_t* out);
 
 #ifdef __cplusplus
 }

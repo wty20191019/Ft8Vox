@@ -84,11 +84,56 @@ JTDX 的增益主要来自：相干度量 + OSD + 真减法 + AP。
 
 结论：相干度量 + OSD 已带来 +3.1 个百分点、且假阳性更少，超过深档基线验收标准。
 
-### ⏳ 待办：P3–P5
+### ✅ 已完成：P3 减法多趟（subtractft8 + 多趟重解）
 
-- **P3 减法多趟**：`gen_ft8wave` + `subtractft8`，强信号解出后重建并减去，再解
+新增/修改 `app/src/main/cpp/jtdx/`：
+
+- `jtdx_subtract.h/.c`（新增）：
+  - `jtdx_subtract_init`：按 `cwfilter.f90` 构建频域低通 `cw`（NFILT1=4000，cos² 窗）
+    与端部校正 `endcorr`（含 1/NFFT 归一化）。
+  - `jtdx_subtract_xdt3`：对应 `ft8b.f90` 1989–2004 行的 `scorr` 计算
+    （基带参考 3 点相关 → `peakup` 抛物线插值 → `xdt3=xdt+scorr*0.005`）。
+  - `jtdx_subtract`：对应 `subtractft8.f90`：
+    `cfilt = LPF[dd8·conjg(cref)]`，`dd8 -= 2·REAL(cref·cfilt)`；NFRAME=151680、NFFT=180000。
+- `jtdx_decode.c`：改为多趟循环（默认 `npass=3`，即 JTDX `nft8cycles=1`）。
+  - 每趟在**当前**（可能已被减过的）`dd8` 上重跑 `sync8`；前两趟 `isubp2` 解出后立即减法，
+    第三趟不再减法（对应 `ft8_decode.f90` 183/191 行）。
+  - 趟内已发生减法且新候选频率落在被减信号 ±50Hz 内时，重算长 FFT（对应 `lsubtracted/ldofft`）。
+  - LLR 组选择随趟变化：ipass>1 时 `isubp2=1→llra`（ipass=1 为 `llrd`）。
+  - `lhighsens` 按 `ft8_decode.f90` 223 行取值并传入下变频。
+  - 重复报文仍执行减法（对应 JTDX `if(lsubtract)` 不带 `ldupemsg`）。
+- `jtdx_sync.c`：符号谱度量按趟取模轮换（1/4/7 幅度、2/5/8 功率、3/6/9 L1）。
+- `jtdx_metric.h/.c`：新增 `lreverse` 参数，ipass=2 走反相符号谱（对应 `ft8b.f90` 274–283 行）。
+- `jtdx_decode.h`：`jtdx_decode_slot` 增加 `npass` 参数。
+- `tools/host_decode/decode_cli.c`：新增 `--passes N`（默认 3）。
+
+**语料回归**（60 文件 / 1289 条期望）：
+
+| 配置 | recall | hit | extra |
+| --- | --- | --- | --- |
+| 快档基线 | 72.2% | 931/1289 | 50 |
+| 深档基线 | 72.7% | 937/1289 | 53 |
+| JTDX P1+P2（单趟，含 lhighsens 修正） | 80.3% | 1035/1289 | 49 |
+| JTDX P3 三趟、**关闭减法** | 77.3% | 997/1289 | 44 |
+| **JTDX P3 三趟、开启减法（默认 `--jtdx`）** | **96.4%** | **1242/1289** | **119** |
+
+结论：
+- 减法是多趟增益的主要来源（同为三趟：77.3% → 96.4%，+19.1pp），且新增解码里真命中远多于
+  假阳性（新增约 +245 命中 / +75 extra），说明重建与相减在能量上正确。
+- 开启减法后逐趟递减强信号、逐层显现弱信号，符合 JTDX 设计意图。
+- extra 从 34 涨到 119：因为尚未移植 `chkfalse8` 假解码过滤（依调用呼号库做格式校验），
+  且参考 `.txt` 来自灵敏度较低的旧解码器，部分「extra」实为真实信号。属已知缺口，
+  后续补 `chkfalse8` 可显著压低假阳性（不影响 recall）。
+
+性能：宿主 -O2 下三趟约 1.36s/文件（60 文件约 82s），约为单趟的 3 倍；减去 FFT 的额外
+开销在可接受范围。Android 深度档可在后台线程运行。
+
+### ⏳ 待办：P4–P5
+
 - **P4 AP 先验**：按 Ft8Vox 已有六步 QSO 状态机填 `apmask`
 - **P5 集成**：`ftx_session_decode` 可选 JTDX 或 ft8_lib（各自有各自的挡位）
+- **假阳性过滤**：移植 `chkfalse8`（含 callsign/grid 校验，需引入呼号库）与 `ft8b` 的
+  报文协议违规检查（1954–1987 行）
 
 ### 验收方式
 

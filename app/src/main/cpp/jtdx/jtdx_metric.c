@@ -23,7 +23,8 @@ static void normalizebmet(float* bmet, int n)
     }
 }
 
-void jtdx_metric_compute(const kiss_fft_cpx* cd0, int ibest, jtdx_metric_result_t* out)
+void jtdx_metric_compute(const kiss_fft_cpx* cd0, int ibest, int lreverse,
+                         jtdx_metric_result_t* out)
 {
     jtdx_tables_init();
 
@@ -139,16 +140,30 @@ void jtdx_metric_compute(const kiss_fft_cpx* cd0, int ibest, jtdx_metric_result_
         {
             csymbr[i] = jtdx_cconj(csymb[31 - i]);
         }
-        jtdx_fft_c2c_fwd(csymb, 32);
-        for (int i = 0; i < 8; ++i)
+        if (lreverse)
         {
-            cs[i][k] = jtdx_cmul_f(csymb[i], 1e-3f);
-            s8[i][k] = jtdx_cabs(csymb[i]);
+            // 反相：cs 与 csr 都用反相符号的谱（对应 ft8b.f90 274-283 行）
+            jtdx_fft_c2c_fwd(csymbr, 32);
+            for (int i = 0; i < 8; ++i)
+            {
+                cs[i][k] = jtdx_cmul_f(csymbr[i], 1e-3f);
+                csr[i][k] = cs[i][k];
+                s8[i][k] = jtdx_cabs(csymbr[i]);
+            }
         }
-        jtdx_fft_c2c_fwd(csymbr, 32);
-        for (int i = 0; i < 8; ++i)
+        else
         {
-            csr[i][k] = jtdx_cmul_f(csymbr[i], 1e-3f);
+            jtdx_fft_c2c_fwd(csymb, 32);
+            for (int i = 0; i < 8; ++i)
+            {
+                cs[i][k] = jtdx_cmul_f(csymb[i], 1e-3f);
+                s8[i][k] = jtdx_cabs(csymb[i]);
+            }
+            jtdx_fft_c2c_fwd(csymbr, 32);
+            for (int i = 0; i < 8; ++i)
+            {
+                csr[i][k] = jtdx_cmul_f(csymbr[i], 1e-3f);
+            }
         }
     }
 

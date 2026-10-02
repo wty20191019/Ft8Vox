@@ -167,7 +167,7 @@ static void usage(void)
 {
     fprintf(stderr,
             "usage: decode_cli <file.wav> [-ft4] [--min-score N] [--candidates N] [--ldpc N]\n"
-            "                   [--max-decoded N] [--deep] [--jtdx] [--fmin HZ] [--fmax HZ]\n");
+            "                   [--max-decoded N] [--deep] [--jtdx] [--passes N] [--fmin HZ] [--fmax HZ]\n");
 }
 
 int main(int argc, char** argv)
@@ -178,6 +178,7 @@ int main(int argc, char** argv)
     float fmin = 100.0f;
     float fmax = 3000.0f;
     int use_jtdx = 0;
+    int jtdx_passes = 3;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -196,6 +197,8 @@ int main(int argc, char** argv)
             p.deep = 1;
         else if (strcmp(a, "--jtdx") == 0)
             use_jtdx = 1;
+        else if (strcmp(a, "--passes") == 0 && i + 1 < argc)
+            jtdx_passes = atoi(argv[++i]);
         else if (strcmp(a, "--fmin") == 0 && i + 1 < argc)
             fmin = (float)atof(argv[++i]);
         else if (strcmp(a, "--fmax") == 0 && i + 1 < argc)
@@ -223,7 +226,7 @@ int main(int argc, char** argv)
     if (use_jtdx)
     {
         static jtdx_decode_result_t jres[OUT_CAP];
-        int nr = jtdx_decode_slot(samples, n, fmin, fmax, jres, OUT_CAP);
+        int nr = jtdx_decode_slot(samples, n, fmin, fmax, jtdx_passes, jres, OUT_CAP);
         free(samples);
         for (int i = 0; i < nr; ++i)
         {

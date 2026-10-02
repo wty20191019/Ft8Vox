@@ -191,11 +191,24 @@ void jtdx_sync8(const float* dd8, float nfa, float nfb, float syncmin, float nfq
             }
         }
         jtdx_fft_r2c(x, JTDX_NFFT1, cx);
+        // 符号谱度量按 pass 取模 3 轮换：1/4/7 幅度，2/5/8 功率，3/6/9 L1
+        int metric = ipass % 3;
         for (int i = 1; i <= JTDX_NH1; ++i)
         {
             float re = cx[i].r;
             float im = cx[i].i;
-            s_sync[j][i] = (ipass == 1) ? sqrtf(re * re + im * im) : (re * re + im * im);
+            if (metric == 1)
+            {
+                s_sync[j][i] = sqrtf(re * re + im * im);
+            }
+            else if (metric == 2)
+            {
+                s_sync[j][i] = re * re + im * im;
+            }
+            else
+            {
+                s_sync[j][i] = fabsf(re) + fabsf(im);
+            }
         }
     }
 
