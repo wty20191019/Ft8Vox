@@ -99,7 +99,8 @@ static const float* select_llr(const jtdx_metric_result_t* m, int ipass, int isu
 }
 
 int jtdx_decode_slot(const float* dd8, int n, float fmin, float fmax, int npass,
-                     jtdx_decode_result_t* out, int max_out)
+                     ftx_callsign_hash_interface_t* hash_if, jtdx_decode_result_t* out,
+                     int max_out)
 {
     jtdx_tables_init();
     jtdx_subtract_init();
@@ -268,7 +269,7 @@ int jtdx_decode_slot(const float* dd8, int n, float fmin, float fmax, int npass,
                 memcpy(msg.payload, payload, sizeof(payload));
                 char text[40];
                 ftx_message_offsets_t offsets;
-                if (ftx_message_decode(&msg, NULL, text, &offsets) != FTX_MESSAGE_RC_OK)
+                if (ftx_message_decode(&msg, hash_if, text, &offsets) != FTX_MESSAGE_RC_OK)
                 {
                     continue;
                 }

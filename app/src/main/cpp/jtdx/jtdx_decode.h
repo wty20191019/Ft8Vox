@@ -12,6 +12,8 @@
 //       -> 符号谱 + 相干度量 -> LDPC BP/OSD -> CRC + 报文解包；
 //       前两趟解出强信号后重建并相减，供后续趟与候选使用。
 
+#include <ft8/message.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -31,11 +33,13 @@ typedef struct
 /// @param[in]  fmin    搜索频率下限 Hz
 /// @param[in]  fmax    搜索频率上限 Hz
 /// @param[in]  npass   解码趟数（JTDX 默认 nft8cycles=1 时为 3；1 表示单趟）
+/// @param[in]  hash_if 呼号哈希表接口（可空）；用于还原被哈希压缩的非标呼号
 /// @param[out] out     结果数组
 /// @param[in]  max_out 结果容量
 /// @return 解码条数
 int jtdx_decode_slot(const float* dd8, int n, float fmin, float fmax, int npass,
-                     jtdx_decode_result_t* out, int max_out);
+                     ftx_callsign_hash_interface_t* hash_if, jtdx_decode_result_t* out,
+                     int max_out);
 
 #ifdef __cplusplus
 }

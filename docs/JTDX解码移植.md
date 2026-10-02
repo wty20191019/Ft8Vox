@@ -128,12 +128,39 @@ JTDX 的增益主要来自：相干度量 + OSD + 真减法 + AP。
 性能：宿主 -O2 下三趟约 1.36s/文件（60 文件约 82s），约为单趟的 3 倍；减去 FFT 的额外
 开销在可接受范围。Android 深度档可在后台线程运行。
 
-### ⏳ 待办：P4–P5
+### ✅ 已完成：P5 集成进 App（深档走 JTDX）
+
+`ftx_session.c` / `audio_engine.c` 接线：
+
+- `ftx_session` 新增整隙原始音频缓冲 `raw`（`raw_cap = max_blocks * block_size`，
+  FT8 约 178560 点）：`ftx_session_process` 逐块追加、`ftx_session_reset` 清零。
+- `ftx_frozen` 新增 `raw` 副本：`ftx_session_freeze` 随瀑布一起冻结整隙时域样本，
+  后台解码线程因此可以脱离实时缓冲慢慢跑 JTDX（不阻塞采集）。
+- `decode_waterfall` 增 `raw/raw_len` 参数，深档编排改为：
+  1. 快跑（瀑布 + 快档迭代）——快/深共用；
+  2. **FT8 且有时域样本**：对整隙音频跑 `jtdx_decode_slot(npass=3)`（相干度量 + OSD +
+     减法多趟），结果与瀑布结果按明文去重合并、标记深档；
+  3. 兜底（FT4 或无 raw）：保留原 FT8CN 式高迭代深跑 + 瀑布减谱循环。
+- `jtdx_decode_slot` 增加 `hash_if` 参数（`ftx_callsign_hash_interface_t*`），
+  App 深档用会话的呼号哈希表还原被压缩的非标呼号；CLI 传 NULL。
+- 呼号哈希表、`--jtdx` CLI 与快档路径均不受影响；Kotlin 侧无需改动（沿用既有
+  `deep` 开关与解码参数）。
+
+**语料回归**（60 文件 / 1289 条期望）：
+
+| 配置 | recall | hit | extra |
+| --- | --- | --- | --- |
+| App 深档路径（快跑 + JTDX，`decode_cli --deep`） | **97.2%** | **1253/1289** | **149** |
+
+深档路径比纯 JTDX（96.4%）略高，因为快跑还额外兜住少数 JTDX 未解的候选；extra 同步
+上升主要来自快跑多出的解码与尚未移植的 `chkfalse8`。
+
+### ⏳ 待办：P4 + 假阳性过滤
 
 - **P4 AP 先验**：按 Ft8Vox 已有六步 QSO 状态机填 `apmask`
-- **P5 集成**：`ftx_session_decode` 可选 JTDX 或 ft8_lib（各自有各自的挡位）
 - **假阳性过滤**：移植 `chkfalse8`（含 callsign/grid 校验，需引入呼号库）与 `ft8b` 的
   报文协议违规检查（1954–1987 行）
+- **性能**：Android 真机实测深档耗时；必要时按机型/电量把 `npass` 降到 1~2
 
 ### 验收方式
 

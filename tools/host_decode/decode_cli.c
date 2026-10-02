@@ -226,7 +226,7 @@ int main(int argc, char** argv)
     if (use_jtdx)
     {
         static jtdx_decode_result_t jres[OUT_CAP];
-        int nr = jtdx_decode_slot(samples, n, fmin, fmax, jtdx_passes, jres, OUT_CAP);
+        int nr = jtdx_decode_slot(samples, n, fmin, fmax, jtdx_passes, NULL, jres, OUT_CAP);
         free(samples);
         for (int i = 0; i < nr; ++i)
         {

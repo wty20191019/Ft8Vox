@@ -10,6 +10,8 @@
 #include <ft8/encode.h>
 #include <ft8/constants.h>
 
+#include "jtdx_decode.h"
+
 // -----------------------------------------------------------------------------
 // 临时诊断：逐条打印 SNR 估计的内部量（sig/noi 功率、分位、低位裁剪计数）。
 // 用于排查「与 FT8CN/WSJT-X 的 dB 差」究竟来自音频还是估计器。排查完即删。
@@ -168,6 +170,8 @@ struct ftx_frozen
     int64_t slot;       ///< 快照所属时隙号
     ftx_waterfall_t wf; ///< 快照时刻的瀑布元数据；mag 已指向下面的副本缓冲
     WF_ELEM_T* mag;     ///< 幅度副本（尺寸同 mon.wf.mag）
+    float* raw;         ///< 当前时隙 12kHz 原始音频副本（JTDX 深档用）
+    int raw_len;        ///< raw 中有效样本数
 };
 
 struct ftx_session
@@ -194,6 +198,13 @@ struct ftx_session
 
     /// 供后台解码线程使用的乒乓快照（见 ftx_session.h）。
     struct ftx_frozen frozen[K_FROZEN_SLOTS];
+
+    /// 当前时隙的 12kHz 原始音频（JTDX 深档需要整隙时域样本）。
+    /// 采集侧在 ftx_session_process 里追加，ftx_session_reset 清零；冻结时随瀑布一起
+    /// 拷贝进快照，解码线程因此可以脱离实时缓冲慢慢跑 JTDX。
+    float* raw;
+    int raw_cap; ///< 容量（= 一个时隙的样本数）
+    int raw_len; ///< 已写入样本数
 };
 
 static int clamp_int(int v, int lo, int hi)
@@ -300,19 +311,33 @@ ftx_session_t* ftx_session_create(const monitor_config_t* cfg)
         s->frozen[i].mag = (WF_ELEM_T*)malloc(s->sic_bytes);
         atomic_store(&s->frozen[i].busy, 0);
         s->frozen[i].slot = -1;
+        s->frozen[i].raw = NULL;
+        s->frozen[i].raw_len = 0;
     }
+
+    // JTDX 深档需要的整隙原始音频缓冲（本会话一份 + 每快照一份）
+    s->raw_cap = s->mon.wf.max_blocks * s->mon.block_size;
+    s->raw_len = 0;
+    s->raw = (float*)malloc((size_t)s->raw_cap * sizeof(float));
+    for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+        s->frozen[i].raw = (float*)malloc((size_t)s->raw_cap * sizeof(float));
 
     bool frozen_ok = true;
     for (int i = 0; i < K_FROZEN_SLOTS; ++i)
-        frozen_ok = frozen_ok && (s->frozen[i].mag != NULL);
+        frozen_ok = frozen_ok && (s->frozen[i].mag != NULL) && (s->frozen[i].raw != NULL);
 
-    if (s->pending == NULL || s->wf_ring == NULL || s->sic_mag == NULL || !frozen_ok)
+    if (s->pending == NULL || s->wf_ring == NULL || s->sic_mag == NULL || s->raw == NULL ||
+        !frozen_ok)
     {
         free(s->pending);
         free(s->wf_ring);
         free(s->sic_mag);
+        free(s->raw);
         for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+        {
             free(s->frozen[i].mag);
+            free(s->frozen[i].raw);
+        }
         monitor_free(&s->mon);
         free(s);
         return NULL;
@@ -328,8 +353,12 @@ void ftx_session_free(ftx_session_t* session)
     if (session == NULL)
         return;
     for (int i = 0; i < K_FROZEN_SLOTS; ++i)
+    {
         free(session->frozen[i].mag);
+        free(session->frozen[i].raw);
+    }
     free(session->sic_mag);
+    free(session->raw);
     free(session->wf_ring);
     free(session->pending);
     monitor_free(&session->mon);
@@ -341,6 +370,7 @@ void ftx_session_reset(ftx_session_t* session)
     if (session == NULL)
         return;
     session->pending_len = 0;
+    session->raw_len = 0;
     monitor_reset(&session->mon);
     session->wf_last_block = -1;
 }
@@ -349,6 +379,18 @@ void ftx_session_process(ftx_session_t* session, const float* samples, int count
 {
     if (session == NULL || samples == NULL || count <= 0)
         return;
+
+    // 记录原始 12kHz 样本供 JTDX 深档使用（整隙最多 raw_cap 个）
+    if (session->raw != NULL)
+    {
+        int space = session->raw_cap - session->raw_len;
+        int take = (count < space) ? count : space;
+        if (take > 0)
+        {
+            memcpy(session->raw + session->raw_len, samples, (size_t)take * sizeof(float));
+            session->raw_len += take;
+        }
+    }
 
     monitor_t* mon = &session->mon;
     const int bs = mon->block_size;
@@ -717,15 +759,62 @@ static int decode_scan(decode_ctx_t* ctx, const ftx_waterfall_t* cur, int ldpc_i
     return newly;
 }
 
+// -----------------------------------------------------------------------------
+// JTDX 深档（P5 集成）
+//
+// JTDX 工作在 12kHz 原始音频（整隙时域）上，因此深档在快跑之外，直接对冻结快照里的
+// raw 音频跑 jtdx_decode_slot（多趟 + 相干度量 + OSD + 减法）。JTDX 解出的报文同样
+// 用呼号哈希表还原，再与瀑布路线的结果按明文去重合并。
+// -----------------------------------------------------------------------------
+#define K_JTDX_MAX_RESULTS 128
+
+/// 在整隙原始音频上跑 JTDX 多趟解码，把新报文并入 out（按明文去重）。仅 FT8 有效。
+static void decode_jtdx_deep(ftx_session_t* session, const float* raw, int raw_len, decode_ctx_t* ctx)
+{
+    if (raw == NULL || raw_len <= 0)
+        return;
+
+    float fmin = (float)session->mon.min_bin / session->mon.symbol_period;
+    float fmax = (float)session->mon.max_bin / session->mon.symbol_period;
+
+    static jtdx_decode_result_t jres[K_JTDX_MAX_RESULTS];
+    int nr = jtdx_decode_slot(raw, raw_len, fmin, fmax, 3, &hash_if, jres, K_JTDX_MAX_RESULTS);
+
+    for (int i = 0; i < nr && ctx->num_out < ctx->out_cap; ++i)
+    {
+        bool dup = false;
+        for (int k = 0; k < ctx->num_out; ++k)
+        {
+            if (strcmp(ctx->results[k].text, jres[i].text) == 0)
+            {
+                dup = true;
+                break;
+            }
+        }
+        if (dup)
+            continue;
+
+        ftx_decode_result_t* out = &ctx->results[ctx->num_out++];
+        strncpy(out->text, jres[i].text, FTX_MAX_MESSAGE_LENGTH - 1);
+        out->text[FTX_MAX_MESSAGE_LENGTH - 1] = '\0';
+        out->snr = jres[i].snr;
+        out->dt = jres[i].dt;
+        out->df = jres[i].df;
+        out->score = 0; // JTDX 无 Costas 得分，置 0
+        out->deep = 1;
+    }
+}
+
 /// 解码一份瀑布：`wf` 既可以是实时瀑布（`&session->mon.wf`），也可以是后台解码线程的
 /// 冻结快照。只读 `session` 的解码参数与 SIC 缓冲、**不碰实时瀑布**，故可与采集线程并发。
 ///
-/// 编排照 FT8CN 深档（`FT8SignalListener.decodeFt8`）：
-///   1) 快跑：原始瀑布上按快档迭代解一趟；
-///   2) 深档：再用高迭代（200）深跑一趟，补回快跑迭代不够而漏掉的弱候选；
-///   3) 深档：把已解报文在瀑布幅度副本上置零，在残留谱上反复深跑，直到不再出新解
-///      或超过时间预算（从本次解码开始计 7 s）。
+/// 编排：
+///   1) 快跑：原始瀑布上按快档迭代解一趟（快档/深档共用）；
+///   2) 深档（FT8，有 raw）：对整隙原始音频跑 JTDX 多趟（含减法），结果并入；
+///   3) 深档兜底（非 FT8 或无 raw）：FT8CN 式高迭代深跑 + 瀑布减谱循环，直到不再出
+///      新解或超过时间预算（从本次解码开始计 7 s）。
 static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
+                            const float* raw, int raw_len,
                             ftx_decode_result_t* results, int max_results)
 {
     if (session == NULL || wf == NULL || results == NULL || max_results <= 0)
@@ -763,32 +852,39 @@ static int decode_waterfall(ftx_session_t* session, const ftx_waterfall_t* wf,
     // 1) 快跑（原始瀑布，快档迭代）
     decode_scan(&ctx, wf, p.ldpc_iterations);
 
-    if (p.deep && session->sic_mag != NULL)
+    if (p.deep)
     {
-        // 2) 深跑（原始瀑布，高迭代）——不先减谱
-        ctx.deep = true;
-        decode_scan(&ctx, wf, K_DEEP_LDPC_ITERATIONS);
-
-        // 3) 减谱循环：残留谱上反复「置零已解 → 深跑」
-        memcpy(session->sic_mag, wf->mag, session->sic_bytes);
-        ftx_waterfall_t residual = *wf;
-        residual.mag = session->sic_mag;
-
-        for (;;)
+        if (wf->protocol == FTX_PROTOCOL_FT8 && raw != NULL && raw_len > 0)
         {
-            // 超时检测放在减谱之前（照 FT8CN：时间算的是整个解码过程）
-            if (ftx_monotonic_ms() - t0 >= K_DEEP_TIME_BUDGET_MS)
-                break;
+            // 2) JTDX 深档：整隙原始音频上的多趟（含减法）解码
+            decode_jtdx_deep(session, raw, raw_len, &ctx);
+        }
+        else if (session->sic_mag != NULL)
+        {
+            // 3) 兜底（非 FT8 或无原始音频）：FT8CN 式深跑 + 减谱循环
+            ctx.deep = true;
+            decode_scan(&ctx, wf, K_DEEP_LDPC_ITERATIONS);
 
-            for (int i = 0; i < hash_size; ++i)
+            memcpy(session->sic_mag, wf->mag, session->sic_bytes);
+            ftx_waterfall_t residual = *wf;
+            residual.mag = session->sic_mag;
+
+            for (;;)
             {
-                if (decoded_hashtable[i] != NULL)
-                    sic_subtract_message(wf, session->sic_mag, session->sic_elems,
-                                         decoded_hashtable[i], &decoded_cand[i]);
-            }
+                // 超时检测放在减谱之前（照 FT8CN：时间算的是整个解码过程）
+                if (ftx_monotonic_ms() - t0 >= K_DEEP_TIME_BUDGET_MS)
+                    break;
 
-            if (decode_scan(&ctx, &residual, K_DEEP_LDPC_ITERATIONS) == 0)
-                break;
+                for (int i = 0; i < hash_size; ++i)
+                {
+                    if (decoded_hashtable[i] != NULL)
+                        sic_subtract_message(wf, session->sic_mag, session->sic_elems,
+                                             decoded_hashtable[i], &decoded_cand[i]);
+                }
+
+                if (decode_scan(&ctx, &residual, K_DEEP_LDPC_ITERATIONS) == 0)
+                    break;
+            }
         }
     }
 
@@ -802,7 +898,8 @@ int ftx_session_decode(ftx_session_t* session, ftx_decode_result_t* results, int
 {
     if (session == NULL)
         return 0;
-    return decode_waterfall(session, &session->mon.wf, results, max_results);
+    return decode_waterfall(session, &session->mon.wf, session->raw, session->raw_len,
+                            results, max_results);
 }
 
 ftx_frozen_t* ftx_session_freeze(ftx_session_t* session, int64_t slot)
@@ -826,6 +923,19 @@ ftx_frozen_t* ftx_session_freeze(ftx_session_t* session, int64_t slot)
         memcpy(f->mag, wf->mag, session->sic_bytes);
         f->wf = *wf;
         f->wf.mag = f->mag;
+        // 同时冻结整隙原始音频（JTDX 深档用）
+        int rl = session->raw_len;
+        if (rl > session->raw_cap)
+            rl = session->raw_cap;
+        if (f->raw != NULL && session->raw != NULL && rl > 0)
+        {
+            memcpy(f->raw, session->raw, (size_t)rl * sizeof(float));
+            f->raw_len = rl;
+        }
+        else
+        {
+            f->raw_len = 0;
+        }
         f->slot = slot;
         return f;
     }
@@ -842,7 +952,8 @@ int ftx_session_decode_frozen(ftx_session_t* session, ftx_frozen_t* frozen,
 {
     if (frozen == NULL)
         return 0;
-    return decode_waterfall(session, &frozen->wf, results, max_results);
+    return decode_waterfall(session, &frozen->wf, frozen->raw, frozen->raw_len,
+                            results, max_results);
 }
 
 void ftx_session_thaw(ftx_session_t* session, ftx_frozen_t* frozen)
