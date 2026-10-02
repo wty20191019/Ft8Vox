@@ -18,6 +18,11 @@ file(GLOB FFT_SOURCES
     ${CMAKE_SOURCE_DIR}/ft8_lib/fft/*.c
 )
 
+# JTDX（(174,91) LDPC：BP + OSD + CRC14）移植；后续会加入 sync/ft8b 等前端
+file(GLOB JTDX_SOURCES
+    ${CMAKE_SOURCE_DIR}/jtdx/*.c
+)
+
 add_library(ft8 SHARED
     jni_bridge.c
     audio_engine.c
@@ -25,12 +30,14 @@ add_library(ft8 SHARED
     ${FT8_SOURCES}
     ${COMMON_SOURCES}
     ${FFT_SOURCES}
+    ${JTDX_SOURCES}
 )
 
 target_include_directories(ft8 PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/ft8_lib
     ${CMAKE_SOURCE_DIR}/ft8_lib/ft8
+    ${CMAKE_SOURCE_DIR}/jtdx
 )
 
 find_library(AAUDIO_LIB aaudio)

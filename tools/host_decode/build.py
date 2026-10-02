@@ -11,6 +11,7 @@ Windows 上推荐 w64devkit（免安装、解压即用）。
 """
 
 import argparse
+import glob
 import os
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ SOURCES = [
     os.path.join(CPP, "ft8_lib", "fft", "kiss_fft.c"),
     os.path.join(CPP, "ft8_lib", "fft", "kiss_fftr.c"),
 ]
+# JTDX 移植模块（(174,91) LDPC BP/OSD 等）；用 glob 便于后续新增文件自动纳入。
+SOURCES += sorted(glob.glob(os.path.join(CPP, "jtdx", "*.c")))
 
 
 def find_gcc(explicit):
@@ -69,6 +72,7 @@ def main():
         "-I" + CPP,
         "-I" + os.path.join(CPP, "ft8_lib"),
         "-I" + os.path.join(CPP, "ft8_lib", "ft8"),
+        "-I" + os.path.join(CPP, "jtdx"),
     ] + SOURCES + ["-lm", "-o", exe]
 
     print("gcc:", gcc)
