@@ -23,13 +23,14 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 瀑布可见行数（约 600 * 0.08 s ≈ 48 s 的滚动窗口）。
  *
  * 按 FT8 默认档（`time_osr=2` → 80 ms/行）约等于 **3 个时隙**（3 × 15 s = 45 s）；
- * FT4 或改「时间 OSR」时，秒数会随行时间变化（见 [WF_ROW_MS]）。
+ * 改「时间 OSR」时，秒数会随行时间变化（见 [WF_ROW_MS]）。
  */
 const val WF_ROWS = 600
 
@@ -58,8 +59,7 @@ class WaterfallFrame(
 /**
  * 瀑布配色：把归一化强度 t∈[0,1] 映射为 深蓝→青→绿→黄→橙→红（docs/Ft8Vox.md）。
  *
- * 注意：实际使用时不做固定阈值，而是按“滚动峰值”做自适应拉伸
- * （见 [SessionViewModel.pollWaterfall]），因此不同设备增益下都能看清。
+ * 强度由 [waterfallIdx] 按**固定阈值**（噪声底 + 动态范围）线性换算，见 docs/Ft8Vox.md。
  */
 object WaterfallColors {
 
@@ -75,16 +75,6 @@ object WaterfallColors {
 
     /** 预计算的 256 级渐变查找表：rampLut[i] 对应 t = i/255。 */
     val rampLut: IntArray = IntArray(256) { ramp(it / 255f) }
-
-    /**
-     * 动态范围上限：峰值向下 60 dB（mag 为 0.5 dB 步进，故 120 个 mag 单位）。
-     *
-     * 弱台常比本地强台低 40~60 dB，范围太窄就会被压成黑色而"看不见"。
-     */
-    const val MAX_SPAN = 120
-
-    /** 动态范围下限：至少覆盖 25 dB，避免噪声纹理占满整条色带。 */
-    const val MIN_SPAN = 50
 
     private fun ramp(t: Float): Int {
         for (i in 0 until stops.size - 1) {
@@ -103,6 +93,20 @@ object WaterfallColors {
 }
 
 /**
+ * 瀑布行字节（uint8）→ 调色板下标。
+ *
+ * 引擎侧把每 bin 的幅度写成 uint8：`u = round((dBFS + 120) * 2)`（0.5 dB/单位，[-120, 0] dBFS，
+ * 与 ft8_w 瀑布幅度编码同源）。这里按**固定窗口** `[floorDb, floorDb + rangeDb]` 线性映射到 0..255：
+ * 低于或等于底噪 = 0（深蓝），达到窗口顶端 = 255（红）。阈值来自设置（默认 -90 dBFS / 50 dB），
+ * 不再做滚动自适应。
+ */
+internal fun waterfallIdx(mag: Int, floorDb: Int, rangeDb: Int): Int {
+    val db = (mag and 0xFF) * 0.5f - 120f
+    val span = rangeDb.coerceAtLeast(1)
+    return (((db - floorDb) / span) * 255f).roundToInt().coerceIn(0, 255)
+}
+
+/**
  * 瀑布视图：把 [frame] 画到 Canvas 上，并叠加发射频带（红线 + 半透明红条）与 QSO 标记。
  *
  * **发射频率就是唯一可调频率**：在瀑布上**单击或水平拖动**即把发射频率移到该处
@@ -111,7 +115,7 @@ object WaterfallColors {
  *
  * 发射频率在瀑布上画成两件东西（见 [txBandPx]）：
  * - **红色竖线**＝报文**下边频**（就是报文音频频率本身，拖动它改频率的那条线）；
- * - **半透明红条**＝整条报文实际占用的带宽 `[f, f + occupiedHz]`（FT8 50 Hz / FT4 83 Hz），
+ * - **半透明红条**＝整条报文实际占用的带宽 `[f, f + occupiedHz]`（FT8 50 Hz），
  *   用来一眼看出这条报文会占掉频谱的哪一段。
  *
  * [slotParity] 为当前时隙奇偶（0=偶数周期，1=奇数周期），用顶部色条区分。
@@ -255,7 +259,7 @@ fun WaterfallView(
         )
 
         if (spanHz > 0f && size.width > 0f) {
-            // 发射频带：线＝下边频（可拖动调整），条＝整条报文占用的带宽（FT8 50 Hz / FT4 83 Hz）
+            // 发射频带：线＝下边频（可拖动调整），条＝整条报文占用的带宽（FT8 50 Hz）
             val (xStart, xEnd) = txBandPx(selectedFreqHz, occupiedHz, fMinHz, spanHz, size.width)
             if (xEnd > xStart) {
                 drawRect(

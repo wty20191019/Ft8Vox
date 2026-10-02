@@ -34,12 +34,12 @@ class SessionServiceTextTest {
             ReceiverStatus(
                 running = true,
                 txing = true,
-                protocol = Protocol.FT4,
+                protocol = Protocol.FT8,
                 band = "40m",
                 decodedTotal = 3,
             ),
         )
-        assertEquals("发射中 · FT4 · 40m · 解码 3", text)
+        assertEquals("发射中 · FT8 · 40m · 解码 3", text)
     }
 
     @Test

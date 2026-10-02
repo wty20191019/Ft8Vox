@@ -1,9 +1,10 @@
 # Ft8Vox
 
-在 Android 上原生运行 FT8 / FT4 数字通信的开源应用。
+在 Android 上原生运行 FT8 数字通信的开源应用。
 
-Ft8Vox 把 Android 手机变成一台 FT8 / FT4 终端：采集电台音频实时解码，手动或自动完成通联并落库。
-手机**强制竖屏**，音频 I/O 用 **AAudio**，DSP 在 native 层复用开源的 [ft8_lib](app/src/main/cpp/ft8_lib)（含 kissfft），
+Ft8Vox 把 Android 手机变成一台 FT8 终端：采集电台音频实时解码，手动或自动完成通联并落库。
+手机**强制竖屏**，音频 I/O 在 Kotlin 层用 **AudioRecord / AudioTrack**，编解码 DSP 在 native 层复用开源的
+[ft8_w](app/src/main/cpp/ft8w)（基于 [ft8_lib](https://github.com/kgoba/ft8_lib)，含 kissfft），
 界面用 **Jetpack Compose**（Material 3）。音频接入支持**声学耦合**与 **USB 声卡 / OTG**。
 
 > **无 CAT**：不控制电台频率 / 模式 / PTT，发射靠电台 **VOX** 或手动 PTT。
@@ -25,8 +26,8 @@ Ft8Vox 把 Android 手机变成一台 FT8 / FT4 终端：采集电台音频实�
 | 组件 | 版本 / 说明 |
 | --- | --- |
 | Kotlin + Jetpack Compose | Kotlin 2.2.10，Compose BOM 2026.02.01，Material 3 |
-| 音频 | AAudio（Android API 26+），USB 声卡 / OTG 路由 |
-| DSP | C / CMake / NDK（ft8_lib + kissfft），在 native 完成 |
+| 音频 | Kotlin `AudioRecord` / `AudioTrack`（Android API 26+），USB 声卡 / OTG 路由 |
+| DSP | C / CMake / NDK（ft8_w：编解码 / LDPC / OSD / kissfft）在 native 完成；瀑布 STFT 在 Kotlin 完成 |
 | 数据 | Room（通联日志）、DataStore（设置）、ADIF（导入导出） |
 | 工具链 | AGP 9.3.2 / Gradle 9.5.0 / JDK 25 / compileSdk 37 / minSdk 26 / NDK 28.2.13676358 |
 | ABI | `arm64-v8a`、`armeabi-v7a`、`x86_64`（模拟器） |
@@ -61,11 +62,11 @@ app/src/main/
 │   │   ├── adif/                           # ADIF 编解码、字段映射
 │   │   ├── log/                            # Room 实体·DAO·仓库、导入合并、备注生成
 │   │   └── settings/                       # DataStore 设置项与仓库
-│   ├── engine/                             # Ft8Engine / AudioEngine（JNI 封装）、设备枚举、提示音
+│   ├── engine/                             # Ft8Engine / AudioEngine（ft8_w 编解码 + Kotlin 实时音频/瀑布 STFT）、设备枚举、提示音
 │   ├── grid/                               # Maidenhead 网格、大圆几何、地图投影、昼夜灰线
 │   ├── qso/                                # 报文解析/组装、DXCC、QSO 状态机、自动程序、筛选与高亮
 │   └── ui/                                 # Compose 页面与组件（操作/频谱/地图/日志/设置 + theme/）
-├── cpp/                                    # native：jni_bridge.c、audio_engine.c、ftx_session.c + ft8_lib
+├── cpp/                                    # native：ft8w/（ft8_w 编解码核心 + JNI 桥）
 └── res/                                    # 资源
 docs/Ft8Vox.md                              # 唯一文档：使用与设计
 ```
@@ -76,8 +77,8 @@ docs/Ft8Vox.md                              # 唯一文档：使用与设计
 
 第三方组件：
 
-- [ft8_lib](app/src/main/cpp/ft8_lib) — MIT License，Copyright (c) 2018 Kārlis Goba
-- [kissfft](app/src/main/cpp/ft8_lib/fft) — BSD-3-Clause，Copyright (c) 2003-2010 Mark Borgerding
+- [ft8_w](app/src/main/cpp/ft8w)（基于 [ft8_lib](https://github.com/kgoba/ft8_lib)）— MIT License，Copyright (c) 2018 Kārlis Goba
+- [kissfft](app/src/main/cpp/ft8w/src/fft) — BSD-3-Clause，Copyright (c) 2003-2010 Mark Borgerding
 
 详见 [NOTICE](NOTICE)。
 

@@ -216,8 +216,6 @@ class TxComposeTest {
     fun minSendNowNeedsWholeMessagePlusPreamble() {
         // FT8：12.64 s 报文 + 50 ms 前导
         assertEquals(12_690L, TxScheduler.minSendNowMs(12_640, 50))
-        // FT4：5.04 s 报文 + 200 ms 前导
-        assertEquals(5_240L, TxScheduler.minSendNowMs(5_040, 200))
         // 报文时长未知 → 兜底 2.5 s；前导为负按 0 处理
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0))
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0, -100))
@@ -311,23 +309,6 @@ class TxComposeTest {
         assertFalse(
             TxScheduler.canRetargetInSlot(
                 nowMs = 0, slotMs = 15_000, txParity = 0, preambleMs = 0, messageMs = 0,
-            ),
-        )
-    }
-
-    @Test
-    fun retargetFt4MessageFitsLater() {
-        // FT4：时隙 7.5 s、报文 5.04 s、前导 300 ms → 0.3 + 0.5 + 5.04 + 0.3 = 6.14 s（pos ≤ 1.36 s）
-        assertTrue(
-            TxScheduler.canRetargetInSlot(
-                nowMs = 1_000, slotMs = 7_500, txParity = 0,
-                preambleMs = 300, messageMs = 5_040,
-            ),
-        )
-        assertFalse(
-            TxScheduler.canRetargetInSlot(
-                nowMs = 2_000, slotMs = 7_500, txParity = 0,
-                preambleMs = 300, messageMs = 5_040,
             ),
         )
     }

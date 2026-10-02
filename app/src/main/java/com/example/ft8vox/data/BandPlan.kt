@@ -6,7 +6,7 @@ import java.util.Locale
  * 业余波段表。
  *
  * 无 CAT 时 App 无法得知电台实际频率，因此以「用户选择的波段 + 刻度频率」为准记录与导出 ADIF。
- * 每个波段给出多个 FT8/FT4 常用刻度频率（[Band.freqs]），[Band.dialHz] 取首项作为该波段的默认频率。
+ * 每个波段给出多个 FT8 常用刻度频率（[Band.freqs]），[Band.dialHz] 取首项作为该波段的默认频率。
  * 也允许用户自定义波段名与频率（见 [resolveDialHz] / [parseFreqMhz]）。
  */
 object BandPlan {
@@ -15,10 +15,10 @@ object BandPlan {
     data class DialFreq(
         /** 刻度频率（Hz）。 */
         val hz: Long,
-        /** 模式 / 用途标注，如 "FT8"、"FT4"。 */
+        /** 模式 / 用途标注，如 "FT8"、"FT8 DX"。 */
         val label: String,
     ) {
-        /** MHz 文本（保留 4 位小数，足以区分 FT4 的 7.0475）。 */
+        /** MHz 文本（保留 4 位小数）。 */
         val mhz: String get() = String.format(Locale.US, "%.4f", hz / 1_000_000.0)
 
         /** 列表显示用，如 "14.0740 MHz · FT8"。 */
@@ -53,56 +53,55 @@ object BandPlan {
     val bands: List<Band> = listOf(
         Band(
             "160m", 1_840_000L, 1_800_000L, 2_000_000L,
-            listOf(DialFreq(1_840_000L, "FT8"), DialFreq(1_836_000L, "FT4")),
+            listOf(DialFreq(1_840_000L, "FT8")),
         ),
         Band(
             "80m", 3_573_000L, 3_500_000L, 4_000_000L,
-            listOf(DialFreq(3_573_000L, "FT8"), DialFreq(3_575_000L, "FT4")),
+            listOf(DialFreq(3_573_000L, "FT8")),
         ),
         Band(
             "60m", 5_357_000L, 5_060_000L, 5_450_000L,
-            listOf(DialFreq(5_357_000L, "FT8"), DialFreq(5_366_500L, "FT4")),
+            listOf(DialFreq(5_357_000L, "FT8")),
         ),
         Band(
             "40m", 7_074_000L, 7_000_000L, 7_300_000L,
-            listOf(DialFreq(7_074_000L, "FT8"), DialFreq(7_047_500L, "FT4"), DialFreq(7_056_000L, "FT4")),
+            listOf(DialFreq(7_074_000L, "FT8")),
         ),
         Band(
             "30m", 10_136_000L, 10_100_000L, 10_150_000L,
-            listOf(DialFreq(10_136_000L, "FT8"), DialFreq(10_140_000L, "FT4")),
+            listOf(DialFreq(10_136_000L, "FT8")),
         ),
         Band(
             "20m", 14_074_000L, 14_000_000L, 14_350_000L,
             listOf(
                 DialFreq(14_074_000L, "FT8"),
-                DialFreq(14_080_000L, "FT4"),
                 DialFreq(14_090_000L, "FT8 DX"),
                 DialFreq(14_095_000L, "FT8 Hound"),
             ),
         ),
         Band(
             "17m", 18_100_000L, 18_068_000L, 18_168_000L,
-            listOf(DialFreq(18_100_000L, "FT8"), DialFreq(18_104_000L, "FT4")),
+            listOf(DialFreq(18_100_000L, "FT8")),
         ),
         Band(
             "15m", 21_074_000L, 21_000_000L, 21_450_000L,
-            listOf(DialFreq(21_074_000L, "FT8"), DialFreq(21_140_000L, "FT4")),
+            listOf(DialFreq(21_074_000L, "FT8")),
         ),
         Band(
             "12m", 24_915_000L, 24_890_000L, 24_990_000L,
-            listOf(DialFreq(24_915_000L, "FT8"), DialFreq(24_919_000L, "FT4")),
+            listOf(DialFreq(24_915_000L, "FT8")),
         ),
         Band(
             "10m", 28_074_000L, 28_000_000L, 29_700_000L,
-            listOf(DialFreq(28_074_000L, "FT8"), DialFreq(28_180_000L, "FT4")),
+            listOf(DialFreq(28_074_000L, "FT8")),
         ),
         Band(
             "6m", 50_313_000L, 50_000_000L, 54_000_000L,
-            listOf(DialFreq(50_313_000L, "FT8"), DialFreq(50_318_000L, "FT4")),
+            listOf(DialFreq(50_313_000L, "FT8")),
         ),
         Band(
             "2m", 144_174_000L, 144_000_000L, 148_000_000L,
-            listOf(DialFreq(144_174_000L, "FT8"), DialFreq(144_170_000L, "FT4")),
+            listOf(DialFreq(144_174_000L, "FT8")),
         ),
     )
 

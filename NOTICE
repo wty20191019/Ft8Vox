@@ -19,11 +19,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 本产品包含以下第三方开源软件：
 
-1) ft8_lib
-   位置：app/src/main/cpp/ft8_lib/
+1) ft8_lib（经 ft8_w 封装引入）
+   位置：app/src/main/cpp/ft8w/（src/、include/、api/、jni/）
    许可证：MIT License
    Copyright (c) 2018 Kārlis Goba
-   许可证全文见：app/src/main/cpp/ft8_lib/LICENSE
+   许可证全文见本文件下方（源码头注释亦保留原始声明）
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -43,8 +43,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
    SOFTWARE.
 
-2) kissfft
-   位置：app/src/main/cpp/ft8_lib/fft/
+2) kissfft（经 ft8_lib 内联引入）
+   位置：app/src/main/cpp/ft8w/src/fft/ 与 include/fft/
    许可证：BSD-3-Clause
    Copyright (c) 2003-2010, Mark Borgerding. All rights reserved.
    许可证标识（SPDX）：BSD-3-Clause

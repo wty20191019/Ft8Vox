@@ -224,10 +224,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var txJob: Job? = null
     private var wfInfo: WaterfallInfo? = null
     private var wfPixels = IntArray(0)
-    private var wfPeak = 0
-
-    /** 瀑布噪声底估计（mag 单位，0.5 dB/单位），-1 表示尚未初始化。 */
-    private var wfFloor = -1
 
     private var lastSlotsDecoded = 0L
     /** 上次把「实时读数」写进 [ReceiverStatus] 的 UTC 毫秒数（见 [pollOnce] 的节流说明）。 */
@@ -388,15 +384,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 固定自动周期：未锁定时按手机 UTC 时间取「下一个来得及的时隙」
                 txParity = autoParity ?: nextSlotParity(
                     AudioEngine.utcNowMs(),
-                    (if (cur.running) cur.slotMs else slotMsOf(s.protocol)).toLong(),
+                    (if (cur.running) cur.slotMs else s.protocol.slotMs).toLong(),
                     txPreambleMs().toLong() + AUTO_PARITY_LEAD_MARGIN_MS,
                 ),
                 sameFreqTx = s.sameFreqTx,
                 autoProgram = s.auto,
-                // 协议绑定在 native 引擎上（时隙长度 15s/7.5s 与调制方式），运行中不能直接改：
+                // 协议绑定在引擎上（时隙长度与调制方式），运行中不能直接改：
                 // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
                 protocol = if (cur.running) cur.protocol else s.protocol,
-                slotMs = if (cur.running) cur.slotMs else slotMsOf(s.protocol),
+                slotMs = if (cur.running) cur.slotMs else s.protocol.slotMs,
             )
         }
         // 运行中改协议 → 重建引擎（接收短暂中断）
@@ -848,6 +844,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     freqOsr = decode.freqOsr,
                 ),
                 decodeParams = latestSettings.decodeParams,
+                context = getApplication<Application>(),
             )
         } catch (e: Exception) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }
@@ -857,8 +854,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         wfInfo = AudioEngine.waterfallInfo()
         wfPixels = IntArray(0)
-        wfPeak = 0
-        wfFloor = -1
         _waterfall.value = null
 
         // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
@@ -917,11 +912,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 运行中切换协议（FT8 ⇄ FT4）：**停一下再重建引擎**。
+     * 运行中切换协议：**停一下再重建引擎**。
      *
-     * native monitor 的时隙长度（15 s / 7.5 s）与调制方式在创建时就固定了，没法热改，
-     * 所以只能重启一次采集。[stop] 会顺手关掉「发送总开关」并结束当前 QSO，这里按切换前
-     * 的状态把总开关恢复回来（换协议本身不应该收回「能不能发」的授权）。
+     * 引擎的时隙长度与调制方式在创建时就固定了，没法热改，所以只能重启一次采集。
+     * [stop] 会顺手关掉「发送总开关」并结束当前 QSO，这里按切换前的状态把总开关恢复回来
+     * （换协议本身不应该收回「能不能发」的授权）。当前仅支持 FT8，本路径保留以备用。
      */
     private fun restartForProtocol(protocol: Protocol) {
         val cur = _status.value
@@ -931,7 +926,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         serviceSuppressed = true
         try {
             stop()
-            _status.update { it.copy(protocol = protocol, slotMs = slotMsOf(protocol)) }
+            _status.update { it.copy(protocol = protocol, slotMs = protocol.slotMs) }
             start()
         } finally {
             serviceSuppressed = false
@@ -1988,42 +1983,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
         val startRow = WF_ROWS - shift
 
-        // 自适应强度：底部锚定「噪声底」（帧内 10 分位，抗强信号），顶部由滚动峰值
-        // 决定，跨度钳制在 [MIN_SPAN, MAX_SPAN]。这样本地强台出现时，比它低 40~60 dB
-        // 的弱台仍落在色带内，而不是被整体压成黑色。
-        val hist = IntArray(256)
-        var batchMax = 0
-        for (v in data) {
-            val u = v.toInt() and 0xFF
-            hist[u]++
-            if (u > batchMax) batchMax = u
-        }
-        val pctTarget = (data.size / 10).coerceAtLeast(1)
-        var acc = 0
-        var p10 = 0
-        for (i in 0..255) {
-            acc += hist[i]
-            if (acc >= pctTarget) {
-                p10 = i
-                break
-            }
-        }
-        // 慢速平滑，避免底色随强台闪烁
-        wfFloor = if (wfFloor < 0) p10 else (wfFloor * 7 + p10) / 8
-        wfPeak = maxOf(batchMax, wfPeak - 4)
-        val floor = wfFloor
-        val span = (wfPeak - floor + 12)
-            .coerceIn(WaterfallColors.MIN_SPAN, WaterfallColors.MAX_SPAN)
-        val invSpan = 255f / span
-
+        // 固定阈值（设置页 / 频谱页可调）：[floorDb, floorDb + rangeDb] 线性映射到色带，
+        // 不再按滚动峰值自适应，便于跨设备复现与手动微调。
+        val floorDb = latestSettings.waterfallFloorDb
+        val rangeDb = latestSettings.waterfallRangeDb
         val lut = WaterfallColors.rampLut
         for (i in 0 until shift) {
             val srcBase = (rows - shift + i) * bins
             val dstBase = (startRow + i) * bins
             for (b in 0 until bins) {
                 val u = data[srcBase + b].toInt() and 0xFF
-                val idx = ((u - floor) * invSpan).toInt().coerceIn(0, 255)
-                pixels[dstBase + b] = lut[idx]
+                pixels[dstBase + b] = lut[waterfallIdx(u, floorDb, rangeDb)]
             }
         }
 
@@ -2045,10 +2015,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         SessionService.stop(getApplication<Application>())
         serviceOn = false
         super.onCleared()
-    }
-
-    private companion object {
-        fun slotMsOf(protocol: Protocol): Int = if (protocol == Protocol.FT4) 7500 else 15000
     }
 }
 
@@ -2113,7 +2079,7 @@ internal fun planTx(
      * 单条报文的波形时长（ms，0=未知）：非 0 时放宽「就地发射」窗口 —— 只要**整条报文能在
      * 本时隙内播完**（已过时间 + 前导 + 报文 ≤ 时隙长）就直接本时隙发射，不必白等一个周期。
      *
-     * FT8 报文 12.64 s 远短于时隙 15 s（FT4 5.04 s / 7.5 s），而解码结果在时隙结束后几百
+     * FT8 报文 12.64 s 远短于时隙 15 s，而解码结果在时隙结束后几百
      * 毫秒才到手，所以应答通常正好落在紧邻的时隙。传 0 时退回只按 [startWindowMs] 判定。
      */
     messageMs: Long = 0L,
@@ -2204,7 +2170,7 @@ internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
  * 时隙奇偶标记（0/1）：按 UTC 时隙起点取整后的槽位序号取奇偶。
  *
  * 每 60 s 恰好 4 个 15 s（FT8）时隙，因此：
- * **第 1、3 个时隙为 0，第 2、4 个时隙为 1**（FT4 为 8 个 7.5 s 时隙，同样逢奇为 1）。
+ * **第 1、3 个时隙为 0，第 2、4 个时隙为 1**。
  *
  * @param slotUtcMs 时隙的 UTC 起点（毫秒）；离线解码为 0
  * @param slotMs 时隙长度（毫秒）

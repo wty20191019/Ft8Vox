@@ -57,6 +57,10 @@ import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
 import com.example.ft8vox.data.settings.ThemeMode
+import com.example.ft8vox.data.settings.WATERFALL_FLOOR_DB_RANGE
+import com.example.ft8vox.data.settings.WATERFALL_RANGE_DB_RANGE
+import com.example.ft8vox.data.settings.clampWaterfallFloorDb
+import com.example.ft8vox.data.settings.clampWaterfallRangeDb
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
@@ -78,7 +82,7 @@ import com.example.ft8vox.ui.theme.VoxRxGreen
 /**
  * 设置页（安卓 Preference 风格，docs/Ft8Vox.md）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 日志 / 地图 / 关于
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 瀑布 / 高亮与提醒 / 日志 / 地图 / 关于
  * （「外观」组已随新竖屏外壳去掉，见 docs/Ft8Vox.md）。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
@@ -280,8 +284,7 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
-                subtitle = "FT8 时隙 15 s、FT4 时隙 7.5 s。运行中切换会自动重建引擎（接收短暂中断，" +
-                    "发送总开关状态保留）；未接收时下次开始接收生效。",
+                subtitle = "当前仅支持 FT8（时隙 15 s）。",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
@@ -297,8 +300,7 @@ fun SettingsScreen(
                 signed = true,
                 subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
                     "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
-                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前；FT8 可到 ±2.5s，" +
-                    "FT4 的搜索窗只有 ±0.5s，偏移过大会解不出。",
+                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。",
                 onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
             )
             PrefDivider()
@@ -443,7 +445,36 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.4 高亮与提醒（docs/Ft8Vox.md：颜色恒启用，开关全部取消） ----------
+        // ---------- 6.4 瀑布显示（固定阈值，可调；频谱页也可直接调） ----------
+        SettingsGroup("瀑布") {
+            PrefNote(
+                "瀑布强度按固定窗口映射到色带：低于噪声底＝深蓝，达到「底噪 + 动态范围」＝红，" +
+                    "不再随信号自适应。频谱页顶部同样可以直接调这两项。"
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "噪声底",
+                value = app.waterfallFloorDb,
+                range = WATERFALL_FLOOR_DB_RANGE,
+                step = 5,
+                unit = " dBFS",
+                subtitle = "低于此值的 bin 画成最深蓝（默认 -90 dBFS）。调高：噪声被压黑、信号对比更强。",
+                onChange = { v -> settings.update { it.copy(waterfallFloorDb = clampWaterfallFloorDb(v)) } },
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "动态范围",
+                value = app.waterfallRangeDb,
+                range = WATERFALL_RANGE_DB_RANGE,
+                step = 5,
+                unit = " dB",
+                subtitle = "色带跨度（默认 50 dB）：窗口顶端 = 噪声底 + 本值，达到即画成红。" +
+                    "调大：弱信号更可见，但底色纹理更明显。",
+                onChange = { v -> settings.update { it.copy(waterfallRangeDb = clampWaterfallRangeDb(v)) } },
+            )
+        }
+
+        // ---------- 6.5 高亮与提醒（docs/Ft8Vox.md：颜色恒启用，开关全部取消） ----------
         SettingsGroup("高亮与提醒") {
             PrefNote(
                 "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
@@ -461,9 +492,9 @@ fun SettingsScreen(
             PrefDivider()
         }
 
-        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/Ft8Vox.md：无亮/暗主题、无字体档位） ----------
+        // ---------- 6.6 外观：已随新竖屏外壳去掉（docs/Ft8Vox.md：无亮/暗主题、无字体档位） ----------
 
-        // ---------- 6.6 日志 ----------
+        // ---------- 6.7 日志 ----------
         SettingsGroup("日志") {
             PrefInfo(
                 title = "ADIF 路径",
@@ -495,7 +526,7 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/Ft8Vox.md） ----------
+        // ---------- 6.8 地图（原地图页浮层的三个显示开关，收进设置；docs/Ft8Vox.md） ----------
         SettingsGroup("地图") {
             PrefSwitch(
                 title = "CQ 旗帜显示呼号",

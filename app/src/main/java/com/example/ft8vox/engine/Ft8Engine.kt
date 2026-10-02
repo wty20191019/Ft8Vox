@@ -1,25 +1,25 @@
 package com.example.ft8vox.engine
 
+import com.ft8.nativecore.Ft8DecodeConfig
+import com.ft8.nativecore.Ft8Native
+
 /**
- * 协议类型。ordinal 会传给 native，务必保持顺序（0=FT8, 1=FT4）。
+ * 协议类型。当前仅支持 FT8；FT4 已于本次改造中从引擎/协议层移除。
  *
- * @property messageMs 单条报文的波形时长（ms）：FT8 = 79 符号 × 160 ms = 12.64 s，
- *   FT4 = 105 符号 × 48 ms = 5.04 s（符号周期取 native `FT4_SYMBOL_PERIOD = 0.048f`）。
+ * @property messageMs 单条报文的波形时长（ms）：FT8 = 79 符号 × 160 ms = 12.64 s。
  *   用于判断「这条报文能否在本时隙内播完」（`planTx` 就地发射、`TxScheduler` 立即发/换目标）。
- *   注意不是 4.48 s：FT4 单个符号 48 ms，105 符号共 5.04 s（时隙 7.5 s）。
- * @property occupiedHz 单条报文实际占用的音频带宽（Hz）：FT8 = 8 音 × 6.25 Hz = 50 Hz，
- *   FT4 = 4 音 × 20.833 Hz ≈ 83 Hz。报文的下边频就是报文的音频频率（瀑布上的红线），
- *   整段频率＝`[f, f + occupiedHz]`，瀑布按这个宽度画半透明红条（见 `WaterfallView`）。
+ * @property occupiedHz 单条报文实际占用的音频带宽（Hz）：FT8 = 8 音 × 6.25 Hz = 50 Hz。
+ *   报文的下边频就是报文的音频频率（瀑布上的红线）。
+ * @property slotMs 协议时隙长度（ms）：FT8 = 15 s。
  */
-enum class Protocol(val messageMs: Int, val occupiedHz: Int) {
-    FT8(12_640, 50),
-    FT4(5_040, 83),
+enum class Protocol(val messageMs: Int, val occupiedHz: Int, val slotMs: Int) {
+    FT8(12_640, 50, 15_000),
 }
 
-/** 解码器配置，对应 native 的 monitor_config_t。 */
+/** 解码器配置。 */
 data class Ft8Config(
     val protocol: Protocol = Protocol.FT8,
-    /** 分析采样率，FT8/FT4 标准为 12000 Hz。 */
+    /** 分析采样率，FT8 标准为 12000 Hz。 */
     val sampleRate: Int = 12000,
     /** 分析频率下限（Hz）。 */
     val fMin: Float = 200f,
@@ -32,159 +32,143 @@ data class Ft8Config(
 )
 
 /**
- * FT8 / FT4 引擎的 Kotlin 入口。
+ * FT8 离线编解码的 Kotlin 入口（基于 ft8_w 的 [Ft8Native]）。
  *
- * 负责加载 native 库 libft8.so，并向上层暴露解码、编码等接口。
- * 接口契约见 docs/Ft8Vox.md。
+ * 实时接收/发射已改由 [AudioEngine]（Kotlin 实时引擎）负责；本对象保留给：
+ * - 一次性报文编码校验（`SessionViewModel.canEncodeMessage`）；
+ * - 单元/仪器测试的整段解码。
  *
- * 注意：类名与包名决定 native 函数符号（Java_<包>_<类>_<方法>），
- * 重命名此类或包时必须同步修改 app/src/main/cpp/jni_bridge.c。
+ * 说明：ft8_w 的上报 `dt` 是「相对音频起点」的秒数（信号通常落在 0.5 s），而本
+ * App 的 [DecodeResult.dt] 沿用 WSJT-X 口径（名义 0），故此处统一减去 0.5 s。
  */
 object Ft8Engine {
-
-    init {
-        System.loadLibrary("ft8")
-    }
-
-    /** native 引擎句柄（指向 native ft8_engine_t），0 表示未初始化。 */
-    private var handle: Long = 0L
 
     /** 最近一次 initialize 使用的配置，供 encode 默认复用。 */
     private var config: Ft8Config = Ft8Config()
 
-    /** 最近一次下发的解码参数（便于调试/回读）。 */
+    /** 最近一次下发的解码参数。 */
     var decodeParams: DecodeParams = DecodeParams()
         private set
 
-    /**
-     * 初始化解码引擎。重复调用会先释放旧引擎。
-     * @throws IllegalStateException 当 native 初始化失败时抛出。
-     */
+    /** 离线累积的音频缓冲（最多一个时隙）。 */
+    private var buffer: FloatArray = FloatArray(0)
+    private var bufferLen: Int = 0
+
+    /** 初始化（离线）：重置累积缓冲并保存配置/参数。可重复调用。 */
     fun initialize(
         config: Ft8Config = Ft8Config(),
         decodeParams: DecodeParams = DecodeParams(),
     ) {
-        release()
         this.config = config
-        handle = nativeInit(
-            config.protocol.ordinal,
-            config.sampleRate,
-            config.fMin,
-            config.fMax,
-            config.timeOsr,
-            config.freqOsr,
-        )
-        check(handle != 0L) { "Failed to initialize Ft8Engine (native init returned 0)" }
-        setDecodeParams(decodeParams)
+        this.decodeParams = decodeParams.clamped()
+        reset()
     }
 
-    /**
-     * 更新热生效的解码参数；需先 [initialize]，未初始化时静默忽略。
-     */
+    /** 更新热生效的解码参数。 */
     fun setDecodeParams(params: DecodeParams) {
-        this.decodeParams = params.clamped()
-        if (handle != 0L) {
-            val p = decodeParams
-            nativeSetDecodeParams(
-                handle,
-                p.minScore,
-                p.maxCandidates,
-                p.ldpcIterations,
-                p.maxDecoded,
-                p.passes,
-            )
+        decodeParams = params.clamped()
+    }
+
+    /** 清空当前累积的音频，准备下一段解码。 */
+    fun reset() {
+        val slot = config.sampleRate * 15
+        if (buffer.size != slot) buffer = FloatArray(slot)
+        bufferLen = 0
+    }
+
+    /** 追加一块 12 kHz 单声道 PCM（float，[-1,1]），最多保留一个时隙。 */
+    fun processAudio(samples: FloatArray, length: Int = samples.size) {
+        val n = length.coerceAtMost(samples.size).coerceAtLeast(0)
+        if (n == 0) return
+        if (buffer.isEmpty()) reset()
+        val take = minOf(n, buffer.size - bufferLen)
+        if (take > 0) {
+            System.arraycopy(samples, 0, buffer, bufferLen, take)
+            bufferLen += take
         }
     }
 
-    /** 清空当前时隙的 waterfall，准备下一个周期。 */
-    fun reset() {
-        if (handle != 0L) nativeReset(handle)
-    }
-
-    /**
-     * 喂入一块 12 kHz 单声道 PCM（float，[-1,1]）。
-     * 内部会按 monitor 的块大小累积到 waterfall。
-     */
-    fun processAudio(samples: FloatArray, length: Int = samples.size) {
-        if (handle != 0L) nativeProcess(handle, samples, length)
-    }
-
-    /** 对当前累积的 waterfall 解码，返回报文明文列表。 */
+    /** 对当前累积的音频解码，返回报文明文列表。 */
     fun decode(): List<String> = decodeDetailed().map { it.text }
 
-    /** 对当前累积的 waterfall 解码，返回带指标（SNR/DT/DF/score）的结果。 */
-    fun decodeDetailed(): List<DecodeResult> =
-        if (handle != 0L) nativeDecode(handle).toList() else emptyList()
-
-    /** waterfall 频率轴信息；未初始化时为 null。 */
-    fun waterfallInfo(): WaterfallInfo? {
-        if (handle == 0L) return null
-        val v = nativeWaterfallInfo(handle)
-        return WaterfallInfo(bins = v[0], binHz = v[1] / 1000f, fMinHz = v[2] / 1000f)
+    /** 对当前累积的音频解码，返回带指标（SNR/DT/DF/score）的结果。 */
+    fun decodeDetailed(): List<DecodeResult> {
+        if (bufferLen <= 0) return emptyList()
+        val samples = if (bufferLen == buffer.size) buffer else buffer.copyOf(bufferLen)
+        return runCatching {
+            Ft8Native.decode(samples, decodeConfig()).map(::toDecodeResult)
+        }.getOrDefault(emptyList())
     }
 
-    /** 取走新产生的 waterfall 行（每行 `waterfallInfo()!!.bins` 字节）。 */
-    fun pollWaterfall(maxRows: Int = 64): ByteArray =
-        if (handle != 0L) nativePollWaterfall(handle, maxRows) else ByteArray(0)
-
     /**
-     * 将文本编码为一个完整时隙的发射 PCM（12 kHz，float，[-1,1]，含静音填充）。
+     * 将文本编码为发射 PCM（12 kHz，float）。波形自带 0.5 s 起播保护间隔（WSJT-X 约定），
+     * 不填充到整时隙 —— 播放端 [AudioEngine.playTx] 会在其前面再加 PTT 前导。
      *
-     * @param text 报文明文，如 "CQ F4FSY JN25"、"GJ0KYZ RK9AX MO05"。
-     * @param frequencyHz 音频基频（符号 0 对应的频率）。
-     * @param protocol 协议，默认沿用 initialize 的配置。
-     * @param sampleRate 采样率，默认沿用 initialize 的配置。
      * @throws IllegalArgumentException 当报文无法解析/编码时抛出。
      */
     fun encode(
         text: String,
         frequencyHz: Float,
-        protocol: Protocol = config.protocol,
+        @Suppress("UNUSED_PARAMETER") protocol: Protocol = config.protocol,
         sampleRate: Int = config.sampleRate,
-    ): FloatArray =
-        nativeEncode(protocol.ordinal, text, frequencyHz, sampleRate)
-            ?: throw IllegalArgumentException("无法编码报文: \"$text\"")
-
-    /** 释放 native 资源。可重复调用。 */
-    fun release() {
-        if (handle != 0L) {
-            nativeRelease(handle)
-            handle = 0L
-        }
+    ): FloatArray {
+        val cfg = com.ft8.nativecore.Ft8EncodeConfig(
+            sampleRate = sampleRate,
+            baseFreqHz = frequencyHz,
+            amplitude = 1.0f,
+            symbolBt = 2.0f,
+            leadInSec = 0.5f,
+            tailSec = 0f,
+        ).toFloatArray()
+        val len = Ft8Native.encodeLength(text, cfg)
+        require(len > 0) { "无法编码报文: \"$text\"" }
+        val out = FloatArray(len)
+        val written = Ft8Native.encode(text, cfg, out)
+        require(written > 0) { "无法编码报文: \"$text\"" }
+        return if (written == out.size) out else out.copyOf(written)
     }
 
-    // ---- native 接口 ----
-    private external fun nativeInit(
-        protocol: Int,
-        sampleRate: Int,
-        fMin: Float,
-        fMax: Float,
-        timeOsr: Int,
-        freqOsr: Int,
-    ): Long
+    /** 离线引擎不提供瀑布（仅实时 [AudioEngine] 提供）；恒为 null。 */
+    fun waterfallInfo(): WaterfallInfo? = null
 
-    private external fun nativeReset(handle: Long)
-    private external fun nativeProcess(handle: Long, samples: FloatArray, length: Int)
-    private external fun nativeDecode(handle: Long): Array<DecodeResult>
-    private external fun nativeSetDecodeParams(
-        handle: Long,
-        minScore: Int,
-        maxCandidates: Int,
-        ldpcIterations: Int,
-        maxDecoded: Int,
-        passes: Int,
-    )
-    private external fun nativeWaterfallInfo(handle: Long): IntArray
-    private external fun nativePollWaterfall(handle: Long, maxRows: Int): ByteArray
-    private external fun nativeEncode(
-        protocol: Int,
-        text: String,
-        frequencyHz: Float,
-        sampleRate: Int,
-    ): FloatArray?
+    /** 离线引擎不提供瀑布行；恒为空。 */
+    fun pollWaterfall(@Suppress("UNUSED_PARAMETER") maxRows: Int = 64): ByteArray = ByteArray(0)
 
-    private external fun nativeRelease(handle: Long)
+    /** 释放资源（无原生句柄，仅清空缓冲）。 */
+    fun release() {
+        bufferLen = 0
+    }
 
     /** 占位接口：返回 native 侧的握手字符串。 */
-    external fun test(): String
+    fun test(): String = "Ft8Native ${Ft8Native.version()}"
+
+    // ---- 内部 ----
+
+    private fun decodeConfig(): Ft8DecodeConfig {
+        val p = decodeParams
+        return Ft8DecodeConfig(
+            fMinHz = config.fMin,
+            fMaxHz = config.fMax,
+            sampleRate = config.sampleRate,
+            timeOsr = config.timeOsr,
+            freqOsr = config.freqOsr,
+            maxCandidates = p.maxCandidates,
+            minSyncScore = p.minScore,
+            ldpcIterations = p.ldpcIterations,
+            decodeDepth = p.passes,
+            enableSubtract = p.passes > 1,
+            numThreads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
+            osdDepth = 2,
+        )
+    }
+
+    /** ft8_w 结果 → App 的 [DecodeResult]（dt 归一到 WSJT-X 口径；离线无时隙）。 */
+    private fun toDecodeResult(m: com.ft8.nativecore.Ft8Message): DecodeResult = DecodeResult(
+        text = m.text,
+        snr = Math.round(m.snr),
+        dt = m.dt - 0.5f,
+        df = Math.round(m.freq),
+        score = m.score,
+        slotUtcMs = 0L,
+    )
 }

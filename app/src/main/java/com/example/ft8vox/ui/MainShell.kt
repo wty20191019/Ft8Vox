@@ -197,6 +197,7 @@ fun MainShell(
                 MainTab.SPECTRUM -> SpectrumScreen(
                     viewModel = session,
                     settings = appSettings,
+                    settingsViewModel = settings,
                     hasPermission = permissionGranted,
                     onRequestStart = requestStart,
                     onOpenLog = { call ->

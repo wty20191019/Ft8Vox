@@ -117,6 +117,8 @@ private object Keys {
     val themeMode = stringPreferencesKey("theme_mode")
     val fontSize = stringPreferencesKey("font_size")
     val waterfallHeight = stringPreferencesKey("waterfall_height")
+    val waterfallFloorDb = intPreferencesKey("waterfall_floor_db")
+    val waterfallRangeDb = intPreferencesKey("waterfall_range_db")
     val sampleRate = stringPreferencesKey("sample_rate")
     // 解码预设不再持久化：改由 `AppSettings.decodePreset` 从解码参数反推（旧 `decode_preset` 键不再读写）
     val decodeTimeOsr = intPreferencesKey("decode_time_osr")
@@ -219,6 +221,8 @@ private fun Preferences.toAppSettings(): AppSettings {
         themeMode = enumOr(Keys.themeMode, defaults.themeMode),
         fontSize = enumOr(Keys.fontSize, defaults.fontSize),
         waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
+        waterfallFloorDb = clampWaterfallFloorDb(this[Keys.waterfallFloorDb] ?: defaults.waterfallFloorDb),
+        waterfallRangeDb = clampWaterfallRangeDb(this[Keys.waterfallRangeDb] ?: defaults.waterfallRangeDb),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decode = DecodeSettings(
             timeOsr = this[Keys.decodeTimeOsr] ?: defaults.decode.timeOsr,
@@ -270,6 +274,8 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.themeMode] = themeMode.name
     prefs[Keys.fontSize] = fontSize.name
     prefs[Keys.waterfallHeight] = waterfallHeight.name
+    prefs[Keys.waterfallFloorDb] = waterfallFloorDb
+    prefs[Keys.waterfallRangeDb] = waterfallRangeDb
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodeTimeOsr] = decode.timeOsr
     prefs[Keys.decodeFreqOsr] = decode.freqOsr

@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,6 +39,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.settings.WATERFALL_FLOOR_DB_RANGE
+import com.example.ft8vox.data.settings.WATERFALL_RANGE_DB_RANGE
+import com.example.ft8vox.data.settings.clampWaterfallFloorDb
+import com.example.ft8vox.data.settings.clampWaterfallRangeDb
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.DecodeHighlight
 import com.example.ft8vox.qso.HighlightRole
@@ -59,6 +65,7 @@ import kotlin.math.abs
 fun SpectrumScreen(
     viewModel: SessionViewModel,
     settings: AppSettings,
+    settingsViewModel: SettingsViewModel,
     hasPermission: Boolean,
     onRequestStart: () -> Unit,
     onOpenLog: (String?) -> Unit,
@@ -80,7 +87,7 @@ fun SpectrumScreen(
         val slotMs = status.slotMs.toLong().coerceAtLeast(1L)
         val newest = messages.maxOfOrNull { it.slotUtcMs } ?: 0L
         val txText = if (status.txing) status.lastTxText else null
-        // 信号实际结束时刻：FT8/FT4 都在时隙起点后 0.5 s 起播，波形长 protocol.messageMs
+        // 信号实际结束时刻：FT8 在时隙起点后 0.5 s 起播，波形长 protocol.messageMs
         val signalEndOffsetMs = 500L + status.protocol.messageMs
         val recent = messages.filter { it.slotUtcMs > 0 && it.slotUtcMs >= newest - slotMs * 2 }
         recent.mapNotNull { m ->
@@ -117,6 +124,47 @@ fun SpectrumScreen(
                 "${status.band.ifEmpty { "--" }} · ${status.protocol.name}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        // 瀑布强度窗口（固定阈值，可调；与设置页「瀑布」组联动）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(JtdxPanel)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "瀑布",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.weight(1f))
+            WfTuneStepper(
+                label = "底噪",
+                value = settings.waterfallFloorDb,
+                unit = " dB",
+                canDec = settings.waterfallFloorDb > WATERFALL_FLOOR_DB_RANGE.first,
+                canInc = settings.waterfallFloorDb < WATERFALL_FLOOR_DB_RANGE.last,
+                onDelta = { d ->
+                    settingsViewModel.update {
+                        it.copy(waterfallFloorDb = clampWaterfallFloorDb(it.waterfallFloorDb + d))
+                    }
+                },
+            )
+            Spacer(Modifier.width(10.dp))
+            WfTuneStepper(
+                label = "动态",
+                value = settings.waterfallRangeDb,
+                unit = " dB",
+                canDec = settings.waterfallRangeDb > WATERFALL_RANGE_DB_RANGE.first,
+                canInc = settings.waterfallRangeDb < WATERFALL_RANGE_DB_RANGE.last,
+                onDelta = { d ->
+                    settingsViewModel.update {
+                        it.copy(waterfallRangeDb = clampWaterfallRangeDb(it.waterfallRangeDb + d))
+                    }
+                },
             )
         }
 
@@ -280,3 +328,46 @@ private data class SpectrumLabel(
     /** 该解码**信号实际结束**的时刻（ms）：用来锚定它在瀑布上的竖向位置。 */
     val signalEndMs: Long,
 )
+
+/** 频谱页的瀑布强度微调控件（−/值/+），步进 5，与设置页「瀑布」组共用同一份设置。 */
+@Composable
+private fun WfTuneStepper(
+    label: String,
+    value: Int,
+    unit: String,
+    canDec: Boolean,
+    canInc: Boolean,
+    onDelta: (Int) -> Unit,
+    step: Int = 5,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "−",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (canDec) JtdxValue else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .clickable(enabled = canDec) { onDelta(-step) }
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        Text(
+            "$value$unit",
+            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+            color = JtdxValue,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(min = 54.dp),
+        )
+        Text(
+            "+",
+            style = MaterialTheme.typography.titleMedium,
+            color = if (canInc) JtdxValue else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .clickable(enabled = canInc) { onDelta(step) }
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}

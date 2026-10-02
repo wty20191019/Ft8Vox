@@ -131,7 +131,7 @@ data class QsoProgress(
 }
 
 /**
- * FT8/FT4 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
+ * FT8 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
  *
  * ### 设计：照 FT8CN 的**报文序号**模型
  *

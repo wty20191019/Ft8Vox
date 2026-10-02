@@ -529,7 +529,7 @@ fun JtdxHelpDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * 「波段与频率」弹窗：列出各波段及常用 FT8/FT4 刻度频率，并支持自定义波段名与频率。
+ * 「波段与频率」弹窗：列出各波段及常用 FT8 刻度频率，并支持自定义波段名与频率。
  *
  * [currentBand]/[currentHz] 用于标记当前项；[onConfirm] 回传最终（波段名, 频率 Hz）。
  */

@@ -1,7 +1,8 @@
 # Ft8Vox · 使用与设计（唯一文档）
 
-> Ft8Vox 把 Android 手机变成一台 FT8 / FT4 终端：采集电台音频实时解码，手动或自动完成通联并落库。
-> 手机**强制竖屏**；音频 I/O 用 **AAudio**；DSP 在 native 层复用开源的 **ft8_lib**（含 kissfft）；
+> Ft8Vox 把 Android 手机变成一台 FT8 终端：采集电台音频实时解码，手动或自动完成通联并落库。
+> 手机**强制竖屏**；音频 I/O 在 Kotlin 层用 **AudioRecord / AudioTrack**；编解码 DSP 在 native 层复用开源的
+> **ft8_w**（`app/src/main/cpp/ft8w/`，基于 **ft8_lib**，含 kissfft）；
 > 界面用 **Jetpack Compose**（Material 3）。**无 CAT**：不控制电台频率 / 模式 / PTT，发射靠电台 **VOX**
 > 或手动 PTT。音频接入支持**声学耦合**与 **USB 声卡 / OTG**。
 >
@@ -145,6 +146,7 @@
 
 - **红线和频率刻度常驻**，即使还没收到第一帧也画（用设置里的频率范围作兜底轴），因此启动即可拖红线设发射频率。
 - 顶部有奇偶色条；红线处一条半透明红条表示占用带宽。
+- **顶部两行读数 / 控件**：第一行是发射频率与当前波段 / 协议；第二行是瀑布强度微调（**噪声底**与**动态范围**，各 ±5 dB），与设置页「瀑布」组共用同一份设置、即时生效。
 - **解码报文叠加**：把最近若干时隙解出的报文按频率位置叠加在瀑布上，**竖排**文字（自上而下读），
   底端**锚在该信号的实际结束时刻**，随瀑布一起向上滚，滚出约 48 s 窗口（FT8 默认档约 3 个时隙）即消失。
   这条报文只读、不响应点击（防误触）。
@@ -299,13 +301,13 @@
 
 ### 5.4 时隙、就地发射与换目标
 
-- **时隙**：FT8 = 15 s / 时隙，FT4 = 7.5 s；奇偶两周期交替。选台时自动把发射对齐到对方的**相反周期**。
+- **时隙**：FT8 = 15 s / 时隙，奇偶两周期交替。选台时自动把发射对齐到对方的**相反周期**。
 - **就地发射**：本时隙剩余时间够「报文波形 + 前导」播完就立即发，否则排下一周期
-  （FT8 报文 12.64 s、FT4 5.04 s；判据用 `TxScheduler.minSendNowMs`）。
+  （FT8 报文 12.64 s；判据用 `TxScheduler.minSendNowMs`）。
 - **QSO 进行中必须等上一时隙的解码处理完再排定本时隙**，避免抢发旧报文、把新报文挤到下下周期。
 - **发射途中换目标**：按同一判据当场**作废重发**。
 - **前导**：无 CAT 时靠「PTT 延迟静音 + 发射前导音」让电台 VOX 抢先键控，再把数据对准时隙起点。
-- **时隙偏移**：把**整个时隙**一起平移（解码窗口起点 + 发射起点），用于按解码 DT 校准本机时间 / 声卡时延；正值推后、负值提前。FT4 搜索窗窄，偏移过大会解不出。
+- **时隙偏移**：把**整个时隙**一起平移（解码窗口起点 + 发射起点），用于按解码 DT 校准本机时间 / 声卡时延；正值推后、负值提前。
 
 ### 5.5 同频 / 异频发射
 
@@ -460,7 +462,7 @@
 
 | 项 | 默认 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| 模式 | FT8 | FT8 / FT4 | 运行中切换会自动重建引擎（接收短暂中断）。 |
+| 模式 | FT8 | 仅 FT8 | FT4 已从引擎 / 协议层移除。 |
 | 时隙偏移 | 0 ms | ±2500 | 整时隙平移（解码窗口 + 发射起点），按解码 DT 校准。 |
 | 解码深度 | 快 | 快 / 自定义 | 「快」＝下面各项的默认值（照搬 FT8CN 快速解码）；手改任一项显示「自定义」。 |
 | 时间 OSR | 2 | 1–4 | 每符号时间细分份数；需重开接收生效。 |
@@ -476,20 +478,29 @@
 | 自动程序 | 见 [§3.8](#38-自动程序弹窗) | — | 发射监管 / 无回应次数 / 自动跟踪 CQ / 自动呼叫 CQ 台。 |
 | 恢复默认 | — | — | 重置全部设置，**保留呼号 / 网格 / 备注**。 |
 
-### 7.5 高亮与提醒
+### 7.5 瀑布
+
+| 项 | 默认 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| 噪声底 | -90 dBFS | -120…-20 | 强度映射的固定窗口下界：低于此值的 bin 画成深蓝。频谱页顶部同样可直接调。 |
+| 动态范围 | 50 dB | 10…100 | 色带跨度；窗口顶端 = 噪声底 + 本值，达到即画成红。调大弱信号更可见、底色纹理更明显。 |
+
+> 这两项即时生效（热生效），改完下一帧瀑布就用新窗口，不需要重开接收。
+
+### 7.6 高亮与提醒
 
 - 颜色说明图例（唯一口径来源）。
 - **含我呼号哔声**：有报文直接叫我呼号时用系统提示音提醒（默认关）。
 
 > 颜色恒启用，**没有**逐项开关。
 
-### 7.6 日志
+### 7.7 日志
 
 - ADIF 路径说明（通过系统文件选择器导入 / 导出，不需存储权限）。
 - 导入 / 导出操作行与状态提示。
 - **清空全部记录**（二次确认，不可撤销）。
 
-### 7.7 地图
+### 7.8 地图
 
 | 项 | 默认 | 说明 |
 | --- | --- | --- |
@@ -497,7 +508,7 @@
 | CQ 旗帜显示强度 | 关 | 旗子旁是否显示信号强度。 |
 | 连线显示文字 | 开 | 关闭则只显示连线与移动方块，不显示文字。 |
 
-### 7.8 关于
+### 7.9 关于
 
 - 操作与手势速查（解调行手势 / 拖红线 / 报文槽点击等）。
 - 版本号、许可（GPL-3.0）与免责声明。
@@ -528,11 +539,11 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 
 ### 9.1 命名与符号
 
-- Kotlin 入口类（均为 `object`，位于 `com.example.ft8vox.engine`）：`Ft8Engine`（离线解码 / 编码）、`AudioEngine`（实时音频 I/O 与时隙调度）。
-- native 函数符号遵循 `Java_<包名下划线>_<类名>_<方法名>`。
-- **重命名类或包时，必须同步修改 `app/src/main/cpp/jni_bridge.c` / `audio_engine.c`**。
-- 这些 JNI 类 / 方法必须在 `app/src/main/keepRules/rules.keep` 中保留（防 release 混淆）。
-- 解码核心（monitor + 呼号哈希 + 候选 / 解码）抽在 native 模块 `ftx_session.c`，离线（`jni_bridge.c`）与实时（`audio_engine.c`）共用。
+- `libft8.so` 由 `app/src/main/cpp/ft8w/` 源码构建：`ft8core`（纯 C 静态库：编解码 / LDPC / OSD / STFT / kissfft）+ `ft8`（`jni/ft8_jni.cpp`，共享库，产物固定为 `libft8.so`）。
+- JNI 入口类：`com.ft8.nativecore.Ft8Native`（`object`，ft8_w 交付包，**不要改动其包名 / 方法名**）。
+- native 函数符号遵循 `Java_<包名下划线>_<类名>_<方法名>`，即 `Java_com_ft8_nativecore_Ft8Native_*`，实现在 `app/src/main/cpp/ft8w/jni/ft8_jni.cpp`。
+- **重命名 `Ft8Native` 的包 / 类 / 方法时，必须同步修改 `ft8w/jni/ft8_jni.cpp`**。
+- 上层封装 `com.example.ft8vox.engine.Ft8Engine` / `AudioEngine` 是**纯 Kotlin**，不直接对应 JNI 符号，改名不影响 native。
 
 ### 9.2 数据格式
 
@@ -540,109 +551,108 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 | --- | --- |
 | PCM 格式 | 单声道、`float32`、范围 `[-1.0, 1.0]` |
 | 分析采样率 | **12 kHz** |
-| 采集采样率 | 设备原生（常见 48 kHz），native 重采样到 12 kHz |
-| 大数组传递 | `FloatArray`（`GetFloatArrayElements` 读取，块间无拷贝） |
+| 采集采样率 | 设备原生（常见 48 kHz），Kotlin 重采样到 12 kHz |
+| 大数组传递 | `FloatArray`（整段传入，JNI 内拷贝） |
 | 文本编码 | UTF-8（报文为 ASCII 子集） |
-| 协议 | `Protocol { FT8, FT4 }` |
+| 协议 | `Protocol { FT8 }`（FT4 已从引擎 / 协议层移除） |
 
-### 9.3 生命周期接口（`Ft8Engine`，离线）
+### 9.3 离线接口（`Ft8Engine`）
 
-| 方法 | 职责 | 线程 |
-| --- | --- | --- |
-| `initialize(config: Ft8Config, decodeParams: DecodeParams = DecodeParams())` | 创建并初始化 monitor / waterfall，并下发解码参数 | 初始化线程 |
-| `setDecodeParams(params)` | 更新**热生效**的解码参数 | 任意（内部无锁读写单字） |
-| `reset()` | 清空当前时隙的 waterfall 与分块缓冲 | 解码线程 |
-| `release()` | 释放 native 资源 | 与 initialize 同线程 |
-
-`Ft8Config` 字段（对应 `monitor_config_t`）：`protocol`、`sampleRate`、`fMin`、`fMax`、`timeOsr`、`freqOsr`。
-**改动 `Ft8Config` 需重建引擎**；`DecodeParams` 可在运行中调整。
-
-### 9.4 解码接口
+`Ft8Engine` 是 `Ft8Native` 的薄封装（单遍整段解码），用于一次性报文编码校验与仪器测试；实时接收走 `AudioEngine`。
 
 | 方法 | 职责 |
 | --- | --- |
-| `processAudio(samples, length)` | 接收任意长度的 12 kHz PCM；native 内按 monitor 块大小累积，余数留待下次（支持流式分块喂入） |
-| `decodeDetailed(): List<DecodeResult>` | 时隙结束时调用，执行候选查找 + 解码，返回带指标的报文列表 |
+| `initialize(config, decodeParams = DecodeParams())` | 记录配置并复位累积缓冲 |
+| `setDecodeParams(params)` | 更新**热生效**的解码参数 |
+| `reset()` | 清空当前累积的音频（一个时隙） |
+| `processAudio(samples, length = samples.size)` | 追加 12 kHz PCM，最多保留一个时隙 |
+| `decodeDetailed(): List<DecodeResult>` | 对当前累积音频调用 `Ft8Native.decodeSlot` |
 | `decode(): List<String>` | 便捷方法，等价于 `decodeDetailed().map { it.text }` |
+| `encode(text, frequencyHz, protocol, sampleRate): FloatArray` | 文本 → GFSK 波形（详见 [§9.5](#95-编码)） |
+| `release()` | 清空缓冲（无原生句柄） |
+| `test(): String` | 占位握手，验证 so 加载 |
 
-`DecodeResult` 字段（对应 `ftx_decode_result_t`）：
+`Ft8Config` 字段：`protocol`、`sampleRate`、`fMin`、`fMax`、`timeOsr`、`freqOsr`（映射到 ft8_w 的 `ft8_decode_config_t`）。
+**改动 `Ft8Config` 需重建引擎**；`DecodeParams` 可在运行中调整。
+
+### 9.4 解码结果与参数
+
+`DecodeResult` 字段（在 Kotlin 侧构造，不再由 native `NewObject`）：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `text` | String | 解码出的报文明文 |
-| `snr` | Int | 近似 SNR（dB，换算到 2500 Hz 参考带宽） |
+| `snr` | Int | 近似 SNR（dB） |
 | `dt` | Float | 相对时隙起点的**名义**时间偏移（秒），已减去 0.5 s 起始延迟 |
 | `df` | Int | 音频频率偏移（Hz） |
 | `score` | Int | 候选 Costas 同步得分 |
 | `slotUtcMs` | Long | 所属时隙的 UTC 起点（毫秒）；离线解码为 0 |
+| `deep` | Boolean | 深度解码占位，当前恒 `false` |
 
-> `DecodeResult` 由 native 直接 `NewObject` 构造，构造签名固定在 `jni_common.h`：
-> `(Ljava/lang/String;IFIIJ)V`。**修改 Kotlin 字段顺序 / 类型时必须同步更新该签名。**
+> ft8_w 上报的 `dt` 是「相对音频起点」的秒数（信号通常落在 0.5 s 处），映射到本 App 的 `dt` 时统一减去 0.5 s（WSJT-X 口径）。
 
-**SNR 口径**（照搬 JTDX / WSJT-X 同一尺度）：对每个符号取该符号实际发送音调所在 bin 的功率与本符号内其余音调 bin 的平均功率之比，在功率域对全部符号求平均后扣本底、按分析窗等效噪声带宽折算到 2500 Hz 参考带宽，最后钳位。
+**可调解码参数（`DecodeParams` → ft8_w `ft8_decode_config_t`）**：
 
-**可调解码参数（`DecodeParams` ↔ `ftx_decode_params_t`）**：
-
-| 字段 | 默认 | 范围 | 说明 |
+| 字段 | 默认 | 范围 | 映射 |
 | --- | --- | --- | --- |
-| `minScore` | 10 | 4..40 | Costas 同步最低得分 |
-| `maxCandidates` | 120 | 20..500 | 单时隙候选上限 |
-| `ldpcIterations` | 20 | 5..60 | LDPC 最大迭代次数 |
-| `maxDecoded` | 100 | 5..100 | 单时隙最多解出的报文条数 |
-| `passes` | 2 | 1..4 | 多趟减谱重解（SIC）趟数；1 = 关闭 |
+| `minScore` | 10 | 4..40 | `min_sync_score` |
+| `maxCandidates` | 120 | 20..500 | `max_candidates` |
+| `ldpcIterations` | 20 | 5..60 | `ldpc_iterations` |
+| `maxDecoded` | 100 | 5..100 | 仅本地限流（ft8_w 无对应字段） |
+| `passes` | 2 | 1..4 | `decode_depth`；`>1` 时 `enable_subtract = true` |
 
-- 这些参数只影响搜索与 LDPC 迭代、不改变 STFT 结构，故可在接收过程中热更新；native 侧会再次钳制。
-- `monitor_config_t`（`fMin`/`fMax`/`timeOsr`/`freqOsr`）不同：改动需重建引擎（重启接收）。
-- **多趟减谱重解（SIC）**：解完一趟后，把已解出的报文重新编码出真实音调序列，逐符号只把该符号实际占用的那 1 个音调 bin 压平到本地最低幅度，得到残留谱后重搜重解，把被强台压住的同频弱信号挖出来。
+- 这些参数只影响搜索与 LDPC 迭代、不改变 STFT 结构，故可在接收过程中热更新。
+- `fMin`/`fMax`/`timeOsr`/`freqOsr` 不同：改动需重建引擎（重启接收）。
+- **多趟减谱重解（SIC）**：由 ft8_w 的 `decode_depth` / `enable_subtract` 实现；解完一趟后把已解出的报文重新编码出真实音调序列、压平对应谱线后重搜重解，把被强台压住的同频弱信号挖出来。
+- ft8_w 另有**流式会话接口**（`sessionCreate` / `sessionFeed` / `sessionFinalize` / `sessionReset` / `sessionDestroy`），当前 App 未使用（改用后台线程整时隙 `decodeSlot`）。
 
 ### 9.5 编码接口
 
 | 方法 | 职责 |
 | --- | --- |
-| `encode(text, frequencyHz, protocol, sampleRate): FloatArray` | 文本 → 77-bit 载荷 → tone → GFSK 波形，返回**一个完整时隙**的 12 kHz PCM（含首尾静音填充） |
+| `encode(text, frequencyHz, protocol, sampleRate): FloatArray` | 文本 → 77-bit 载荷 → tone → GFSK 波形，返回 **0.5 s 保护静音 + 12.64 s 波形**（不填满整时隙） |
 
 - `protocol` / `sampleRate` 默认沿用最近一次 `initialize` 的配置。
 - 报文无法解析 / 编码时抛 `IllegalArgumentException`。
-- 时隙定位遵循 WSJT-X 约定：波形在时隙起点后 **0.5 s** 开始，末尾留白填满整个时隙。
-- 覆盖报文：标准报文（CQ、呼叫、R/RR73/73）、自由文本；FT8 与 FT4。
+- 时隙定位遵循 WSJT-X 约定：波形在时隙起点后 **0.5 s** 开始，末尾不再填充（播放端 `playTx` 补 PTT 前导）。
+- 覆盖报文：标准报文（CQ、呼叫、R/RR73/73）、自由文本。
 
-### 9.6 实时音频接口（`AudioEngine`）
+### 9.6 实时音频接口（`AudioEngine`，纯 Kotlin）
 
 | 方法 | 职责 |
 | --- | --- |
-| `initialize(config, decodeParams)` | 创建实时引擎；重复调用先释放 |
+| `initialize(config, decodeParams, context = null)` | 创建实时引擎（`context` 可选，仅用于指定音频设备）；重复调用先释放 |
 | `setDecodeParams(params)` | 运行中热更新解码参数 |
-| `release()` | 停止采集 / 播放并释放 |
-| `startCapture(preferredRate = 48000, deviceId = 0): Int` | 打开采集流并启动 DSP 线程；返回设备实际采样率，负数为错误码 |
+| `release()` | 停止采集 / 播放并关闭解码线程 |
+| `startCapture(preferredRate = 48000, deviceId = 0): Int` | 打开采集流并启动采集线程；返回设备实际采样率，负数为错误码 |
 | `stopCapture()` | 停止采集并释放采集侧资源 |
-| `pollDecoded(): List<DecodeResult>` | 取走并清空自上次调用以来解出的报文（拉取模型，无 native 回调） |
-| `waterfallInfo(): WaterfallInfo?` | 频率轴：`bins`、`binHz`、`fMinHz` |
+| `pollDecoded(): List<DecodeResult>` | 取走并清空自上次调用以来解出的报文（拉取模型，无回调） |
+| `waterfallInfo(): WaterfallInfo?` | 瀑布频率轴（`bins` / `binHz` / `fMinHz`）；未初始化时为 `null` |
 | `pollWaterfall(maxRows = 64): ByteArray` | 取走新产生的 waterfall 行（每行 `bins` 字节 uint8） |
-| `startPlayback(preferredRate = 48000, deviceId = 0): Int` | 以阻塞写模式打开播放流；返回设备实际采样率，负数为错误码 |
-| `stopPlayback()` | 关闭播放流（要等锁，**不要**在 UI 线程用它做「停止发射」） |
-| `abortTx()` | 立即作废正在进行的发射写入（非阻塞、无锁，可在 UI 线程调用） |
-| `play(pcm): Int` | 播放一个时隙的 12 kHz PCM，返回写入帧数 |
-| `playTx(pcm, pttSilenceMs = 0, leadToneMs = 0): Int` | 发射播放：数据前插入静音与前导音，带看门狗写入 |
+| `startPlayback(preferredRate = 48000, deviceId = 0): Int` | 打开播放流；返回设备实际采样率，负数为错误码 |
+| `stopPlayback()` | 关闭播放流 |
+| `abortTx()` | 作废正在进行的发射写入（置中止标志位、非阻塞，可在 UI 线程调用） |
+| `play(pcm): Int` | 播放 12 kHz PCM，返回写入的 12k 采样数 |
+| `playTx(pcm, pttSilenceMs = 0, leadToneMs = 0): Int` | 发射播放：数据前插入前导静音 + 1000 Hz 前导音 |
 | `playTone(freqHz = 1000, durationMs = 2000): Int` | 播放测试单音 |
-| `setVox(config)` | 下发 VOX / PTT 配置（热生效） |
-| `setInputGain(gainDb)` | 下发采集增益（热生效，−12..30 dB） |
-| `setOutputGain(gainDb)` | 下发输出音量（热生效，−30..0 dB） |
-| `setSlotOffsetMs(offsetMs)` | 下发整时隙偏移（热生效，±2500 ms） |
+| `setVox(config)` | 下发 VOX / PTT 配置 |
+| `setInputGain(gainDb)` | 下发采集增益（−12..30 dB） |
+| `setOutputGain(gainDb)` | 下发输出音量（−30..0 dB） |
+| `setSlotOffsetMs(offsetMs)` | 下发整时隙偏移（±2500 ms） |
 | `state(): AudioState?` | 状态快照（运行 / 时隙进度 / 采样率 / 丢帧 / 已解码时隙数 / UTC / 输入电平） |
 | `utcNowMs(): Long` | 当前 UTC 毫秒时间 |
 
-**错误码**：`startCapture`：`-1` 未初始化、`-2` 无法创建 builder、`-3` 打开输入流失败、`-4` DSP 线程创建失败、`-5` 启动失败。
-`startPlayback`：`-1` 未初始化、`-2` 无法创建 builder、`-3` 打开输出流失败、`-4` 启动失败。
+**错误码**：`startCapture`：`-1` 未初始化、`-2` 创建采集流失败、`-3` 打开失败、`-4` 无录音权限。
+`startPlayback`：`-1` 未初始化、`-2` 创建播放流失败、`-3` 打开失败。
 
 **采集约定**：
 
-- 请求 `preferredRate`（优先 48 kHz），native 重采样到 12 kHz：降采样先过 4 阶 Butterworth 低通再线性插值，升采样直接线性插值。
-- 采集预设按 `UNPROCESSED → VOICE_RECOGNITION → GENERIC` 依次回退，尽量绕开系统降噪 / AGC（避免噪声底被压低、SNR 虚高）。
-- 时隙调度按 UTC 对齐，仅在时隙起点后约 200 ms 内开始采集；边界判定用 `utc_now_ms() - slot_offset_ms`，上报的 `slot_start_ms` 仍是名义 UTC 时隙起点。
-- 回调线程只写无锁 SPSC 环形缓冲，DSP 线程负责重采样与解码；缓冲满时丢弃样本并计数。
-- waterfall 行每处理完一个 monitor block 写一行（FT8 约每 80 ms 一行）。
+- 优先 `float32` 采集（`ENCODING_PCM_FLOAT`），失败回退 `PCM_16BIT`。
+- 采集线程内（`AudioRecord.read(..., READ_BLOCKING)`）：输入增益 → 输入电平读数 → 重采样到 12 kHz。整数倍降采样走 Hann 窗 sinc 低通抗混叠，其余线性插值。
+- 时隙调度按 UTC 对齐：开始采集时先丢弃到下一个（偏移后的）时隙边界，之后每累积满 180000 个 12 kHz 样本（15 s）提交一次解码并立即进入下一时隙。
+- 解码在单线程 `ExecutorService`（`ft8-decode`）执行 `Ft8Native.decodeSlot`，结果进入待轮询队列；`slotsDecoded` / `lastDecodeMs` 随之上报。
 
-**发射时序（Kotlin 侧调度，不新增 native 线程）**：
+**发射时序（Kotlin 侧调度）**：
 
 1. 操作者打开总开关后先 `startPlayback()` 建好播放流，避免发射瞬间才建流而错过时隙；
 2. 每约 80 ms 检查一次，计算目标发射时隙与播放起点；无前导时就地在「当前时隙奇偶 == 我方发射周期」且起点后 1200 ms 内发射；有前导时提前「PTT 延迟 + 前导音时长」启动，使数据仍落在时隙起点；同一时隙绝不重复写；
@@ -651,26 +661,36 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 5. 其余时间不向播放流写数据；紧急停止用 `abortTx()`。
 
 **VOX / PTT（`VoxConfig`）**：`pttDelayMs`（默认 0，0–500）、`leadToneMs`（默认 0，0–2000）、`watchdogMs`（默认 10000，1000–60000）。
-输入电平读数纯显示用，不做触发判定、不参与发射门控；看门狗以「本段音频预期播放时长 + 3 s」为实际阈值（不低于设定值），只在设备卡死时中止写循环。
 
-**输出音量**：在写入声卡前对整段播放缓冲原地衰减（前导 / 报文 / 测试音一视同仁），只能衰减（波形本身已是数字满幅）。
+**输出音量**：在写入声卡前对整段播放缓冲逐块衰减（前导 / 报文 / 测试音一视同仁）；采集增益同理作用于采集样本。
 
-### 9.7 线程模型
+### 9.7 瀑布
 
-- **AAudio 回调线程**：只把 PCM 写入无锁 SPSC 环形缓冲，绝不调用重 JNI、加锁或分配内存。
-- **DSP / 解码线程**：从环形缓冲取数据 → 重采样 → 按块累积 waterfall → 时隙结束解码，结果进入待轮询队列。
-- **发射线程**：`encode` 生成 PCM，`play()` 内部重采样后阻塞写入 AAudio 播放流。
-- **播放 / 关流的线程安全**：`playTx()` / `playTone()` 是阻塞写；`stopPlayback()` / 销毁引擎可能随时在另一线程执行。约定：
-  - 分块写（`TX_WRITE_CHUNK_FRAMES` = 4096 帧，48 kHz 约 85 ms），每块之间释放锁并重查代次，避免整段发射独占锁导致 UI 线程 ANR；
-  - 只在持有 `tx_mutex` 时访问 `out_stream`；
-  - 用 `out_gen` 代次让退出的写入线程主动中止（主动中止不算失败）；
-  - UI 线程「停止发射」走无锁 `abortTx()`（只加代次、不关流）；
-  - 销毁引擎前确认没有播放调用在用引擎，否则宁可泄漏也不崩。
+瀑布由 **Kotlin 侧实时 STFT** 产生（`engine/WaterfallAnalyzer.kt`），不改动 vendored ft8_w：
 
-### 9.8 调试接口
+- 对采集重采样后的 **12 kHz** 样本做 **2048 点 Hann 窗 FFT**，频率分辨率 `binHz = 12000 / 2048 ≈ 5.86 Hz`；
+- 每 **80 ms**（960 样本）产出一行，仅保留 `[fMin, fMax]`（跟随设置里的解码频率范围）内的 bin，每行 `bins` 字节；
+- 每 bin 写 `u = round((dBFS + 120) × 2)`（0.5 dB/单位，[-120, 0] dBFS，与 ft8_w 瀑布幅度编码同源）；
+- 行队列最多缓存 600 行（≈48 s）；UI 每约 80 ms 取一次，滚动拼接进 `WF_ROWS × bins` 的显示缓冲。
+
+**着色**：`SessionViewModel.pollWaterfall()` 用**固定窗口** `[噪声底, 噪声底 + 动态范围]`（默认 -90 ~ -40 dBFS，设置页 / 频谱页可调）把 `u` 线性映射到 0..255，再查 `WaterfallColors.rampLut`（深蓝→青→绿→黄→橙→红）；不再做滚动峰值自适应。
+
+`SpectrumScreen` 的解码呼号叠加按 `df` 定频率、按 `slotUtcMs` 定时间，与瀑布网格无关，因此 STFT 的 bin 宽度变化不影响叠加位置。
+
+**仅实时** `AudioEngine` 提供瀑布；离线 `Ft8Engine.waterfallInfo()` / `pollWaterfall()` 仍返回 `null` / 空（见 [§9.3](#93-离线接口ft8engine)）。
+
+### 9.8 线程模型
+
+- **采集线程**（每引擎一个）：阻塞读 `AudioRecord` → 增益 / 电平 → 重采样 → 时隙累积（同时把 12 kHz 样本喂 STFT 瀑布）；满一个时隙把快照交给解码线程。
+- **解码线程**（单线程 `ExecutorService`）：`Ft8Native.decodeSlot`，结果进入待轮询队列。
+- **发射**：由 `SessionViewModel` 的 IO 协程调用 `playTx`（内部按块阻塞写 `AudioTrack`）；`abortTx()` 仅置中止标志位，写循环在块间检查后返回 0。
+- **播放 / 关流的线程安全**：`playTx()` / `playTone()` / `stopPlayback()` 均在 `writeLock` 内进行，避免播放与关流并发。
+
+### 9.9 调试接口
 
 | 方法 | 职责 |
 | --- | --- |
+| `Ft8Native.version(): String` | ft8_w 版本字符串 |
 | `Ft8Engine.test(): String` | 占位握手，验证 so 加载 |
 | `AudioEngine.resample(input, inRate, outRate): FloatArray` | 测试用重采样，验证抗混叠链路 |
 
@@ -682,8 +702,9 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 
 ### 10.1 接收与解码
 
-- [ ] 首次进入操作页，授权麦克风后自动开始接收；瀑布滚动、解码列表出现报文（`decodeEmptyHint`、`WaterfallBandTest`）。
-- [ ] FT8 与 FT4 均可解码；切换模式会自动重建引擎且总开关状态保留。
+- [ ] 首次进入操作页，授权麦克风后自动开始接收；瀑布滚动、解码列表出现报文（`decodeEmptyHint`、`WaterfallAnalyzerTest`）。
+- [ ] 频谱页顶部「底噪 / 动态」可调，改完即时改变瀑布对比度；设置页「瀑布」组与频谱页联动（`WaterfallBandTest`）。
+- [ ] FT8 可持续解码；总开关关闭 / 重开时解码状态正确恢复（FT4 已从引擎 / 协议层移除）。
 - [ ] 解码行两行制正确：第一行 `时隙 UTC 信号 dT 报文`，第二行 `频率 国家 距离`。
 - [ ] 整行底色按最高优先级取一色（`DecodeHighlightTest`）。
 - [ ] 「与我有关」的报文列整列标红、整行底色不变；已通联行报文列红字 + 删除线。
@@ -778,4 +799,4 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 
 - 发射前请确认符合所在地区的无线电管理法规，并对自己的发射行为负责。
 - 本应用不含 CAT 控制，不会自动改变电台频率、模式或 PTT；请自行确认电台处于正确状态。
-- 解码内核基于开源的 **ft8_lib**；本项目以 **GPL-3.0** 许可发布。
+- 解码内核基于开源的 **ft8_w**（改造自 **ft8_lib**，含 kissfft）；本项目以 **GPL-3.0** 许可发布。

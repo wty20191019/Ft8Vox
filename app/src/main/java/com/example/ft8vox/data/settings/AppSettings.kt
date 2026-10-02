@@ -80,6 +80,22 @@ const val OUTPUT_GAIN_MAX_DB = 0
 fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAIN_MAX_DB)
 
 /**
+ * 瀑布强度映射默认值：噪声底 -90 dBFS、动态范围 50 dB（固定窗口 -90 ~ -40 dBFS）。
+ *
+ * 强度窗口不再按滚动峰值自适应，改为固定阈值（设置页 / 频谱页可调），见 `waterfallIdx`。
+ */
+const val WATERFALL_FLOOR_DB_DEFAULT = -90
+const val WATERFALL_RANGE_DB_DEFAULT = 50
+
+/** 瀑布噪声底可调范围（dBFS）与动态范围可调范围（dB）。 */
+val WATERFALL_FLOOR_DB_RANGE = -120..-20
+val WATERFALL_RANGE_DB_RANGE = 10..100
+
+/** 把瀑布噪声底 / 动态范围钳制到允许范围。 */
+fun clampWaterfallFloorDb(db: Int): Int = db.coerceIn(WATERFALL_FLOOR_DB_RANGE)
+fun clampWaterfallRangeDb(db: Int): Int = db.coerceIn(WATERFALL_RANGE_DB_RANGE)
+
+/**
  * 解码参数（对应 native 的可调项）。
  *
  * **构造函数的默认值就是「快」预设**（`DecodePreset.FAST`，由单测锁定，两处不许漂移），
@@ -279,6 +295,17 @@ data class AppSettings(
     // ---- 界面/音频 ----
     val waterfallHeight: WaterfallHeight = WaterfallHeight.PCT24,
     val sampleRate: SampleRatePref = SampleRatePref.AUTO,
+
+    // ---- 瀑布显示（固定阈值，可调） ----
+    /**
+     * 瀑布强度映射的噪声底（dBFS）：低于此值的 bin 画成最深蓝。
+     *
+     * 与 [waterfallRangeDb] 一起构成固定窗口 `[waterfallFloorDb, waterfallFloorDb + waterfallRangeDb]`，
+     * 线性映射到色带。默认 -90 dBFS ≈ 手机麦克风 / 声卡的典型噪声底。
+     */
+    val waterfallFloorDb: Int = WATERFALL_FLOOR_DB_DEFAULT,
+    /** 瀑布强度映射的动态范围（dB）：窗口顶端 = 底噪 + 本值，达到即画成红。默认 50 dB。 */
+    val waterfallRangeDb: Int = WATERFALL_RANGE_DB_DEFAULT,
 
     // ---- 解码参数 ----
     val decode: DecodeSettings = DecodeSettings(),

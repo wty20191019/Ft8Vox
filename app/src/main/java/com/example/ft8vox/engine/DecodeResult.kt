@@ -37,7 +37,7 @@ data class DecodeResult(
 data class WaterfallInfo(
     /** 频率 bin 数。 */
     val bins: Int,
-    /** 每个 bin 的频率宽度（Hz），FT8/FT4 为 6.25 Hz。 */
+    /** 每个 bin 的频率宽度（Hz）：Kotlin STFT 为 `sampleRate / fftSize`（12 kHz / 2048 ≈ 5.86 Hz）。 */
     val binHz: Float,
     /** 起始频率（Hz）。 */
     val fMinHz: Float,

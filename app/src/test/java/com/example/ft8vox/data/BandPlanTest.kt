@@ -45,9 +45,9 @@ class BandPlanTest {
     }
 
     @Test
-    fun everyBandHasMultipleFrequencies() {
+    fun everyBandHasAtLeastOneFrequency() {
         for (b in BandPlan.bands) {
-            assertTrue("${b.name} 应至少有两个刻度频率", b.freqs.size >= 2)
+            assertTrue("${b.name} 应至少有一个刻度频率", b.freqs.isNotEmpty())
             assertEquals("${b.name} 首项应为默认频率", b.dialHz, b.freqs.first().hz)
             for (f in b.freqs) {
                 assertTrue("${b.name} 的 ${f.hz} 应落在波段内", b.containsHz(f.hz))
@@ -80,6 +80,5 @@ class BandPlanTest {
     @Test
     fun formatsDialFrequencyWithFourDecimals() {
         assertEquals("14.0740", BandPlan.byName("20m")!!.freqs.first().mhz)
-        assertEquals("7.0475", BandPlan.byName("40m")!!.freqs[1].mhz)
     }
 }

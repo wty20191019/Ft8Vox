@@ -54,15 +54,6 @@ class TxParityAutoTest {
     }
 
     @Test
-    fun slotParityWorksForFt4() {
-        // FT4：每 7.5 s 一个时隙，奇偶同样逢奇为 1
-        assertEquals(0, slotParityOf(minute, 7_500L))
-        assertEquals(1, slotParityOf(minute + 7_500L, 7_500L))
-        assertEquals(0, slotParityOf(minute + 15_000L, 7_500L))
-        assertEquals(1, slotParityOf(minute + 22_500L, 7_500L))
-    }
-
-    @Test
     fun slotParityUnknownWhenOffline() {
         assertNull(slotParityOf(0L, 15_000L))
         assertNull(slotParityOf(1_000L, 0L))

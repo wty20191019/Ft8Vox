@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.engine.WaterfallAnalyzer
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -12,7 +13,7 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * 阶段 5 的确定性测试：waterfall 频率轴、解码指标（SNR/DT/DF）。
+ * 阶段 5 的确定性测试：瀑布频率轴（Kotlin STFT）与解码指标（SNR/DT/DF）。
  *
  * 全部用自产 FT8 波形离线验证，不依赖音频设备。
  */
@@ -42,44 +43,44 @@ class DecodeMetricsTest {
         }
     }
 
-    /** waterfall 的频率轴应覆盖 200..3000 Hz，bin 宽 6.25 Hz，且信号能量集中在 1000 Hz 附近。 */
+    /**
+     * 瀑布（Kotlin STFT）的频率轴应覆盖 200..3000 Hz、bin 宽约 5.86 Hz，
+     * 且信号能量集中在 1000 Hz 附近。
+     */
     @Test
     fun waterfallAxisAndPeak() {
         val pcm = encode()
-        Ft8Engine.initialize(Ft8Config())
-        try {
-            Ft8Engine.processAudio(pcm)
 
-            val info = Ft8Engine.waterfallInfo()!!
-            assertTrue("fMin 应约为 200 Hz，实际=${info.fMinHz}", abs(info.fMinHz - 200f) < 8f)
-            assertTrue("bin 宽应约为 6.25 Hz，实际=${info.binHz}", abs(info.binHz - 6.25f) < 0.2f)
+        val analyzer = WaterfallAnalyzer(12000, 200f, 3000f)
+        analyzer.feed(pcm)
 
-            val data = Ft8Engine.pollWaterfall(256)
-            val bins = info.bins
-            val rows = data.size / bins
-            assertTrue("waterfall 行数过少: $rows", rows > 100)
+        val info = analyzer.info
+        assertTrue("fMin 应约为 200 Hz，实际=${info.fMinHz}", abs(info.fMinHz - 200f) < 8f)
+        assertTrue("bin 宽应约为 5.86 Hz，实际=${info.binHz}", abs(info.binHz - 12000f / 2048f) < 0.02f)
 
-            // 逐列累加能量
-            val colEnergy = LongArray(bins)
-            for (r in 0 until rows) {
-                val base = r * bins
-                for (b in 0 until bins) {
-                    colEnergy[b] += (data[base + b].toInt() and 0xFF).toLong()
-                }
+        val data = analyzer.poll(256)
+        val bins = info.bins
+        val rows = data.size / bins
+        assertTrue("waterfall 行数过少: $rows", rows > 100)
+
+        // 逐列累加能量
+        val colEnergy = LongArray(bins)
+        for (r in 0 until rows) {
+            val base = r * bins
+            for (b in 0 until bins) {
+                colEnergy[b] += (data[base + b].toInt() and 0xFF).toLong()
             }
-
-            val expectedBin = ((frequencyHz - info.fMinHz) / info.binHz).roundToInt()
-            val inBand = (expectedBin..expectedBin + 8).sumOf { colEnergy[it].toDouble() }
-            val total = colEnergy.sumOf { it.toDouble() }
-            val inAvg = inBand / 9.0
-            val outAvg = (total - inBand) / (bins - 9).toDouble()
-            assertTrue(
-                "信号带内均值($inAvg) 应显著高于带外($outAvg)，peakExpectedBin=$expectedBin",
-                inAvg > outAvg * 5.0,
-            )
-        } finally {
-            Ft8Engine.release()
         }
+
+        val expectedBin = ((frequencyHz - info.fMinHz) / info.binHz).roundToInt()
+        val inBand = (expectedBin..expectedBin + 8).sumOf { colEnergy[it].toDouble() }
+        val total = colEnergy.sumOf { it.toDouble() }
+        val inAvg = inBand / 9.0
+        val outAvg = (total - inBand) / (bins - 9).toDouble()
+        assertTrue(
+            "信号带内均值($inAvg) 应显著高于带外($outAvg)，peakExpectedBin=$expectedBin",
+            inAvg > outAvg * 5.0,
+        )
     }
 
     /** 解码指标：DF 应接近 1000 Hz，DT 应接近 0（减去 0.5 s 名义起点）。 */

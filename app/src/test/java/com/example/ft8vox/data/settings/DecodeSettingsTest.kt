@@ -61,6 +61,25 @@ class DecodeSettingsTest {
     }
 
     @Test
+    fun waterfallThresholdDefaultsAreMinus90ToMinus40() {
+        val s = AppSettings()
+        assertEquals(-90, s.waterfallFloorDb)
+        assertEquals(50, s.waterfallRangeDb)
+        assertEquals(-90, WATERFALL_FLOOR_DB_DEFAULT)
+        assertEquals(50, WATERFALL_RANGE_DB_DEFAULT)
+        // 默认窗口：-90 ~ -40 dBFS
+        assertEquals(-40, s.waterfallFloorDb + s.waterfallRangeDb)
+    }
+
+    @Test
+    fun waterfallThresholdClampsToAllowedRange() {
+        assertEquals(WATERFALL_FLOOR_DB_RANGE.first, clampWaterfallFloorDb(-999))
+        assertEquals(WATERFALL_FLOOR_DB_RANGE.last, clampWaterfallFloorDb(999))
+        assertEquals(WATERFALL_RANGE_DB_RANGE.first, clampWaterfallRangeDb(-999))
+        assertEquals(WATERFALL_RANGE_DB_RANGE.last, clampWaterfallRangeDb(999))
+    }
+
+    @Test
     fun presetsDoNotTouchFrequencyRange() {
         val base = DecodeSettings(fMinHz = 300, fMaxHz = 2700)
         for (p in DecodePreset.entries) {
