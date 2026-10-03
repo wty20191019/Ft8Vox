@@ -986,13 +986,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         tryRetargetNow(p.txText, manual = false)
     }
 
-    /** 应答指定 CQ。人工操作不暂停自动程序，只复位发射监管计时。 */
-    fun answer(call: String, grid: String?, theirDf: Int? = null) {
+    /**
+     * 应答指定 CQ / 左滑「呼叫」指定台。人工操作不暂停自动程序，只复位发射监管计时。
+     *
+     * @param slotUtcMs 被操作那条解码**自己的时隙起点**（毫秒）；0 表示未知。
+     *   一定优先用它：`_messages` 里可能混入我方发射的**自听回声**（`对方 我 报文` 被解成
+     *   `from=对方`），其所在时隙正是**我方周期**，「回查该台最近解码」会把相反周期算反 ——
+     *   真机现象就是发射中左滑「呼叫」停不下来（ANR）、还把新报文发进本应接收的时隙。
+     */
+    fun answer(call: String, grid: String?, theirDf: Int? = null, slotUtcMs: Long = 0L) {
         scheduler.resetSupervision(AudioEngine.utcNowMs())
-        answerInternal(call, grid, theirDf)
+        answerInternal(call, grid, theirDf, slotUtcMs)
     }
 
-    private fun answerInternal(call: String, grid: String?, theirDf: Int? = null) {
+    private fun answerInternal(call: String, grid: String?, theirDf: Int? = null, slotUtcMs: Long = 0L) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
@@ -1006,8 +1013,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
-        // 时隙自动对应：按该台最近一条解码的**相反周期**应答
-        if (pinToTargetSlot(lastHeardSlotUtcMsOf(call)) == null) pinnedTxParity = null
+        // 时隙自动对应：优先用「被操作那条解码」自己的时隙（唯一可靠来源），取**相反周期**；
+        // 拿不到时隙（设置页手输呼号等）才回退到「回查该台最近一次解码」。
+        val heard = slotUtcMs.takeIf { it > 0L } ?: lastHeardSlotUtcMsOf(call)
+        if (pinToTargetSlot(heard) == null) pinnedTxParity = null
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
@@ -1253,6 +1262,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */
     private fun armPlayback(): Boolean {
+        // 正在发射时流必然已打开（playTx 正在写）：直接复用，**不要**调 AudioEngine.startPlayback ——
+        // 它的 writeLock 被整段播放（约 13 s）占着，主线程等锁会卡死（ANR，真机现象：发射中左滑
+        // 「呼叫」→ answerInternal → armPlayback）。设备 / 采样率变更已在 applyAudio 里延后到
+        // 「下次发射」，下一段（txing=false）会走下面的重建。
+        if (_status.value.txing) return true
         val rate = AudioEngine.startPlayback(preferredRate(), outputDeviceId())
         if (rate <= 0) {
             _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }

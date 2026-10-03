@@ -277,8 +277,21 @@ object AudioEngine {
         private var lastDecodeMs = 0L
 
         // ---- 播放 ----
+        /**
+         * 已打开的播放流句柄 / 采样率。
+         *
+         * **`@Volatile`**：供 [startPlayback] 的「流已就绪 → 直接复用」快速路径在**锁外**读取，
+         * 避免发射中从 UI 线程调用时去抢 [writeLock]（见 [startPlayback] 注释）。
+         */
+        @Volatile
         private var audioTrack: AudioTrack? = null
+        @Volatile
         private var outputRate = 0
+        /** 已打开流对应的**请求采样率 / 输出设备 id**（快速复用判据，见 [startPlayback]）。 */
+        @Volatile
+        private var playbackReqRate = 0
+        @Volatile
+        private var playbackDevId = Int.MIN_VALUE
         @Volatile
         private var abortRequested = false
         private val writeLock = Any()
@@ -736,8 +749,16 @@ object AudioEngine {
 
         @SuppressLint("MissingPermission")
         fun startPlayback(preferredRate: Int, deviceId: Int): Int {
+            val r = preferredRate.takeIf { it > 0 } ?: 48000
+            // 快速路径：流已就绪且请求参数（采样率 / 设备）未变 → 直接复用，**不加锁、不重建**。
+            //
+            // 必须如此：writeSamples 在整段 FT8 播放（约 13 s）里一直持有 writeLock。发射途中
+            // 从 UI 线程调本方法（真机路径：发射中在解码列表**左滑「呼叫」** → answerInternal →
+            // armPlayback）若去抢锁，会一直等到本次播放结束 → 主线程卡死（ANR），也就表现为
+            // 「左滑停不下来、换不了目标」。播放一旦武装就一直复用同一流（除切设备 / 停止会话外
+            // 不再重建），故这里通常直接命中。
+            if (audioTrack != null && playbackReqRate == r && playbackDevId == deviceId) return outputRate
             synchronized(writeLock) {
-                val r = preferredRate.takeIf { it > 0 } ?: 48000
                 audioTrack?.let { runCatching { it.stop() }; runCatching { it.release() } }
                 val track = buildTrack(r, deviceId) ?: return -2
                 if (track.state != AudioTrack.STATE_INITIALIZED) {
@@ -745,6 +766,8 @@ object AudioEngine {
                     return -3
                 }
                 outputRate = track.sampleRate
+                playbackReqRate = r
+                playbackDevId = deviceId
                 audioTrack = track
                 track.play()
                 abortRequested = false
@@ -790,6 +813,8 @@ object AudioEngine {
                 }
                 audioTrack = null
                 outputRate = 0
+                playbackReqRate = 0
+                playbackDevId = Int.MIN_VALUE
             }
         }
 

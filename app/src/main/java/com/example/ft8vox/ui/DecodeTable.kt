@@ -83,7 +83,7 @@ import kotlinx.coroutines.launch
  * 列头 `时隙 / UTC / 分贝 / 时差 / 频率 / 信息`。
  *
  * 行手势（docs/Ft8Vox.md）：
- * 单击 = 设为目标并对频；双击 = 跳地图；长按 = 菜单；左滑 = 呼叫；右滑 = 删除。
+ * 单击 = 无；双击 = 跳地图；长按 = 菜单；左滑 = 呼叫；右滑 = 删除。
  */
 
 /** 解码行展示模型（报文 + 解析 + 高亮分类）。 */
@@ -196,7 +196,6 @@ fun DecodeTable(
     listState: LazyListState,
     rowHeightMin: Int = 20,
     followed: (String) -> Boolean,
-    onRowClick: (DecodeRow) -> Unit,
     onRowDoubleClick: (DecodeRow) -> Unit,
     onCall: (DecodeRow) -> Unit,
     onReply: (DecodeRow) -> Unit,
@@ -219,7 +218,6 @@ fun DecodeTable(
                     minHeightDp = rowHeightMin,
                     myGrid = myGrid,
                     followed = row.row.parsed.from?.let(followed) ?: false,
-                    onClick = { onRowClick(row.row) },
                     onDoubleClick = { onRowDoubleClick(row.row) },
                     onCall = { onCall(row.row) },
                     onReply = { onReply(row.row) },
@@ -304,7 +302,6 @@ private fun DecodeTableRow(
     minHeightDp: Int,
     myGrid: String,
     followed: Boolean,
-    onClick: () -> Unit,
     onDoubleClick: () -> Unit,
     onCall: () -> Unit,
     onReply: () -> Unit,
@@ -413,7 +410,9 @@ private fun DecodeTableRow(
                     )
                 }
                 .combinedClickable(
-                    onClick = onClick,
+                    // 单击不再有任何功能（真机反馈：发射中误触会改红线 / 目标）；只保留
+                    // 双击（地图）与长按（菜单），滑动手势见上面的 pointerInput。
+                    onClick = {},
                     onDoubleClick = onDoubleClick,
                     onLongClick = { menuOpen = true },
                 )
