@@ -235,16 +235,6 @@ fun SettingsScreen(
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(pttDelayMs = v) } },
             )
-            PrefDivider()
-            PrefStepper(
-                title = "看门狗超时",
-                subtitle = "发射写入卡死保护；实际会抬高到本次发射时长以上，不会截断合法发射",
-                value = app.watchdogMs,
-                range = 1000..60000,
-                step = 1000,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(watchdogMs = v) } },
-            )
         }
 
         // ---------- 6.2 音频 ----------

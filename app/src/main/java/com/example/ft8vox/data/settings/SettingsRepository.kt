@@ -108,7 +108,6 @@ private object Keys {
     val outputDevice = stringPreferencesKey("output_device")
     val outputGainDb = intPreferencesKey("output_gain_db")
     val pttDelayMs = intPreferencesKey("ptt_delay_ms")
-    val watchdogMs = intPreferencesKey("watchdog_ms")
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
@@ -212,7 +211,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
         outputGainDb = clampOutputGainDb(this[Keys.outputGainDb] ?: defaults.outputGainDb),
         pttDelayMs = (this[Keys.pttDelayMs] ?: defaults.pttDelayMs).coerceIn(0, 500),
-        watchdogMs = (this[Keys.watchdogMs] ?: defaults.watchdogMs).coerceIn(1000, 60000),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
         slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
@@ -266,7 +264,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.outputDevice] = outputDevice
     prefs[Keys.outputGainDb] = outputGainDb
     prefs[Keys.pttDelayMs] = pttDelayMs
-    prefs[Keys.watchdogMs] = watchdogMs
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
     prefs[Keys.slotOffsetMs] = slotOffsetMs

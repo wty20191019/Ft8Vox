@@ -430,7 +430,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun voxConfigOf(s: AppSettings): VoxConfig = VoxConfig(
         pttDelayMs = s.pttDelayMs,
         leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
-        watchdogMs = s.watchdogMs,
     )
 
     /**

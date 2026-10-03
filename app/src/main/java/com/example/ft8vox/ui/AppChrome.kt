@@ -662,6 +662,5 @@ fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
             "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
             style = MaterialTheme.typography.labelSmall,
         )
-        Text("看门狗  ${appSettings.watchdogMs} ms", style = MaterialTheme.typography.labelSmall)
     }
 }

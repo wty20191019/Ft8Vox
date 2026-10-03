@@ -28,12 +28,11 @@ import kotlin.math.sqrt
  *
  * 无 CAT 时 App 无法控制电台 PTT，只能通过发射音频序列间接键控：
  * [pttDelayMs] 前导静音 + [leadToneMs] 前导音先让电台 VOX 动作，
- * 随后 FT8 数据落在时隙起点。[watchdogMs] 为发射写入的卡死保护（Kotlin 侧保留字段）。
+ * 随后 FT8 数据落在时隙起点。
  */
 data class VoxConfig(
     val pttDelayMs: Int = 0,
     val leadToneMs: Int = 0,
-    val watchdogMs: Int = 10_000,
 )
 
 /** 实时音频引擎的状态快照（字段与旧 native 引擎保持一致）。 */

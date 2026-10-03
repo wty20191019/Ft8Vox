@@ -266,8 +266,6 @@ data class AppSettings(
     val outputGainDb: Int = 0,
     /** PTT 延迟（ms，0–500）。 */
     val pttDelayMs: Int = 50,
-    /** 看门狗超时（ms，1000–60000）。 */
-    val watchdogMs: Int = 10000,
 
     // ---- 音频（docs/Ft8Vox.md） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
