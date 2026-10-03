@@ -193,7 +193,6 @@ fun OperateScreen(
                             if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                 targetCall = from
                                 viewModel.selectTargetFreq(row.msg.df)
-                                viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 // 传被滑那条解码**自己的时隙**：发射中就地换目标 / 排下一发射时隙全靠它
                                 request { viewModel.answer(from, row.parsed.grid, row.msg.df, row.msg.slotUtcMs) }
                             }
@@ -203,7 +202,6 @@ fun OperateScreen(
                             if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                 targetCall = from
                                 viewModel.selectTargetFreq(row.msg.df)
-                                viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 request { viewModel.replyTo(row.msg) }
                             }
                         },
@@ -290,7 +288,6 @@ fun OperateScreen(
                 detailFor = null
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                     targetCall = from
-                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
                     request { viewModel.answer(from, row.parsed.grid, row.msg.df, row.msg.slotUtcMs) }
                 }
             },

@@ -691,24 +691,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return if (m <= 0) "自动运行（发射监管关闭）" else "自动运行（发射监管 $m 分钟）"
     }
 
-    /**
-     * 「设为目标」时把发射时隙固定到目标接收时隙的**相反周期**（时隙自动对应）。
-     *
-     * QSO 进行中忽略（不打断当前序列）；无时隙信息时清除固定。
-     *
-     * @param targetSlotUtcMs 目标解码所在时隙的 UTC 起点（毫秒）
-     */
-    fun alignTxToTarget(targetSlotUtcMs: Long) {
-        val st = _status.value
-        if (st.qso.active) return
-        val mine = pinToTargetSlot(targetSlotUtcMs)
-        if (mine == null) {
-            pinnedTxParity = null
-            return
-        }
-        _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
-    }
-
     /** 把发射时隙固定到 [targetSlotUtcMs] 的相反周期；返回固定后的周期，无法判定返回 null。 */
     private fun pinToTargetSlot(targetSlotUtcMs: Long): Int? {
         val st = _status.value
@@ -752,6 +734,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         )
         autoParity = p
         if (st.txParity != p) _status.update { it.copy(txParity = p) }
+    }
+
+    /**
+     * 当前墙钟所在时隙的奇偶（名义网格，含 `slotOffsetMs`），取不到时回退到 UI 的 `txParity`。
+     *
+     * 用途：发射途中人工换目标 / 换报文时，「我方发射时隙」= **此刻墙钟所在时隙**，
+     * 不能再用目标解码的时隙去推（见 [answerInternal] / [startAutoTarget]）。
+     */
+    private fun currentSlotParity(): Int {
+        val st = _status.value
+        val p = slotParityOf(AudioEngine.utcNowMs() - latestSettings.slotOffsetMs, st.slotMs.toLong())
+        return p ?: st.txParity
     }
 
     /**
@@ -1026,10 +1020,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
-        // 时隙自动对应：优先用「被操作那条解码」自己的时隙（唯一可靠来源），取**相反周期**；
-        // 拿不到时隙（设置页手输呼号等）才回退到「回查该台最近一次解码」。
-        val heard = slotUtcMs.takeIf { it > 0L } ?: lastHeardSlotUtcMsOf(call)
-        if (pinToTargetSlot(heard) == null) pinnedTxParity = null
+        // 时隙自动对应：
+        // - **正在发射**（本时隙就是我方发射时隙）→ **保持当前发射周期**（按墙钟取当前时隙奇偶），
+        //   不按被滑那条解码重锁。被滑的解码可能恰好落在**与我方相同的周期**上（自听回声、
+        //   采集窗口错抖等），「取相反周期」会正好翻到紧邻的下一个时隙 —— 也就是本该接收的时隙，
+        //   且 in-place 判据必然失败；真机现象就是「停不下来、还发进接收时隙」。
+        //   保持当前周期后：够时间 → tryRetargetNow 就地改发；不够 → 排到下一个同周期（我方）时隙。
+        // - 没在发射 → 优先用被操作那条解码**自己的时隙**取**相反周期**（拿不到时隙再回退到最近解码）。
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (inFlight) {
+            val keep = currentSlotParity()
+            pinnedTxParity = keep
+            autoParity = keep
+        } else {
+            val heard = slotUtcMs.takeIf { it > 0L } ?: lastHeardSlotUtcMsOf(call)
+            if (pinToTargetSlot(heard) == null) pinnedTxParity = null
+        }
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
@@ -1632,8 +1638,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun startAutoTarget(t: AutoTarget) {
         val st = _status.value
-        // 时隙自动对应：固定到对方时隙的相反周期
-        if (pinToTargetSlot(t.slotUtcMs) == null) pinnedTxParity = null
+        // 时隙自动对应：正在发射时**保持当前周期**（同 answerInternal，免得翻到接收时隙）；
+        // 否则固定到对方时隙的相反周期。
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (inFlight) {
+            val keep = currentSlotParity()
+            pinnedTxParity = keep
+            autoParity = keep
+        } else if (pinToTargetSlot(t.slotUtcMs) == null) {
+            pinnedTxParity = null
+        }
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
 

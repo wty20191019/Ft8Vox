@@ -825,7 +825,8 @@ object AudioEngine {
         fun play(pcm: FloatArray): Int = writeSamples(pcm, abortAware = false, returned = pcm.size)
 
         fun playTx(pcm: FloatArray, pttSilenceMs: Int, leadToneMs: Int): Int {
-            abortRequested = false
+            // 注意：**不要**在这里清 abortRequested。清标志必须等拿到 writeLock（见 writeSamples），
+            // 否则会把对「上一段正在写的音频」的作废提前撤销，导致它继续整条播完。
             val ptt = msToSamples(pttSilenceMs)
             val lead = msToSamples(leadToneMs)
             val total = FloatArray(ptt + lead + pcm.size)
@@ -842,7 +843,7 @@ object AudioEngine {
         }
 
         fun playTone(freqHz: Int, durationMs: Int): Int {
-            abortRequested = false
+            // 同 playTx：abortRequested 的清除放在 writeSamples 拿到锁之后。
             val n = msToSamples(durationMs)
             val tone = FloatArray(n)
             for (i in 0 until n) {
@@ -858,6 +859,13 @@ object AudioEngine {
         private fun writeSamples(pcm: FloatArray, abortAware: Boolean, returned: Int): Int {
             if (pcm.isEmpty()) return 0
             synchronized(writeLock) {
+                // **拿到锁＝上一段写入（若有）已经退出**，此刻才清「作废」标志。
+                //
+                // 绝不能提前清（曾经放在 playTx 入锁前）：发射途中换目标时 abortTransmit() 先置
+                // true，好让正在写的那段尽快退锁；若新一段在入锁前就把它清掉，旧段永远看不到作废，
+                // 会把整条报文（约 13 s）播完、锁也就迟迟不放 —— 真机表现为「左滑『呼叫』停不下来，
+                // 新报文被拖到下一个时隙（也就是接收时隙）才播出」。
+                abortRequested = false
                 val track = audioTrack ?: return -1
                 val resampled = if (outputRate == DECODE_RATE) pcm
                 else Resampler.convert(pcm, DECODE_RATE, outputRate)
@@ -865,7 +873,14 @@ object AudioEngine {
                 val chunk = max(outputRate / 20, 512)
                 var off = 0
                 while (off < resampled.size) {
-                    if (abortAware && abortRequested) return 0
+                    if (abortAware && abortRequested) {
+                        // 作废：先丢掉已经排进声卡缓冲的旧音频（缓冲约 0.4 s），否则它还会继续响，
+                        // 把紧接着的新报文顶出时隙起点。pause→flush→play 让播放从空缓冲重新开始。
+                        runCatching { track.pause() }
+                        runCatching { track.flush() }
+                        runCatching { track.play() }
+                        return 0
+                    }
                     val len = minOf(chunk, resampled.size - off)
                     val block = FloatArray(len)
                     for (i in 0 until len) block[i] = resampled[off + i] * g
