@@ -20,6 +20,7 @@ import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.DecodeResult
+import com.example.ft8vox.engine.Diag
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
@@ -284,6 +285,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 反而把自己锁死。
      */
     private var lastDecodeAtMs = 0L
+
+    /** 诊断：「每个目标时隙只评估一次」去重（真机排查 QSO 不发射/发射被闸门拦住）。 */
+    private var lastTxDebugSlot = Long.MIN_VALUE
 
     /**
      * 本段会话内已落库的呼号（会话内去重，见方案 §4.2）。
@@ -687,24 +691,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         return if (m <= 0) "自动运行（发射监管关闭）" else "自动运行（发射监管 $m 分钟）"
     }
 
-    /**
-     * 「设为目标」时把发射时隙固定到目标接收时隙的**相反周期**（时隙自动对应）。
-     *
-     * QSO 进行中忽略（不打断当前序列）；无时隙信息时清除固定。
-     *
-     * @param targetSlotUtcMs 目标解码所在时隙的 UTC 起点（毫秒）
-     */
-    fun alignTxToTarget(targetSlotUtcMs: Long) {
-        val st = _status.value
-        if (st.qso.active) return
-        val mine = pinToTargetSlot(targetSlotUtcMs)
-        if (mine == null) {
-            pinnedTxParity = null
-            return
-        }
-        _status.update { it.copy(txParity = mine, status = "已设为目标：时隙自动对应（${parityLabel(mine)}周期）") }
-    }
-
     /** 把发射时隙固定到 [targetSlotUtcMs] 的相反周期；返回固定后的周期，无法判定返回 null。 */
     private fun pinToTargetSlot(targetSlotUtcMs: Long): Int? {
         val st = _status.value
@@ -748,6 +734,31 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         )
         autoParity = p
         if (st.txParity != p) _status.update { it.copy(txParity = p) }
+    }
+
+    /**
+     * 当前墙钟所在时隙的奇偶（名义网格，含 `slotOffsetMs`），取不到时回退到 UI 的 `txParity`。
+     *
+     * 用途：发射途中人工换目标 / 换报文时，「我方发射时隙」= **此刻墙钟所在时隙**，
+     * 不能再用目标解码的时隙去推（见 [answerInternal] / [startAutoTarget]）。
+     */
+    private fun currentSlotParity(): Int {
+        val st = _status.value
+        val p = slotParityOf(AudioEngine.utcNowMs() - latestSettings.slotOffsetMs, st.slotMs.toLong())
+        return p ?: st.txParity
+    }
+
+    /**
+     * 人工「换报文」（解码列表左滑之外的入口：报文槽点击 / 自定义「发送」/ 呼叫 CQ）前决定发射周期。
+     *
+     * **正在发射时必须保持当前周期**：本时隙就是我方发射时隙，若此时按「当前时间」重锁
+     * （`nextSlotParity` 取紧邻的下一个时隙），周期会翻到那个**接收时隙** —— 于是「时间不够」
+     * 分支的新报文就会被排进本应接收的时隙（与左滑「呼叫」同一类现象）。
+     * 保持当前周期后，[tryRetargetNow] / [planTx] 会落到下一个**我方发射时隙**（`slotIdx+2`）。
+     */
+    private fun relockParityBeforeManualTx() {
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (!inFlight) relockAutoParityIfNeeded()
     }
 
     fun clearMessages() {
@@ -970,7 +981,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
-        relockAutoParityIfNeeded()
+        relockParityBeforeManualTx()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         val p = qsoEngine.startCq(AudioEngine.utcNowMs(), latestSettings.cqPrefix)
@@ -982,13 +993,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         tryRetargetNow(p.txText, manual = false)
     }
 
-    /** 应答指定 CQ。人工操作不暂停自动程序，只复位发射监管计时。 */
-    fun answer(call: String, grid: String?, theirDf: Int? = null) {
+    /**
+     * 应答指定 CQ / 左滑「呼叫」指定台。人工操作不暂停自动程序，只复位发射监管计时。
+     *
+     * @param slotUtcMs 被操作那条解码**自己的时隙起点**（毫秒）；0 表示未知。
+     *   一定优先用它：`_messages` 里可能混入我方发射的**自听回声**（`对方 我 报文` 被解成
+     *   `from=对方`），其所在时隙正是**我方周期**，「回查该台最近解码」会把相反周期算反 ——
+     *   真机现象就是发射中左滑「呼叫」停不下来（ANR）、还把新报文发进本应接收的时隙。
+     */
+    fun answer(call: String, grid: String?, theirDf: Int? = null, slotUtcMs: Long = 0L) {
         scheduler.resetSupervision(AudioEngine.utcNowMs())
-        answerInternal(call, grid, theirDf)
+        answerInternal(call, grid, theirDf, slotUtcMs)
     }
 
-    private fun answerInternal(call: String, grid: String?, theirDf: Int? = null) {
+    private fun answerInternal(call: String, grid: String?, theirDf: Int? = null, slotUtcMs: Long = 0L) {
         if (!canOperate) {
             _status.update { it.copy(status = "请先填写呼号") }
             return
@@ -1002,8 +1020,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
-        // 时隙自动对应：按该台最近一条解码的**相反周期**应答
-        if (pinToTargetSlot(lastHeardSlotUtcMsOf(call)) == null) pinnedTxParity = null
+        // 时隙自动对应：
+        // - **正在发射**（本时隙就是我方发射时隙）→ **保持当前发射周期**（按墙钟取当前时隙奇偶），
+        //   不按被滑那条解码重锁。被滑的解码可能恰好落在**与我方相同的周期**上（自听回声、
+        //   采集窗口错抖等），「取相反周期」会正好翻到紧邻的下一个时隙 —— 也就是本该接收的时隙，
+        //   且 in-place 判据必然失败；真机现象就是「停不下来、还发进接收时隙」。
+        //   保持当前周期后：够时间 → tryRetargetNow 就地改发；不够 → 排到下一个同周期（我方）时隙。
+        // - 没在发射 → 优先用被操作那条解码**自己的时隙**取**相反周期**（拿不到时隙再回退到最近解码）。
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (inFlight) {
+            val keep = currentSlotParity()
+            pinnedTxParity = keep
+            autoParity = keep
+        } else {
+            val heard = slotUtcMs.takeIf { it > 0L } ?: lastHeardSlotUtcMsOf(call)
+            if (pinToTargetSlot(heard) == null) pinnedTxParity = null
+        }
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
@@ -1097,7 +1129,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        relockAutoParityIfNeeded()
+        relockParityBeforeManualTx()
         if (!armPlayback()) {
             showTxNotice("音频输出未就绪，无法发射")
             return
@@ -1249,6 +1281,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 打开播放流（复用同一流，避免发射瞬间才建流导致错过时隙）。 */
     private fun armPlayback(): Boolean {
+        // 正在发射时流必然已打开（playTx 正在写）：直接复用，**不要**调 AudioEngine.startPlayback ——
+        // 它的 writeLock 被整段播放（约 13 s）占着，主线程等锁会卡死（ANR，真机现象：发射中左滑
+        // 「呼叫」→ answerInternal → armPlayback）。设备 / 采样率变更已在 applyAudio 里延后到
+        // 「下次发射」，下一段（txing=false）会走下面的重建。
+        if (_status.value.txing) return true
         val rate = AudioEngine.startPlayback(preferredRate(), outputDeviceId())
         if (rate <= 0) {
             _status.update { it.copy(status = "播放启动失败（错误码 $rate）") }
@@ -1384,12 +1421,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                             // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
                             runAutoProgram(incoming, s.utcNowMs)
                         } else {
-                            val p = qsoEngine.onDecoded(incoming, s.utcNowMs)
+                            // 「无回应」只在对方**可能回我的那个周期**计数：对方只在我们不发射的
+                            // 相反周期发报，所以我方发射时隙的批（自听 / 空批）不计，免得每周期数两次。
+                            val decodedParity = (((s.lastDecodedSlot % 2) + 2) % 2).toInt()
+                            val countNoReply = decodedParity != st.txParity
+                            val p = qsoEngine.onDecoded(incoming, s.utcNowMs, countNoReply)
                             Log.i(
                                 TAG_QSO,
                                 "engine n=${incoming.size} their=${st.qso.theirCall} " +
                                     "state=${st.qso.state} -> ${p.state} noReply=${p.noReplyCount} " +
-                                    "msgs=${incoming.map { it.text }}",
+                                    "count=$countNoReply msgs=${incoming.map { it.text }}",
                             )
                             applyQsoProgress(p, s.utcNowMs, incoming)
                             // FT8CN `checkCQMeOrFollowCQMessage` 循环 2：当前目标本批沉默时，
@@ -1601,8 +1642,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun startAutoTarget(t: AutoTarget) {
         val st = _status.value
-        // 时隙自动对应：固定到对方时隙的相反周期
-        if (pinToTargetSlot(t.slotUtcMs) == null) pinnedTxParity = null
+        // 时隙自动对应：正在发射时**保持当前周期**（同 answerInternal，免得翻到接收时隙）；
+        // 否则固定到对方时隙的相反周期。
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (inFlight) {
+            val keep = currentSlotParity()
+            pinnedTxParity = keep
+            autoParity = keep
+        } else if (pinToTargetSlot(t.slotUtcMs) == null) {
+            pinnedTxParity = null
+        }
         relockAutoParityIfNeeded()
         if (!armPlayback()) return
 
@@ -1773,6 +1822,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 距数据起点的倒计时（用于 UI）
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
 
+        if (plan.targetSlotIndex != lastTxDebugSlot) {
+            lastTxDebugSlot = plan.targetSlotIndex
+            val off = latestSettings.slotOffsetMs.toLong()
+            val line = "txTick 评估：slot=${plan.targetSlotIndex} lastTxSlot=$lastTxSlotIndex " +
+                "startAt=${plan.startAtMs} now=$now late=${now - plan.startAtMs} parity=${st.txParity} " +
+                "offset=$off wallSlot=${Math.floorDiv(now - off, slotMs)} " +
+                "lastDecodedSlot=$lastDecodedSlotIndex lastDecodeAt=$lastDecodeAtMs " +
+                "waitDecode=${txTextAwaitsDecode() && txShouldWaitForDecode(plan.targetSlotIndex, plan.targetSlotIndex * slotMs + off, lastDecodedSlotIndex, now, lastDecodeAtMs, slotMs)} " +
+                "text=$text"
+            Log.i(TAG_QSO, line)
+            Diag.line(line)
+        }
+
         if (plan.targetSlotIndex == lastTxSlotIndex) return
 
         // **QSO 进行中**时，不能用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于上一时隙
@@ -1790,6 +1852,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (txTextAwaitsDecode() &&
             txShouldWaitForDecode(
                 targetSlotIndex = plan.targetSlotIndex,
+                targetSlotStartMs = plan.targetSlotIndex * slotMs + latestSettings.slotOffsetMs.toLong(),
                 lastDecodedSlotIndex = lastDecodedSlotIndex,
                 nowMs = now,
                 lastDecodeAtMs = lastDecodeAtMs,
@@ -1810,6 +1873,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         manualInFlight = st.manualTxText != null
         val genAtPlan = engineGen
         val abortAtPlan = txAbortGen
+        Log.i(TAG_QSO, "txTick 发射：text=$text slot=${plan.targetSlotIndex} " +
+            "startAt=${plan.targetStartMs} late=$lateness preamble=$effectivePreamble manual=$manualInFlight")
+        Diag.line("txTick 发射：text=$text slot=${plan.targetSlotIndex} " +
+            "startAt=${plan.targetStartMs} late=$lateness preamble=$effectivePreamble manual=$manualInFlight")
         txJob = viewModelScope.launch(Dispatchers.IO) {
             transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan, abortAtPlan)
         }
@@ -1851,20 +1918,30 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
 
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
+        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+            "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
+        Diag.line("transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+            "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
         } catch (e: Exception) {
+            Log.w(TAG_QSO, "transmit：编码异常", e)
             _status.update { it.copy(status = "发射异常: ${e.message}") }
             return
         }
         // 解码/编码期间可能被「停止发射」或换了引擎：丢弃
-        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) {
+            Log.i(TAG_QSO, "transmit：编码后作废（gen/abort 变了）")
+            return
+        }
 
         try {
             // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/Ft8Vox.md）。
             val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
+            Log.i(TAG_QSO, "transmit：playTx 返回 written=$written")
+            Diag.line("transmit：playTx 返回 written=$written")
             // 仍是当前有效的那一次、且确实写进了声卡 → 算「已播完」；否则（被作废 / 写入失败）标「未发完」。
             if (abortAtPlan == txAbortGen && written > 0) {
                 finishTxRecord(recId)
@@ -2152,15 +2229,35 @@ internal const val TX_NOTICE_MS = 6000L
  *
  * [lastDecodeAtMs] 是健康判据：解码停摆（超过两个时隙没推进）时**不再拦**，避免采集/解码异常
  * 时把自己锁死（宁可发旧报文，也不能一条都不发）。
+ *
+ * [targetSlotStartMs] 是第二道兜底：若解码网格因故（采集预缓冲、系统调度抖动）比墙钟滞后，
+ * `lastDecodedSlotIndex < targetSlotIndex-1` 可能**恒真**，而解码又在推进（[lastDecodeAtMs] 健康
+ * 判据不触发）→ 闸门永不放开，QSO 一条都发不出去。因此只允许在「目标时隙起点 +
+ * [DECODE_WAIT_GRACE_MS]」之前等：一旦进目标时隙超过该宽限，就按现状发（就地发射仍能整条落在
+ * 本时隙内），保证永远不锁死。
+ *
+ * 网格本身的错位已在 [AudioEngine] 侧修根（对齐标签按目标边界取值，见 `armAlignment`）；
+ * 这里的宽限只是防御性兜底，正常情况下解码结果在时隙结束后几十~百余 ms 到手，闸门会立即放开。
  */
 internal fun txShouldWaitForDecode(
     targetSlotIndex: Long,
+    targetSlotStartMs: Long,
     lastDecodedSlotIndex: Long,
     nowMs: Long,
     lastDecodeAtMs: Long,
     slotMs: Long,
 ): Boolean =
-    lastDecodedSlotIndex < targetSlotIndex - 1 && nowMs - lastDecodeAtMs <= slotMs * 2
+    lastDecodedSlotIndex < targetSlotIndex - 1 &&
+        nowMs - lastDecodeAtMs <= slotMs * 2 &&
+        nowMs - targetSlotStartMs <= DECODE_WAIT_GRACE_MS
+
+/**
+ * 进入目标时隙后仍允许等上一时隙解码的宽限（ms）：超过就发。
+ *
+ * 取值需小于「就地发射」余量（报文 12640 ms，时隙 15000 ms，前导若干百 ms），否则宽限结束时
+ * 已无法整条落回本时隙，`planTx` 会跳到下下个周期，反而继续等。700 ms 在默认前导下安全。
+ */
+internal const val DECODE_WAIT_GRACE_MS = 700L
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L

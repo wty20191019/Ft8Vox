@@ -187,22 +187,14 @@ fun OperateScreen(
                         myCall = status.myCall,
                         listState = listState,
                         followed = { it in settings.followCalls },
-                        onRowClick = { row ->
-                            viewModel.selectTargetFreq(row.msg.df)
-                            val from = row.parsed.from
-                            if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
-                                targetCall = from
-                                viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                            }
-                        },
                         onRowDoubleClick = { row -> onOpenMap(row.parsed.from) },
                         onCall = { row ->
                             val from = row.parsed.from
                             if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                 targetCall = from
                                 viewModel.selectTargetFreq(row.msg.df)
-                                viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                                request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
+                                // 传被滑那条解码**自己的时隙**：发射中就地换目标 / 排下一发射时隙全靠它
+                                request { viewModel.answer(from, row.parsed.grid, row.msg.df, row.msg.slotUtcMs) }
                             }
                         },
                         onReply = { row ->
@@ -210,7 +202,6 @@ fun OperateScreen(
                             if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                                 targetCall = from
                                 viewModel.selectTargetFreq(row.msg.df)
-                                viewModel.alignTxToTarget(row.msg.slotUtcMs)
                                 request { viewModel.replyTo(row.msg) }
                             }
                         },
@@ -297,8 +288,7 @@ fun OperateScreen(
                 detailFor = null
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
                     targetCall = from
-                    viewModel.alignTxToTarget(row.msg.slotUtcMs)
-                    request { viewModel.answer(from, row.parsed.grid, row.msg.df) }
+                    request { viewModel.answer(from, row.parsed.grid, row.msg.df, row.msg.slotUtcMs) }
                 }
             },
             onOpenLog = {

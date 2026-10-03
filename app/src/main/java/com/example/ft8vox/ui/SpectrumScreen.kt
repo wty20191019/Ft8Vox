@@ -307,7 +307,7 @@ fun SpectrumScreen(
                 val from = parsed.from
                 detailFor = null
                 if (from != null && !from.equals(status.myCall, ignoreCase = true)) {
-                    viewModel.answer(from, parsed.grid, msg.df)
+                    viewModel.answer(from, parsed.grid, msg.df, msg.slotUtcMs)
                 }
             },
             onOpenLog = {

@@ -392,7 +392,8 @@ class AutoProgramTest {
     fun defaultsMatchFt8cn() {
         val d = AutoProgramSettings()
         assertEquals(10, d.supervisionMinutes)
-        assertEquals(0, d.noReplyLimit)
+        // 与 FT8CN 的有意偏离：默认从 0 改为 3
+        assertEquals(3, d.noReplyLimit)
         assertTrue(d.autoAddCqToFollow)
         assertTrue(d.autoCallFollow)
     }

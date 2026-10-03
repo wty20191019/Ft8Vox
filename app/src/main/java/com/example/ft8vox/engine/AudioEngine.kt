@@ -105,6 +105,7 @@ object AudioEngine {
     ) {
         release()
         engine = RealtimeEngine(config, decodeParams, context?.applicationContext)
+        Diag.init(context)
     }
 
     /** 更新热生效的解码参数。 */
@@ -256,6 +257,9 @@ object AudioEngine {
         private var voxLevelDb = -100f
         private var slotBuf = FloatArray(SLOT_SAMPLES)
         private var slotStartMs = 0L
+
+        /** 本次对齐要丢弃到的那个「偏移后」时隙边界的真实墙钟毫秒（见 [armAlignment]）。 */
+        private var alignedSlotStartMs = 0L
         private var aligned = false
         private var alignRemaining = 0
 
@@ -273,8 +277,21 @@ object AudioEngine {
         private var lastDecodeMs = 0L
 
         // ---- 播放 ----
+        /**
+         * 已打开的播放流句柄 / 采样率。
+         *
+         * **`@Volatile`**：供 [startPlayback] 的「流已就绪 → 直接复用」快速路径在**锁外**读取，
+         * 避免发射中从 UI 线程调用时去抢 [writeLock]（见 [startPlayback] 注释）。
+         */
+        @Volatile
         private var audioTrack: AudioTrack? = null
+        @Volatile
         private var outputRate = 0
+        /** 已打开流对应的**请求采样率 / 输出设备 id**（快速复用判据，见 [startPlayback]）。 */
+        @Volatile
+        private var playbackReqRate = 0
+        @Volatile
+        private var playbackDevId = Int.MIN_VALUE
         @Volatile
         private var abortRequested = false
         private val writeLock = Any()
@@ -327,9 +344,26 @@ object AudioEngine {
             val now = System.currentTimeMillis() - slotOffsetMs
             val posInSlot = ((now % SLOT_MS) + SLOT_MS) % SLOT_MS
             alignRemaining = (((SLOT_MS - posInSlot) % SLOT_MS) * DECODE_RATE / 1000).toInt()
+            // 本次要丢弃到的目标边界（真实墙钟）就是该时隙的标签。
+            //
+            // 关键：**不要**在丢完样本后再读一次墙钟去 floorDiv 定标签。建流时 AudioRecord 已
+            // 预缓冲了若干百 ms（缓冲本身 + 采集线程调度延迟），12 kHz 丢弃是把这段预缓冲**瞬间
+            // 抽干**而不是实时等待，所以丢完那一刻的墙钟往往仍落在边界之前，floorDiv 会把标签记成
+            // **上一格**。窗口因而整整早一格：`lastDecodedSlot` 永远够不到 `targetSlotIndex-1`，
+            // 发射闸门只能死等 `DECODE_WAIT_GRACE_MS`（真机表现为每次发射迟滞约 0.7~2 s）。
+            // 直接按「对齐目标」定标签，信号所在时隙就与标签一致；预缓冲只要 < 1.8 s 就不会切到信号尾。
+            alignedSlotStartMs = if (posInSlot == 0L) {
+                Math.floorDiv(now, SLOT_MS.toLong()) * SLOT_MS + slotOffsetMs
+            } else {
+                (Math.floorDiv(now, SLOT_MS.toLong()) + 1) * SLOT_MS + slotOffsetMs
+            }
             aligned = false
             slotBuf.fill(0f)
             fedSamples = 0
+            Diag.line(
+                "armAlignment wall=${System.currentTimeMillis()} now=$now posInSlot=$posInSlot " +
+                    "alignRemaining=$alignRemaining alignedSlotStartMs=$alignedSlotStartMs off=$slotOffsetMs",
+            )
         }
 
         @SuppressLint("MissingPermission")
@@ -596,10 +630,15 @@ object AudioEngine {
                 idx = alignRemaining
                 alignRemaining = 0
                 aligned = true
-                val now = System.currentTimeMillis() - slotOffsetMs
-                slotStartMs = Math.floorDiv(now, SLOT_MS.toLong()) * SLOT_MS + slotOffsetMs
+                // 标签用对齐目标（见 armAlignment），不要用落地时的墙钟——预缓冲会让墙钟仍在边界之前。
+                slotStartMs = alignedSlotStartMs
                 slotBuf.fill(0f)
                 fedSamples = 0
+                Diag.line(
+                    "对齐落地 wall=${System.currentTimeMillis()} " +
+                        "落地时隙=${Math.floorDiv(System.currentTimeMillis() - slotOffsetMs, SLOT_MS.toLong())} " +
+                        "slotStartMs=$slotStartMs",
+                )
             }
 
             while (idx < at12k.size) {
@@ -626,6 +665,8 @@ object AudioEngine {
             // JNI 固定用 FT8_MAX_RESULTS(256) 作为输出上限（见 ft8_jni.cpp），因此必须在这里落地，
             // 否则设置页那一项是空转。
             val maxDecoded = decodeParams.maxDecoded
+            val slotIdx = atSlotMs / SLOT_MS
+            val submitWallMs = System.currentTimeMillis()
             decoder.execute {
                 val t0 = System.currentTimeMillis()
                 val messages: List<Ft8Message> = try {
@@ -634,7 +675,6 @@ object AudioEngine {
                     Log.w(TAG, "时隙解码异常", e)
                     emptyList()
                 }
-                val slotIdx = atSlotMs / SLOT_MS
                 synchronized(decodedLock) {
                     for (m in messages) {
                         decodedQueue.add(
@@ -649,9 +689,19 @@ object AudioEngine {
                         )
                     }
                 }
-                lastDecodeMs = System.currentTimeMillis() - t0
+                val doneMs = System.currentTimeMillis()
+                lastDecodeMs = doneMs - t0
                 lastDecodedSlot = slotIdx
                 slotsDecoded += 1
+                // 诊断：`slot` 与 `wall` 必须只差 0（同一时刻墙钟所在时隙）——若差 1 以上，
+                // 说明采集/解码网格相对墙钟滞后，`txTick` 的「等上一格解码」闸门会被永久拦住。
+                val line = "解码完成：slot=$slotIdx wallSlot=${Math.floorDiv(doneMs - slotOffsetMs, SLOT_MS)} " +
+                    "运行=${lastDecodeMs}ms 排队=${t0 - submitWallMs}ms " +
+                    "wall=$doneMs atSlotMs=$atSlotMs offset=$slotOffsetMs slotsDecoded=$slotsDecoded n=${messages.size}" +
+                    // 解码原文（便于离线复核：`n=1` 到底是对手的回复，还是我方自己的自听回声）
+                    (if (messages.isEmpty()) "" else " 解码=${messages.joinToString(" | ") { it.text }}")
+                Log.i(TAG, line)
+                Diag.line(line)
             }
         }
 
@@ -701,8 +751,16 @@ object AudioEngine {
 
         @SuppressLint("MissingPermission")
         fun startPlayback(preferredRate: Int, deviceId: Int): Int {
+            val r = preferredRate.takeIf { it > 0 } ?: 48000
+            // 快速路径：流已就绪且请求参数（采样率 / 设备）未变 → 直接复用，**不加锁、不重建**。
+            //
+            // 必须如此：writeSamples 在整段 FT8 播放（约 13 s）里一直持有 writeLock。发射途中
+            // 从 UI 线程调本方法（真机路径：发射中在解码列表**左滑「呼叫」** → answerInternal →
+            // armPlayback）若去抢锁，会一直等到本次播放结束 → 主线程卡死（ANR），也就表现为
+            // 「左滑停不下来、换不了目标」。播放一旦武装就一直复用同一流（除切设备 / 停止会话外
+            // 不再重建），故这里通常直接命中。
+            if (audioTrack != null && playbackReqRate == r && playbackDevId == deviceId) return outputRate
             synchronized(writeLock) {
-                val r = preferredRate.takeIf { it > 0 } ?: 48000
                 audioTrack?.let { runCatching { it.stop() }; runCatching { it.release() } }
                 val track = buildTrack(r, deviceId) ?: return -2
                 if (track.state != AudioTrack.STATE_INITIALIZED) {
@@ -710,6 +768,8 @@ object AudioEngine {
                     return -3
                 }
                 outputRate = track.sampleRate
+                playbackReqRate = r
+                playbackDevId = deviceId
                 audioTrack = track
                 track.play()
                 abortRequested = false
@@ -755,6 +815,8 @@ object AudioEngine {
                 }
                 audioTrack = null
                 outputRate = 0
+                playbackReqRate = 0
+                playbackDevId = Int.MIN_VALUE
             }
         }
 
@@ -765,7 +827,8 @@ object AudioEngine {
         fun play(pcm: FloatArray): Int = writeSamples(pcm, abortAware = false, returned = pcm.size)
 
         fun playTx(pcm: FloatArray, pttSilenceMs: Int, leadToneMs: Int): Int {
-            abortRequested = false
+            // 注意：**不要**在这里清 abortRequested。清标志必须等拿到 writeLock（见 writeSamples），
+            // 否则会把对「上一段正在写的音频」的作废提前撤销，导致它继续整条播完。
             val ptt = msToSamples(pttSilenceMs)
             val lead = msToSamples(leadToneMs)
             val total = FloatArray(ptt + lead + pcm.size)
@@ -782,7 +845,7 @@ object AudioEngine {
         }
 
         fun playTone(freqHz: Int, durationMs: Int): Int {
-            abortRequested = false
+            // 同 playTx：abortRequested 的清除放在 writeSamples 拿到锁之后。
             val n = msToSamples(durationMs)
             val tone = FloatArray(n)
             for (i in 0 until n) {
@@ -798,6 +861,13 @@ object AudioEngine {
         private fun writeSamples(pcm: FloatArray, abortAware: Boolean, returned: Int): Int {
             if (pcm.isEmpty()) return 0
             synchronized(writeLock) {
+                // **拿到锁＝上一段写入（若有）已经退出**，此刻才清「作废」标志。
+                //
+                // 绝不能提前清（曾经放在 playTx 入锁前）：发射途中换目标时 abortTransmit() 先置
+                // true，好让正在写的那段尽快退锁；若新一段在入锁前就把它清掉，旧段永远看不到作废，
+                // 会把整条报文（约 13 s）播完、锁也就迟迟不放 —— 真机表现为「左滑『呼叫』停不下来，
+                // 新报文被拖到下一个时隙（也就是接收时隙）才播出」。
+                abortRequested = false
                 val track = audioTrack ?: return -1
                 val resampled = if (outputRate == DECODE_RATE) pcm
                 else Resampler.convert(pcm, DECODE_RATE, outputRate)
@@ -805,7 +875,14 @@ object AudioEngine {
                 val chunk = max(outputRate / 20, 512)
                 var off = 0
                 while (off < resampled.size) {
-                    if (abortAware && abortRequested) return 0
+                    if (abortAware && abortRequested) {
+                        // 作废：先丢掉已经排进声卡缓冲的旧音频（缓冲约 0.4 s），否则它还会继续响，
+                        // 把紧接着的新报文顶出时隙起点。pause→flush→play 让播放从空缓冲重新开始。
+                        runCatching { track.pause() }
+                        runCatching { track.flush() }
+                        runCatching { track.play() }
+                        return 0
+                    }
                     val len = minOf(chunk, resampled.size - off)
                     val block = FloatArray(len)
                     for (i in 0 until len) block[i] = resampled[off + i] * g
