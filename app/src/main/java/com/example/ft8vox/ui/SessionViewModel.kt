@@ -754,6 +754,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (st.txParity != p) _status.update { it.copy(txParity = p) }
     }
 
+    /**
+     * 人工「换报文」（解码列表左滑之外的入口：报文槽点击 / 自定义「发送」/ 呼叫 CQ）前决定发射周期。
+     *
+     * **正在发射时必须保持当前周期**：本时隙就是我方发射时隙，若此时按「当前时间」重锁
+     * （`nextSlotParity` 取紧邻的下一个时隙），周期会翻到那个**接收时隙** —— 于是「时间不够」
+     * 分支的新报文就会被排进本应接收的时隙（与左滑「呼叫」同一类现象）。
+     * 保持当前周期后，[tryRetargetNow] / [planTx] 会落到下一个**我方发射时隙**（`slotIdx+2`）。
+     */
+    private fun relockParityBeforeManualTx() {
+        val inFlight = _status.value.txing || txJob?.isActive == true
+        if (!inFlight) relockAutoParityIfNeeded()
+    }
+
     fun clearMessages() {
         _messages.value = emptyList()
         _txRecords.value = emptyList()
@@ -974,7 +987,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!_status.value.running) start()
         if (!_status.value.running) return
 
-        relockAutoParityIfNeeded()
+        relockParityBeforeManualTx()
         if (!armPlayback()) return
         lastTxSlotIndex = -1L
         val p = qsoEngine.startCq(AudioEngine.utcNowMs(), latestSettings.cqPrefix)
@@ -1110,7 +1123,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        relockAutoParityIfNeeded()
+        relockParityBeforeManualTx()
         if (!armPlayback()) {
             showTxNotice("音频输出未就绪，无法发射")
             return
