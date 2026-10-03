@@ -91,7 +91,7 @@ fun AutoProgramPanel(
             onChange = { v -> onOption { it.copy(supervisionMinutes = v) } },
         )
 
-        // 无回应次数（FT8CN noReplyLimit：0＝用内置硬上限 20 个批次；1..30＝2×该值）
+        // 无回应次数（FT8CN noReplyLimit：0＝用内置硬上限 20 个批次；1..30＝连续该值）
         AutoStepperRow(
             title = "无回应次数（换台阈值）",
             value = program.noReplyLimit,
@@ -101,8 +101,8 @@ fun AutoProgramPanel(
             onChange = { v -> onOption { it.copy(noReplyLimit = v) } },
         )
         Text(
-            "我发出 RR73 后对方连续无回应达到该次数，就放弃当前目标：优先换到别的 CQ 台，" +
-                "没有就自己发 CQ。0＝用 FT8CN 的内置硬上限（20 个解码批次）。",
+            "对方连续无回应达到该次数，就放弃当前目标：优先换到别的 CQ 台，没有就自己发 CQ" +
+                "（除 CQ 主叫外的各阶段都生效）。0＝用内置硬上限（20 个解码批次）。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -159,15 +159,17 @@ data class QsoProgress(
  *   进入序号 2 / 3 时算一次，之后**重发不刷新**；序号 3 的 `R<报告>` 与序号 2 **同一个值**。
  * - **落库**：进入序号 4 / 5（发出 RR73 / 73）即落库，幂等（FT8CN `record.saved`）。
  * - **无回应**：按**解码批次**累计（空批不计），收到回复清零；是否换台由第 2 层按
- *   `noReplyLimit` 决定，但 FT8CN 的三路兜底判据在**本引擎**里（见下）。
+ *   `noReplyLimit` 决定，但兜底判据在**本引擎**里（见下）。
  * - **完成判据**（照 FT8CN `:832-843`，5 路 OR）：
  *   1. 对方的报文序号 = 5（对方发 73）→ 完成；
  *   2. 我的序号 = 5 且对方沉默（本机结构上不可达：发出 73 后状态已是 [QsoState.DONE]）；
- *   3. 我的序号 = 4 且 `noReplyLimit > 0` 且 `noReplyCount > noReplyLimit × 2` → 作废换台；
+ *   3. **除 CQ 主叫（序号 6）外各阶段**且 `noReplyLimit > 0` 且 `noReplyCount >= noReplyLimit` → 作废换台；
  *   4. 我的序号 = 4 且**对方开始呼叫别人**（[targetCallingOthers]）→ 作废换台；
- *   5. 我的序号 = 4 且 `noReplyLimit == 0` 且 `noReplyCount > 20` → 作废换台。
+ *   5. **除 CQ 主叫外各阶段**且 `noReplyLimit == 0` 且 `noReplyCount >= 20` → 作废换台。
  *
  *   第 3~5 路命中时 [QsoProgress.gaveUp] 为真，由第 2 层换台 / 回 CQ。
+ *   **与 FT8CN 的有意偏离**：FT8CN 第 3~5 路只在序号 4 生效、且第 3 路用 `× 2`；本机把
+ *   第 3 / 5 路放宽到除 CQ 外各阶段、阈值取字面值，避免停在序号 1~3 的呼叫者永远重发。
  * - **序号 4 不是终态**：发出 RR73 后本段仍在跑（照 FT8CN 每周期重发 RR73），
  *   直到对方的 73 或上面第 3~5 路兜底。
  *
@@ -175,7 +177,7 @@ data class QsoProgress(
  */
 class QsoEngine {
 
-    /** FT8CN `noReplyLimit == 0` 且我方停在 RR73 时的「硬上限」批次（照 `:840` 的字面量 20）。 */
+    /** `noReplyLimit == 0`（未设或设 0）时，除 CQ 外各阶段的「硬上限」批次（照 FT8CN `:840` 的字面量 20）。 */
     private companion object {
         const val NO_REPLY_HARD_LIMIT = 20
     }
@@ -222,7 +224,7 @@ class QsoEngine {
     /**
      * 更新台站信息与安全阀设置（来自设置页）。
      *
-     * [noReplyLimit] 是 FT8CN 的「无回应限制」，完成判据要用它（`0`＝忽略）。
+     * [noReplyLimit] 是 FT8CN 的「无回应限制」（**除 CQ 主叫外各阶段**生效；`0`＝用内置硬上限 20）。
      */
     fun configure(
         myCall: String,
@@ -449,13 +451,17 @@ class QsoEngine {
             theirGrid = theirGrid ?: hitParsed?.grid
         }
 
-        // ---- 照 FT8CN `:832-843`：完成判据 5 路 OR（任一命中即收尾，不再推进）----
-        val giveUpByNoReply = order == 4 &&
-            (
-                (noReplyLimit > 0 && noReplyCount > noReplyLimit * 2) ||
-                    targetCallingOthers(messages, them) ||
-                    (noReplyLimit == 0 && noReplyCount > NO_REPLY_HARD_LIMIT)
-                )
+        // ---- 照 FT8CN `:832-843`：完成判据（任一命中即收尾，不再推进）----
+        // 无回应计数：**除 CQ 主叫（序号 6）外各阶段**都生效（FT8CN 只在序号 4 生效，
+        // 会让停在序号 1~3 的呼叫者永远重发、无法换台）。阈值取字面值（不照 FT8CN ×2）。
+        val noReplyExceeded =
+            (noReplyLimit > 0 && noReplyCount >= noReplyLimit) ||
+                (noReplyLimit == 0 && noReplyCount >= NO_REPLY_HARD_LIMIT)
+        // 「对方开始呼别人」是独立信号，仍只在序号 4（发出 RR73 后）判定：
+        // 序号 1~3 时对方重发 CQ 只是没抄到我，属正常重试，靠上面的无回应计数兜底。
+        val giveUpByNoReply =
+            (order in 1 until FunctionOrder.CQ && noReplyExceeded) ||
+                (order == 4 && targetCallingOthers(messages, them))
         if (newOrder == 5 || giveUpByNoReply) {
             finish(utcMs, hit?.slotUtcMs ?: 0L)
             gaveUp = giveUpByNoReply

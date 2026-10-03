@@ -10,8 +10,11 @@ import com.example.ft8vox.engine.DecodeResult
 val SUPERVISION_MINUTES: List<Int> = listOf(0) + (5..95 step 10).toList()
 
 /**
- * 无回应次数上限（FT8CN `noReplyLimit`）：`0`＝按 FT8CN 的**内置硬上限**（20 个批次）收尾；
- * 其余 `1..30`＝`noReplyCount > 2 × limit` 时收尾（FT8CN `:836` 的 `noReplyLimit * 2`）。
+ * 无回应次数上限（FT8CN `noReplyLimit`）：`0`＝按**内置硬上限**（20 个批次）收尾；
+ * 其余 `1..30`＝**连续 `noReplyCount` 达到该值**时收尾。
+ *
+ * **与 FT8CN 的有意偏离**：FT8CN `:836` 用 `noReplyCount > 2 × limit`，本机改为字面值，
+ * 让设置档位与界面「达到该次数」的含义一致。
  */
 val NO_REPLY_LIMIT_RANGE: IntRange = 0..30
 
@@ -24,13 +27,15 @@ data class AutoProgramSettings(
     /** 发射监管：`0`＝不监管，`5/15/…/95` 分钟（默认 10，FT8CN `launchSupervision`）。 */
     val supervisionMinutes: Int = 10,
     /**
-     * 无回应次数上限（默认 `0`，FT8CN `noReplyLimit`）。
+     * 无回应次数上限（默认 `3`；对应 FT8CN `noReplyLimit`，但**本机有意偏离其 `× 2` 口径**——
+     * 设置值就是「连续多少个解码批次无回应」）。
      *
-     * 照 FT8CN `FT8TransmitSignal.java:832-843`：判据只在**我发过 RR73（序号 4）**之后生效 ——
-     * `> 0` 时 `noReplyCount > limit × 2` 收尾；`== 0` 时仍以 **20 个批次**为硬上限。
+     * 判据在**除 CQ 主叫（序号 6）外的各阶段**都生效（FT8CN 只在**我发过 RR73（序号 4）**后生效，
+     * 会让停在序号 1~3 的呼叫者永远重发、无法换台）：
+     * `> 0` 时 `noReplyCount >= limit` 收尾；`== 0` 时仍以 **20 个批次**为硬上限。
      * 命中后由 `AutoScheduler.onTargetGaveUp` 换台 / 回 CQ。
      */
-    val noReplyLimit: Int = 0,
+    val noReplyLimit: Int = 3,
     /**
      * 自动跟踪 CQ（默认开；对应 FT8CN `autoFollowCQ` `GeneralVariables.java:205`）。
      *

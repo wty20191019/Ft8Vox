@@ -165,7 +165,7 @@ class QsoEngineTest {
     }
 
     @Test
-    fun neverFailsWithoutReply() {
+    fun keepsRetryingUntilHardLimitAtEarlyStage() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
         var last = q.progress()
@@ -173,7 +173,7 @@ class QsoEngineTest {
             q.onTransmitted() // 每次都实际重发一次
             last = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12")))
         }
-        // 引擎不再因重试耗尽而放弃：照 FT8CN，只有「我发过 RR73（序号 4）」之后才谈换台
+        // 兜底阈值是 20：刚够 20 次还没收尾；第 21 次才换台（见 givesUpAtAnyStageExceptCqWhenNoReply）
         assertEquals(QsoState.WAIT_REPLY, last.state)
         assertTrue(last.active)
         assertEquals(20, last.noReplyCount)
@@ -612,28 +612,29 @@ class QsoEngineTest {
 
     @Test
     fun givesUpAfterTwentySilentBatchesWhileWaitingFinal73() {
-        val q = engine() // noReplyLimit = 0 → FT8CN 的内置硬上限 20 个批次
+        val q = engine() // noReplyLimit = 0 → 内置硬上限 20 个批次
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))) // → 序号 4
-        repeat(21) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
-        assertEquals(21, q.progress().noReplyCount)
-        assertTrue("21 次还没超过内置上限，不该收尾", q.progress().active)
+        repeat(20) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
+        assertEquals(20, q.progress().noReplyCount)
+        assertTrue("20 次才刚到内置上限，本次判定在增量前，尚未收尾", q.progress().active)
 
-        val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 22 批：21 > 20 → 兜底收尾
+        val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 21 批：20 >= 20 → 兜底收尾
         assertTrue(s.gaveUp)
         assertEquals(QsoState.DONE, s.state)
         assertFalse(s.active)
     }
 
     @Test
-    fun noReplyLimitDoubledGivesUpWhileWaitingFinal73() {
+    fun noReplyLimitGivesUpAfterExactlyThatManyBatches() {
         val q = QsoEngine().apply { configure("F4FSY", "JN25", noReplyLimit = 2) }
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))) // → 序号 4
-        repeat(5) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
-        assertTrue("5 次还不 > 2×2，不该收尾", q.progress().active)
+        repeat(2) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
+        assertEquals(2, q.progress().noReplyCount)
+        assertTrue("刚够 2 次，判定在增量前，尚未收尾", q.progress().active)
 
-        val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 6 > 4 → 兜底收尾
+        val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 3 批：2 >= 2 → 兜底收尾
         assertTrue(s.gaveUp)
     }
 
@@ -649,13 +650,18 @@ class QsoEngineTest {
     }
 
     @Test
-    fun giveUpOnlyHappensWhileWaitingFinal73() {
-        val q = engine()
+    fun givesUpAtAnyStageExceptCqWhenNoReply() {
+        val q = engine() // noReplyLimit = 0 → 内置硬上限 20 个批次
         q.startResponderQso("GJ0KYZ", "IO90") // 序号 1：还没发出 RR73
-        repeat(30) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
-        // 照 FT8CN：兜底判据只在「我发过 RR73（序号 4）」时生效，其余阶段一直重发
-        assertFalse(q.progress().gaveUp)
-        assertTrue(q.progress().active)
+        repeat(20) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
+        // 新口径：无回应兜底在除 CQ 主叫外各阶段都生效，不再死等序号 4
         assertEquals(QsoState.WAIT_REPLY, q.progress().state)
+        assertFalse("刚够 20 次，判定在增量前，尚未收尾", q.progress().gaveUp)
+        assertTrue(q.progress().active)
+
+        val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 21 批：20 >= 20 → 兜底换台
+        assertTrue(s.gaveUp)
+        assertEquals(QsoState.DONE, s.state)
+        assertFalse(s.active)
     }
 }
