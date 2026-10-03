@@ -697,7 +697,9 @@ object AudioEngine {
                 // 说明采集/解码网格相对墙钟滞后，`txTick` 的「等上一格解码」闸门会被永久拦住。
                 val line = "解码完成：slot=$slotIdx wallSlot=${Math.floorDiv(doneMs - slotOffsetMs, SLOT_MS)} " +
                     "运行=${lastDecodeMs}ms 排队=${t0 - submitWallMs}ms " +
-                    "wall=$doneMs atSlotMs=$atSlotMs offset=$slotOffsetMs slotsDecoded=$slotsDecoded n=${messages.size}"
+                    "wall=$doneMs atSlotMs=$atSlotMs offset=$slotOffsetMs slotsDecoded=$slotsDecoded n=${messages.size}" +
+                    // 解码原文（便于离线复核：`n=1` 到底是对手的回复，还是我方自己的自听回声）
+                    (if (messages.isEmpty()) "" else " 解码=${messages.joinToString(" | ") { it.text }}")
                 Log.i(TAG, line)
                 Diag.line(line)
             }

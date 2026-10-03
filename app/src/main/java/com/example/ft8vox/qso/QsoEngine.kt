@@ -414,8 +414,16 @@ class QsoEngine {
      *
      * 流程照 `FT8TransmitSignal.parseMessageToFunction` `:808`：
      * 找「对方 → 我」的报文序号（找到即清零无回应计数）→ 完成判据 → 推进一格 → 无回应计数。
+     *
+     * @param countNoReply 本批若没有目标的回复是否累加「无回应」。上层只在**对方可能回我的那个
+     *   时隙**（我方不发射的相反周期）传 `true`；我方发射时隙的批传 `false`，避免每周期数两次。
+     *   **空批也算**（对方静默时批往往整批为空，若不计数监管永远不会触发）。
      */
-    fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
+    fun onDecoded(
+        messages: List<DecodeResult>,
+        utcMs: Long = 0L,
+        countNoReply: Boolean = true,
+    ): QsoProgress {
         markTime(utcMs)
         lastAdvanced = false
         if (!canOperate) return progress()
@@ -486,9 +494,14 @@ class QsoEngine {
             return progress()
         }
 
-        // 到此：本批**没有**「对我的回复」。照 FT8CN `:812` 空批直接返回（不计数）；
-        // `:886` 非弱信号批次才 +1（本机 deep 恒 false，故只排空批）。
-        if (messages.isNotEmpty() && messages.any { !it.deep }) noReplyCount++
+        // 到此：本批**没有**「对我的回复」→ 记一次「无回应」。
+        //
+        // 与 FT8CN 的**有意偏离**：FT8CN `:812` 空批直接返回（不计数）、`:886` 只对非弱信号批次 +1。
+        // 真机后果：对方静默时这一批往往**整个是空的**（或只解到我方自己的自听回声、被上层过滤），
+        // `noReplyCount` 永远停在 0 → 「无回应次数」形同虚设，对静默伙伴无限重发（实测 20+ 批次不换台）。
+        // 改为：只要本批**没有**目标的回复就 +1（含空批）。是否计数由上层 [countNoReply] 控制 ——
+        // 对方只可能在我们**不发射**的周期回我，所以我方发射时隙的批不计，免得每周期数两次。
+        if (countNoReply) noReplyCount++
         return progress()
     }
 

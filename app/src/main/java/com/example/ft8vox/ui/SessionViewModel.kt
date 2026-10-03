@@ -1421,12 +1421,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                             // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
                             runAutoProgram(incoming, s.utcNowMs)
                         } else {
-                            val p = qsoEngine.onDecoded(incoming, s.utcNowMs)
+                            // 「无回应」只在对方**可能回我的那个周期**计数：对方只在我们不发射的
+                            // 相反周期发报，所以我方发射时隙的批（自听 / 空批）不计，免得每周期数两次。
+                            val decodedParity = (((s.lastDecodedSlot % 2) + 2) % 2).toInt()
+                            val countNoReply = decodedParity != st.txParity
+                            val p = qsoEngine.onDecoded(incoming, s.utcNowMs, countNoReply)
                             Log.i(
                                 TAG_QSO,
                                 "engine n=${incoming.size} their=${st.qso.theirCall} " +
                                     "state=${st.qso.state} -> ${p.state} noReply=${p.noReplyCount} " +
-                                    "msgs=${incoming.map { it.text }}",
+                                    "count=$countNoReply msgs=${incoming.map { it.text }}",
                             )
                             applyQsoProgress(p, s.utcNowMs, incoming)
                             // FT8CN `checkCQMeOrFollowCQMessage` 循环 2：当前目标本批沉默时，

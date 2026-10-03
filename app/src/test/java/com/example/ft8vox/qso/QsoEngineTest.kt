@@ -153,15 +153,29 @@ class QsoEngineTest {
     }
 
     @Test
-    fun emptyDecodeBatchDoesNotCountNoReply() {
+    fun emptyDecodeBatchCountsAsNoReply() {
         val q = engine()
         q.startResponderQso("GJ0KYZ", "IO90")
-        // 照 FT8CN `FT8TransmitSignal.java:812`：空批（一条解码都没有）直接返回，**不计数**
+        // 新口径（有意偏离 FT8CN `:812`）：对方静默时空批**也要计数**，否则监管永远不触发。
+        // 是否计数由上层 `countNoReply` 控制。
         repeat(5) { q.onDecoded(emptyList()) }
-        assertEquals(0, q.progress().noReplyCount)
-        // 有解码、但没有发给我的有效回复 → 才 +1
+        assertEquals(5, q.progress().noReplyCount)
+        // 我方发射时隙的批 → 上层传 countNoReply=false → 不计（免得每周期数两次）
+        repeat(3) { q.onDecoded(emptyList(), countNoReply = false) }
+        assertEquals(5, q.progress().noReplyCount)
+        // 有解码、但没有发给我的有效回复 → 继续 +1
         repeat(3) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
-        assertEquals(3, q.progress().noReplyCount)
+        assertEquals(8, q.progress().noReplyCount)
+    }
+
+    @Test
+    fun silentPartnerGivesUpOnEmptyBatches() {
+        val q = QsoEngine().apply { configure("F4FSY", "JN25", noReplyLimit = 3) }
+        q.startResponderQso("GJ0KYZ", "IO90") // 序号 1：正常呼叫，还没到 RR73
+        repeat(3) { q.onDecoded(emptyList()) } // 3 个批次全静默（真机常见的空批）
+        val s = q.onDecoded(emptyList()) // 第 4 批：noReplyCount(3) >= 3 → 兜底换台
+        assertTrue("对方静默时空批必须计数并换台", s.gaveUp)
+        assertFalse(s.active)
     }
 
     @Test
