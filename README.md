@@ -12,7 +12,7 @@ Ft8Vox 把 Android 手机变成一台 FT8 终端：采集电台音频实时解�
 
 ## 功能概览
 
-- **接收**：实时解码 + 瀑布图 + 解码报文列表（时隙 / UTC / SNR / dT / 报文 / 音频频率 / 国家 / 距离）。
+- **接收**：实时解码（按频率分段多核并行 + 多趟减谱重解）+ 瀑布图 + 解码报文列表（时隙 / UTC / SNR / dT / 报文 / 音频频率 / 国家 / 距离）。
 - **发射**：手动（CQ / 应答 / 报告 / R 报告 / RR73 / 73 / 自定义报文）或**自动程序**（自动选台、自动跑完整段 QSO）。
 - **QSO 自动系统**：六步报文序号状态机 + 单档常开自动程序 + 两个安全阀（发射监管、无回应兜底）。
 - **日志**：通联自动落库（含距离备注），ADIF 合并导入 / 导出。
@@ -27,7 +27,7 @@ Ft8Vox 把 Android 手机变成一台 FT8 终端：采集电台音频实时解�
 | --- | --- |
 | Kotlin + Jetpack Compose | Kotlin 2.2.10，Compose BOM 2026.02.01，Material 3 |
 | 音频 | Kotlin `AudioRecord` / `AudioTrack`（Android API 26+），USB 声卡 / OTG 路由 |
-| DSP | C / CMake / NDK（ft8_w：编解码 / LDPC / OSD / kissfft）在 native 完成；瀑布 STFT 在 Kotlin 完成 |
+| DSP | C / CMake / NDK（ft8_w：编解码 / LDPC / OSD / kissfft）在 native 完成，解码按频率分段多核并行；瀑布 STFT 在 Kotlin 完成 |
 | 数据 | Room（通联日志）、DataStore（设置）、ADIF（导入导出） |
 | 工具链 | AGP 9.3.2 / Gradle 9.5.0 / JDK 25 / compileSdk 37 / minSdk 26 / NDK 28.2.13676358 |
 | ABI | `arm64-v8a`、`armeabi-v7a`、`x86_64`（模拟器） |
