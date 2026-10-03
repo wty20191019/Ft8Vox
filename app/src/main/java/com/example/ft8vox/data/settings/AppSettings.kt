@@ -19,35 +19,6 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** 外观主题（docs/Ft8Vox.md）。 */
-enum class ThemeMode(val label: String) {
-    DARK("暗"),
-    LIGHT("亮"),
-}
-
-/** 字体档位，作为 sp 的缩放系数（docs/Ft8Vox.md）。 */
-enum class FontSize(val label: String, val scale: Float) {
-    SMALL("小", 0.9f),
-    MEDIUM("中", 1f),
-    LARGE("大", 1.15f),
-}
-
-/**
- * 瀑布高度档位（**按屏高百分比**）。
- *
- * 实际高度 = 屏高 × [fraction]，最小 150dp（很矮的屏幕上 15% 会被 150dp 下限抬起）。
- * 默认 [PCT24] = 24%，即原来「紧凑」档的外观（操作页 `WaterfallView` 的高度）。
- *
- * 枚举名刻意用 `PCT15/PCT24/PCT45`（**不用 SHORT/TALL 之类的语义名**）：档位按百分比就是
- * 本源，且旧版本在 DataStore 里留下的 `waterfall_height` 值（`COMPACT`/`NORMAL`/`TALL`/`SHORT`…）
- * 一律认不出 → 回落默认档，不会被旧名字意外「复活」成别的高度。
- */
-enum class WaterfallHeight(val label: String, val fraction: Float) {
-    PCT15("15%", 0.15f),
-    PCT24("24%", 0.24f),
-    PCT45("45%", 0.45f),
-}
-
 /**
  * 解码预设档位。
  *
@@ -286,12 +257,7 @@ data class AppSettings(
     /** 含我呼号时哔声提醒（依赖音频，U7）。 */
     val beepOnMyCall: Boolean = false,
 
-    // ---- 外观（docs/Ft8Vox.md） ----
-    val themeMode: ThemeMode = ThemeMode.DARK,
-    val fontSize: FontSize = FontSize.MEDIUM,
-
     // ---- 界面/音频 ----
-    val waterfallHeight: WaterfallHeight = WaterfallHeight.PCT24,
     val sampleRate: SampleRatePref = SampleRatePref.AUTO,
 
     // ---- 瀑布显示（固定阈值，可调） ----

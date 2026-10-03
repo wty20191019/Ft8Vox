@@ -51,12 +51,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
-import com.example.ft8vox.data.settings.FontSize
 import com.example.ft8vox.data.settings.OUTPUT_GAIN_MAX_DB
 import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
-import com.example.ft8vox.data.settings.ThemeMode
 import com.example.ft8vox.data.settings.WATERFALL_FLOOR_DB_RANGE
 import com.example.ft8vox.data.settings.WATERFALL_RANGE_DB_RANGE
 import com.example.ft8vox.data.settings.clampWaterfallFloorDb
