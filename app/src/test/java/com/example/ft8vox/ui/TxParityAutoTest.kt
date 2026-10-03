@@ -195,6 +195,7 @@ class TxParityAutoTest {
         assertTrue(
             txShouldWaitForDecode(
                 targetSlotIndex = plan.targetSlotIndex,
+                targetSlotStartMs = plan.targetStartMs,
                 lastDecodedSlotIndex = plan.targetSlotIndex - 2,
                 nowMs = now,
                 lastDecodeAtMs = now - 3_000L,
@@ -205,9 +206,40 @@ class TxParityAutoTest {
         assertFalse(
             txShouldWaitForDecode(
                 targetSlotIndex = plan.targetSlotIndex,
+                targetSlotStartMs = plan.targetStartMs,
                 lastDecodedSlotIndex = plan.targetSlotIndex - 1,
                 nowMs = now,
                 lastDecodeAtMs = now - 300L,
+                slotMs = slot,
+            ),
+        )
+    }
+
+    @Test
+    fun stopsWaitingAfterGraceEvenIfDecodeSlotLags() {
+        // 真机回归：native 汇报的 lastDecodedSlot 比墙钟目标滞后两格 →「等上一格」恒真；
+        // 健康判据又不触发（解码一直在推进）。此时必须在进入目标时隙一小段后放开，绝不能锁死。
+        val target = 12L
+        val targetStart = target * slot
+        // 目标时隙起点刚过 400 ms：仍在宽限内 → 继续等
+        assertTrue(
+            txShouldWaitForDecode(
+                targetSlotIndex = target,
+                targetSlotStartMs = targetStart,
+                lastDecodedSlotIndex = target - 2,
+                nowMs = targetStart + 400L,
+                lastDecodeAtMs = targetStart + 300L,
+                slotMs = slot,
+            ),
+        )
+        // 已过宽限（700 ms）仍未等到上一格解码 → 放开，按现状就地发射，不能一条都不发
+        assertFalse(
+            txShouldWaitForDecode(
+                targetSlotIndex = target,
+                targetSlotStartMs = targetStart,
+                lastDecodedSlotIndex = target - 2,
+                nowMs = targetStart + DECODE_WAIT_GRACE_MS + 1L,
+                lastDecodeAtMs = targetStart + 300L,
                 slotMs = slot,
             ),
         )
@@ -219,6 +251,7 @@ class TxParityAutoTest {
         assertFalse(
             txShouldWaitForDecode(
                 targetSlotIndex = 12L,
+                targetSlotStartMs = 12L * slot,
                 lastDecodedSlotIndex = 3L,
                 nowMs = 12 * slot,
                 lastDecodeAtMs = 12 * slot - 2 * slot - 1L,

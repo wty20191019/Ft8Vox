@@ -20,6 +20,7 @@ import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.AudioEngine
 import com.example.ft8vox.engine.DecodeParams
 import com.example.ft8vox.engine.DecodeResult
+import com.example.ft8vox.engine.Diag
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
@@ -284,6 +285,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 反而把自己锁死。
      */
     private var lastDecodeAtMs = 0L
+
+    /** 诊断：「每个目标时隙只评估一次」去重（真机排查 QSO 不发射/发射被闸门拦住）。 */
+    private var lastTxDebugSlot = Long.MIN_VALUE
 
     /**
      * 本段会话内已落库的呼号（会话内去重，见方案 §4.2）。
@@ -1773,6 +1777,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 距数据起点的倒计时（用于 UI）
         _status.update { it.copy(txCountdownMs = maxOf(0L, plan.targetStartMs - now)) }
 
+        if (plan.targetSlotIndex != lastTxDebugSlot) {
+            lastTxDebugSlot = plan.targetSlotIndex
+            val off = latestSettings.slotOffsetMs.toLong()
+            val line = "txTick 评估：slot=${plan.targetSlotIndex} lastTxSlot=$lastTxSlotIndex " +
+                "startAt=${plan.startAtMs} now=$now late=${now - plan.startAtMs} parity=${st.txParity} " +
+                "offset=$off wallSlot=${Math.floorDiv(now - off, slotMs)} " +
+                "lastDecodedSlot=$lastDecodedSlotIndex lastDecodeAt=$lastDecodeAtMs " +
+                "waitDecode=${txTextAwaitsDecode() && txShouldWaitForDecode(plan.targetSlotIndex, plan.targetSlotIndex * slotMs + off, lastDecodedSlotIndex, now, lastDecodeAtMs, slotMs)} " +
+                "text=$text"
+            Log.i(TAG_QSO, line)
+            Diag.line(line)
+        }
+
         if (plan.targetSlotIndex == lastTxSlotIndex) return
 
         // **QSO 进行中**时，不能用上一时隙的旧报文抢发本时隙：本时隙该发什么，取决于上一时隙
@@ -1790,6 +1807,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (txTextAwaitsDecode() &&
             txShouldWaitForDecode(
                 targetSlotIndex = plan.targetSlotIndex,
+                targetSlotStartMs = plan.targetSlotIndex * slotMs + latestSettings.slotOffsetMs.toLong(),
                 lastDecodedSlotIndex = lastDecodedSlotIndex,
                 nowMs = now,
                 lastDecodeAtMs = lastDecodeAtMs,
@@ -1810,6 +1828,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         manualInFlight = st.manualTxText != null
         val genAtPlan = engineGen
         val abortAtPlan = txAbortGen
+        Log.i(TAG_QSO, "txTick 发射：text=$text slot=${plan.targetSlotIndex} " +
+            "startAt=${plan.targetStartMs} late=$lateness preamble=$effectivePreamble manual=$manualInFlight")
+        Diag.line("txTick 发射：text=$text slot=${plan.targetSlotIndex} " +
+            "startAt=${plan.targetStartMs} late=$lateness preamble=$effectivePreamble manual=$manualInFlight")
         txJob = viewModelScope.launch(Dispatchers.IO) {
             transmit(text, plan.targetStartMs, effectivePreamble, genAtPlan, abortAtPlan)
         }
@@ -1851,20 +1873,30 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
 
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
+        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+            "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
+        Diag.line("transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+            "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
         } catch (e: Exception) {
+            Log.w(TAG_QSO, "transmit：编码异常", e)
             _status.update { it.copy(status = "发射异常: ${e.message}") }
             return
         }
         // 解码/编码期间可能被「停止发射」或换了引擎：丢弃
-        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
+        if (genAtPlan != engineGen || abortAtPlan != txAbortGen) {
+            Log.i(TAG_QSO, "transmit：编码后作废（gen/abort 变了）")
+            return
+        }
 
         try {
             // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/Ft8Vox.md）。
             val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
             val written = AudioEngine.playTx(pcm, effPtt, effLead)
+            Log.i(TAG_QSO, "transmit：playTx 返回 written=$written")
+            Diag.line("transmit：playTx 返回 written=$written")
             // 仍是当前有效的那一次、且确实写进了声卡 → 算「已播完」；否则（被作废 / 写入失败）标「未发完」。
             if (abortAtPlan == txAbortGen && written > 0) {
                 finishTxRecord(recId)
@@ -2152,15 +2184,35 @@ internal const val TX_NOTICE_MS = 6000L
  *
  * [lastDecodeAtMs] 是健康判据：解码停摆（超过两个时隙没推进）时**不再拦**，避免采集/解码异常
  * 时把自己锁死（宁可发旧报文，也不能一条都不发）。
+ *
+ * [targetSlotStartMs] 是第二道兜底：若解码网格因故（采集预缓冲、系统调度抖动）比墙钟滞后，
+ * `lastDecodedSlotIndex < targetSlotIndex-1` 可能**恒真**，而解码又在推进（[lastDecodeAtMs] 健康
+ * 判据不触发）→ 闸门永不放开，QSO 一条都发不出去。因此只允许在「目标时隙起点 +
+ * [DECODE_WAIT_GRACE_MS]」之前等：一旦进目标时隙超过该宽限，就按现状发（就地发射仍能整条落在
+ * 本时隙内），保证永远不锁死。
+ *
+ * 网格本身的错位已在 [AudioEngine] 侧修根（对齐标签按目标边界取值，见 `armAlignment`）；
+ * 这里的宽限只是防御性兜底，正常情况下解码结果在时隙结束后几十~百余 ms 到手，闸门会立即放开。
  */
 internal fun txShouldWaitForDecode(
     targetSlotIndex: Long,
+    targetSlotStartMs: Long,
     lastDecodedSlotIndex: Long,
     nowMs: Long,
     lastDecodeAtMs: Long,
     slotMs: Long,
 ): Boolean =
-    lastDecodedSlotIndex < targetSlotIndex - 1 && nowMs - lastDecodeAtMs <= slotMs * 2
+    lastDecodedSlotIndex < targetSlotIndex - 1 &&
+        nowMs - lastDecodeAtMs <= slotMs * 2 &&
+        nowMs - targetSlotStartMs <= DECODE_WAIT_GRACE_MS
+
+/**
+ * 进入目标时隙后仍允许等上一时隙解码的宽限（ms）：超过就发。
+ *
+ * 取值需小于「就地发射」余量（报文 12640 ms，时隙 15000 ms，前导若干百 ms），否则宽限结束时
+ * 已无法整条落回本时隙，`planTx` 会跳到下下个周期，反而继续等。700 ms 在默认前导下安全。
+ */
+internal const val DECODE_WAIT_GRACE_MS = 700L
 
 /** 自动周期模式的前导余量：给播放流准备留出的额外时间（ms）。 */
 internal const val AUTO_PARITY_LEAD_MARGIN_MS = 500L
