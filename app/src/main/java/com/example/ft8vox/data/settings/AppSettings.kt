@@ -19,35 +19,6 @@ enum class SampleRatePref(val label: String, val hz: Int) {
     HZ_96000("96000", 96000),
 }
 
-/** 外观主题（docs/UI.md §2.6）。 */
-enum class ThemeMode(val label: String) {
-    DARK("暗"),
-    LIGHT("亮"),
-}
-
-/** 字体档位，作为 sp 的缩放系数（docs/UI.md §2.6）。 */
-enum class FontSize(val label: String, val scale: Float) {
-    SMALL("小", 0.9f),
-    MEDIUM("中", 1f),
-    LARGE("大", 1.15f),
-}
-
-/**
- * 瀑布高度档位（**按屏高百分比**）。
- *
- * 实际高度 = 屏高 × [fraction]，最小 150dp（很矮的屏幕上 15% 会被 150dp 下限抬起）。
- * 默认 [PCT24] = 24%，即原来「紧凑」档的外观（操作页 `WaterfallView` 的高度）。
- *
- * 枚举名刻意用 `PCT15/PCT24/PCT45`（**不用 SHORT/TALL 之类的语义名**）：档位按百分比就是
- * 本源，且旧版本在 DataStore 里留下的 `waterfall_height` 值（`COMPACT`/`NORMAL`/`TALL`/`SHORT`…）
- * 一律认不出 → 回落默认档，不会被旧名字意外「复活」成别的高度。
- */
-enum class WaterfallHeight(val label: String, val fraction: Float) {
-    PCT15("15%", 0.15f),
-    PCT24("24%", 0.24f),
-    PCT45("45%", 0.45f),
-}
-
 /**
  * 解码预设档位。
  *
@@ -80,6 +51,22 @@ const val OUTPUT_GAIN_MAX_DB = 0
 fun clampOutputGainDb(db: Int): Int = db.coerceIn(OUTPUT_GAIN_MIN_DB, OUTPUT_GAIN_MAX_DB)
 
 /**
+ * 瀑布强度映射默认值：噪声底 -90 dBFS、动态范围 50 dB（固定窗口 -90 ~ -40 dBFS）。
+ *
+ * 强度窗口不再按滚动峰值自适应，改为固定阈值（设置页 / 频谱页可调），见 `waterfallIdx`。
+ */
+const val WATERFALL_FLOOR_DB_DEFAULT = -90
+const val WATERFALL_RANGE_DB_DEFAULT = 50
+
+/** 瀑布噪声底可调范围（dBFS）与动态范围可调范围（dB）。 */
+val WATERFALL_FLOOR_DB_RANGE = -120..-20
+val WATERFALL_RANGE_DB_RANGE = 10..100
+
+/** 把瀑布噪声底 / 动态范围钳制到允许范围。 */
+fun clampWaterfallFloorDb(db: Int): Int = db.coerceIn(WATERFALL_FLOOR_DB_RANGE)
+fun clampWaterfallRangeDb(db: Int): Int = db.coerceIn(WATERFALL_RANGE_DB_RANGE)
+
+/**
  * 解码参数（对应 native 的可调项）。
  *
  * **构造函数的默认值就是「快」预设**（`DecodePreset.FAST`，由单测锁定，两处不许漂移），
@@ -99,7 +86,7 @@ data class DecodeSettings(
     val ldpcIterations: Int = 20,
     val maxCandidates: Int = 120,
     val maxDecoded: Int = 100,
-    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/UI.md §5.4.2。 */
+    /** 多趟减谱重解（SIC）趟数；1 = 单趟（关闭），2 = 默认。见 docs/Ft8Vox.md。 */
     val passes: Int = 2,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
@@ -189,7 +176,7 @@ data class AppSettings(
     /** 自动程序（工作模式 + 选台规则 + 重发机制 + 保护限制；对应文档 §五菜单）。 */
     val auto: AutoProgramSettings = AutoProgramSettings(),
 
-    // ---- 解码列表过滤（显示层，docs/UI.md §3.3） ----
+    // ---- 解码列表过滤（显示层，docs/Ft8Vox.md） ----
     /** 已选中的筛选项；空集表示「一个都没开」。 */
     val filterTags: Set<DecodeFilterTag> = setOf(DecodeFilterTag.ALL),
     /** 呼号/前缀过滤串（逗号分隔）。 */
@@ -197,21 +184,27 @@ data class AppSettings(
     /** 被忽略的呼号（右滑忽略 / 长按菜单忽略）。 */
     val ignoredCalls: Set<String> = emptySet(),
     /**
-     * 关注的呼号（长按菜单「关注 / 取消关注」手动加入，或「自动收录 CQ 台」自动加入）。
+     * 跟踪的呼号（⭐「跟踪 CQ 列表」的内容）。
      *
-     * - ⭐「关注呼号列表」显示这些台；
-     * - 照 FT8CN：`autoAddCqToFollow`（自动收录）关掉时，自动程序**仍会**呼叫名单里 CQ 台的 CQ（名单是例外）。
+     * 两个来源：
+     * - **手动**：解码列表长按某台 →「跟踪」；
+     * - **自动**（**有意偏离 FT8CN**）：`autoAddCqToFollow`（自动跟踪 CQ）开启时，本波段未通联的
+     *   CQ 台由 `FollowRoster` 自动写入（顺序记在 [autoFollowOrder]，超出上限淘汰最早收录的）。
+     *
+     * 通联完成后该呼号会被自动移除（FT8CN 不会）；`autoAddCqToFollow` 关掉时，自动程序**仍会**
+     * 呼叫名单里 CQ 台的 CQ（照 FT8CN：名单是「自动跟踪 CQ」的例外）。
      */
     val followCalls: Set<String> = emptySet(),
 
     /**
-     * [followCalls] 中**由「自动收录 CQ 台」自动加入**的那些呼号，**最近加入在前**；恒为 [followCalls] 子集。
+     * **自动收录**的呼号顺序（最近在前；恒为 [followCalls] 的子集）。
      *
-     * 只用于超出 `FollowRoster.AUTO_MAX` 时按「最早收录」淘汰。手动关注的呼号不在此列，永不被淘汰。
+     * 用于「超 `FollowRoster.AUTO_MAX` 时淘汰最早收录的」，以及在 ⭐ 列表里给自动加入的行打
+     * 「自动」标记。**手动跟踪**的呼号不在此列，故永不被淘汰。
      */
     val autoFollowOrder: List<String> = emptyList(),
 
-    // ---- 发射抽屉（docs/UI.md §2.3） ----
+    // ---- 发射抽屉（docs/Ft8Vox.md） ----
     /**
      * CQ 前缀（4×2 = 8 个可编辑格子）。
      *
@@ -222,7 +215,7 @@ data class AppSettings(
     /** 当前选中的 CQ 前缀在 [cqPrefixes] 中的下标（越界按 0 处理）。 */
     val cqPrefixIndex: Int = 0,
 
-    // ---- 地图页（docs/UI.md §2.4） ----
+    // ---- 地图页（docs/Ft8Vox.md） ----
     /** CQ 旗帜是否显示呼号。 */
     val mapCqFlagShowCall: Boolean = true,
     /** CQ 旗帜是否显示信号强度。 */
@@ -230,7 +223,7 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / PTT（docs/UI.md §2.6） ----
+    // ---- 电台 / PTT（docs/Ft8Vox.md） ----
     /** 发射前导音开关。 */
     val txLeadTone: Boolean = false,
     /** 前导音时长（ms，0–2000）。 */
@@ -244,16 +237,14 @@ data class AppSettings(
     val outputGainDb: Int = 0,
     /** PTT 延迟（ms，0–500）。 */
     val pttDelayMs: Int = 50,
-    /** 看门狗超时（ms，1000–60000）。 */
-    val watchdogMs: Int = 10000,
 
-    // ---- 音频（docs/UI.md §2.6） ----
+    // ---- 音频（docs/Ft8Vox.md） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
     val inputDevice: String = "",
     /** 输入增益（dB，−12…+30；生效依赖 U7）。 */
     val inputGainDb: Int = 0,
 
-    // ---- FT8（docs/UI.md §2.6） ----
+    // ---- FT8（docs/Ft8Vox.md） ----
     /**
      * 时隙偏移（ms，−2500…+2500）：**整个时隙一起偏移**（解码窗口起点 + 发射起点）。
      *
@@ -262,17 +253,23 @@ data class AppSettings(
      */
     val slotOffsetMs: Int = 0,
 
-    // ---- 高亮与提醒（docs/UI-MOBILE.md §29/§31：颜色与末端标记恒启用，不再提供开关） ----
+    // ---- 高亮与提醒（docs/Ft8Vox.md：颜色与末端标记恒启用，不再提供开关） ----
     /** 含我呼号时哔声提醒（依赖音频，U7）。 */
     val beepOnMyCall: Boolean = false,
 
-    // ---- 外观（docs/UI.md §2.6） ----
-    val themeMode: ThemeMode = ThemeMode.DARK,
-    val fontSize: FontSize = FontSize.MEDIUM,
-
     // ---- 界面/音频 ----
-    val waterfallHeight: WaterfallHeight = WaterfallHeight.PCT24,
     val sampleRate: SampleRatePref = SampleRatePref.AUTO,
+
+    // ---- 瀑布显示（固定阈值，可调） ----
+    /**
+     * 瀑布强度映射的噪声底（dBFS）：低于此值的 bin 画成最深蓝。
+     *
+     * 与 [waterfallRangeDb] 一起构成固定窗口 `[waterfallFloorDb, waterfallFloorDb + waterfallRangeDb]`，
+     * 线性映射到色带。默认 -90 dBFS ≈ 手机麦克风 / 声卡的典型噪声底。
+     */
+    val waterfallFloorDb: Int = WATERFALL_FLOOR_DB_DEFAULT,
+    /** 瀑布强度映射的动态范围（dB）：窗口顶端 = 底噪 + 本值，达到即画成红。默认 50 dB。 */
+    val waterfallRangeDb: Int = WATERFALL_RANGE_DB_DEFAULT,
 
     // ---- 解码参数 ----
     val decode: DecodeSettings = DecodeSettings(),

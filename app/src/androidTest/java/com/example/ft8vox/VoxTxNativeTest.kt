@@ -12,7 +12,7 @@ import kotlin.math.sin
 /**
  * U7b：VOX/PTT native 路径的设备端回归。
  *
- * 验证 `nativeSetVox` / `nativePlayTx`（前导静音 + 前导音 + 看门狗写入）
+ * 验证 `nativeSetVox` / `nativePlayTx`（前导静音 + 前导音）
  * 与 `nativePlayTone` 在真机/模拟器上都能正常打开输出流并写完。
  */
 @RunWith(AndroidJUnit4::class)
@@ -35,7 +35,6 @@ class VoxTxNativeTest {
                 VoxConfig(
                     pttDelayMs = 50,
                     leadToneMs = 100,
-                    watchdogMs = 10_000,
                 )
             )
 

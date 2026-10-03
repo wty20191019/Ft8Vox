@@ -164,7 +164,7 @@ class SessionService : Service() {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "接收服务", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "在后台继续 FT8 / FT4 接收与发射"
+                description = "在后台继续 FT8 接收与发射"
                 setShowBadge(false)
             },
         )

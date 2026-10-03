@@ -61,7 +61,7 @@ private object Keys {
     val protocolName = stringPreferencesKey("protocol_name")
     val selectedFreqHz = intPreferencesKey("selected_freq_hz")
     val sameFreqTx = booleanPreferencesKey("same_freq_tx")
-    // 自动程序（照 FT8CN 四项，见 docs/QSO.md §5.1）
+    // 自动程序（照 FT8CN 四项，见 docs/Ft8Vox.md）
     val autoSupervisionMinutes = intPreferencesKey("auto_supervision_minutes")
     val autoNoReplyLimit = intPreferencesKey("auto_no_reply_limit")
     val autoFollowCq = booleanPreferencesKey("auto_follow_cq")
@@ -108,15 +108,13 @@ private object Keys {
     val outputDevice = stringPreferencesKey("output_device")
     val outputGainDb = intPreferencesKey("output_gain_db")
     val pttDelayMs = intPreferencesKey("ptt_delay_ms")
-    val watchdogMs = intPreferencesKey("watchdog_ms")
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
-    // 解码高亮开关与「已通联呈现方式」不再持久化（docs/UI-MOBILE.md §29：颜色恒启用）
+    // 解码高亮开关与「已通联呈现方式」不再持久化（docs/Ft8Vox.md：颜色恒启用）
     val beepOnMyCall = booleanPreferencesKey("beep_on_my_call")
-    val themeMode = stringPreferencesKey("theme_mode")
-    val fontSize = stringPreferencesKey("font_size")
-    val waterfallHeight = stringPreferencesKey("waterfall_height")
+    val waterfallFloorDb = intPreferencesKey("waterfall_floor_db")
+    val waterfallRangeDb = intPreferencesKey("waterfall_range_db")
     val sampleRate = stringPreferencesKey("sample_rate")
     // 解码预设不再持久化：改由 `AppSettings.decodePreset` 从解码参数反推（旧 `decode_preset` 键不再读写）
     val decodeTimeOsr = intPreferencesKey("decode_time_osr")
@@ -164,16 +162,16 @@ private fun Preferences.toAppSettings(): AppSettings {
         ?.mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
         ?.toSet()
         ?: defaults.followCalls
-    // CQ 前缀格子：保留空格子（空串＝普通 CQ），最后按格子数夹一下选中的下标
-    val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
-    val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
-        .coerceIn(0, (cqPrefixes.size - 1).coerceAtLeast(0))
     // 「自动收录」顺序：去空、去重、只留仍在名单里的、并夹到上限（恒为 followCalls 子集）
     val autoFollowOrder = (splitLines(this[Keys.autoFollowOrder]) ?: defaults.autoFollowOrder)
         .mapNotNull { it.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
         .distinct()
         .filter { it in followCalls }
         .take(FollowRoster.AUTO_MAX)
+    // CQ 前缀格子：保留空格子（空串＝普通 CQ），最后按格子数夹一下选中的下标
+    val cqPrefixes = readPrefixSlots(this[Keys.cqPrefixes]) ?: defaults.cqPrefixes
+    val cqPrefixIndex = (this[Keys.cqPrefixIndex] ?: defaults.cqPrefixIndex)
+        .coerceIn(0, (cqPrefixes.size - 1).coerceAtLeast(0))
     return AppSettings(
         myCall = this[Keys.myCall] ?: defaults.myCall,
         myGrid = this[Keys.myGrid] ?: defaults.myGrid,
@@ -210,15 +208,13 @@ private fun Preferences.toAppSettings(): AppSettings {
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
         outputGainDb = clampOutputGainDb(this[Keys.outputGainDb] ?: defaults.outputGainDb),
         pttDelayMs = (this[Keys.pttDelayMs] ?: defaults.pttDelayMs).coerceIn(0, 500),
-        watchdogMs = (this[Keys.watchdogMs] ?: defaults.watchdogMs).coerceIn(1000, 60000),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
         slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
             .coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS),
         beepOnMyCall = this[Keys.beepOnMyCall] ?: defaults.beepOnMyCall,
-        themeMode = enumOr(Keys.themeMode, defaults.themeMode),
-        fontSize = enumOr(Keys.fontSize, defaults.fontSize),
-        waterfallHeight = enumOr(Keys.waterfallHeight, defaults.waterfallHeight),
+        waterfallFloorDb = clampWaterfallFloorDb(this[Keys.waterfallFloorDb] ?: defaults.waterfallFloorDb),
+        waterfallRangeDb = clampWaterfallRangeDb(this[Keys.waterfallRangeDb] ?: defaults.waterfallRangeDb),
         sampleRate = enumOr(Keys.sampleRate, defaults.sampleRate),
         decode = DecodeSettings(
             timeOsr = this[Keys.decodeTimeOsr] ?: defaults.decode.timeOsr,
@@ -262,14 +258,12 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.outputDevice] = outputDevice
     prefs[Keys.outputGainDb] = outputGainDb
     prefs[Keys.pttDelayMs] = pttDelayMs
-    prefs[Keys.watchdogMs] = watchdogMs
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
     prefs[Keys.slotOffsetMs] = slotOffsetMs
     prefs[Keys.beepOnMyCall] = beepOnMyCall
-    prefs[Keys.themeMode] = themeMode.name
-    prefs[Keys.fontSize] = fontSize.name
-    prefs[Keys.waterfallHeight] = waterfallHeight.name
+    prefs[Keys.waterfallFloorDb] = waterfallFloorDb
+    prefs[Keys.waterfallRangeDb] = waterfallRangeDb
     prefs[Keys.sampleRate] = sampleRate.name
     prefs[Keys.decodeTimeOsr] = decode.timeOsr
     prefs[Keys.decodeFreqOsr] = decode.freqOsr

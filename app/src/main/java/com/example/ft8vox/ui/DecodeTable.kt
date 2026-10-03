@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,10 +79,10 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 /**
- * 解码表格（docs/UI-JTDX.md §4）：JTDX 风格的**紧凑表格**，
+ * 解码表格（docs/Ft8Vox.md）：JTDX 风格的**紧凑表格**，
  * 列头 `时隙 / UTC / 分贝 / 时差 / 频率 / 信息`。
  *
- * 行手势（docs/UI-JTDX.md §6）：
+ * 行手势（docs/Ft8Vox.md）：
  * 单击 = 设为目标并对频；双击 = 跳地图；长按 = 菜单；左滑 = 呼叫；右滑 = 删除。
  */
 
@@ -96,7 +97,7 @@ data class DecodeRow(
 private const val HL_ALPHA = 0.42f
 
 /**
- * 高亮类别 → **整行底色**（JTDX/WSJT-X 默认，docs/UI-MOBILE.md §6）。
+ * 高亮类别 → **整行底色**（JTDX/WSJT-X 默认，docs/Ft8Vox.md）。
  *
  * 已通联 / 重复 / 普通不上底色（返回 null），用文字弱化表达。
  */
@@ -113,7 +114,7 @@ fun highlightRowColor(role: HighlightRole): Color? = when (role) {
 }
 
 /**
- * 「报文」列的文字颜色（docs/UI-MOBILE.md §29）。
+ * 「报文」列的文字颜色（docs/Ft8Vox.md）。
  *
  * - **与我有关**（发给我的报文，含网格应答 / 报告 / R报告 / 73 / RR73）→ **整列文字标红**，
  *   一眼看出哪几条是冲我来的（整行底色仍按「色卡」规则走，不受影响）。
@@ -152,7 +153,7 @@ private val COL_SNR = 36.dp
 private val COL_DT = 38.dp
 
 /**
- * 「报文」列文本（docs/UI-MOBILE.md §14）。
+ * 「报文」列文本（docs/Ft8Vox.md）。
  *
  * 两行制里报文固定占**第一行**：一行放不下「呼号+网格+报告」时**逐级缩小字号**
  * （12sp → 9sp）塞进去，而不是省略号截断（长报文少见，缩一点比看不清好）。
@@ -190,7 +191,7 @@ private fun InfoText(
  */
 @Composable
 fun DecodeTable(
-    rows: List<DecodeRow>,
+    rows: List<ActivityRow>,
     myCall: String,
     listState: LazyListState,
     rowHeightMin: Int = 20,
@@ -210,22 +211,85 @@ fun DecodeTable(
 ) {
     LazyColumn(modifier = modifier.fillMaxSize()) {
         items(rows) { row ->
-            DecodeTableRow(
-                row = row,
-                myCall = myCall,
-                slotMs = slotMs,
-                minHeightDp = rowHeightMin,
-                myGrid = myGrid,
-                followed = row.parsed.from?.let(followed) ?: false,
-                onClick = { onRowClick(row) },
-                onDoubleClick = { onRowDoubleClick(row) },
-                onCall = { onCall(row) },
-                onReply = { onReply(row) },
-                onDetail = { onDetail(row) },
-                onOpenLog = { onOpenLog(row) },
-                onSwipeDelete = { onSwipeDelete(row) },
-                onCopy = { onCopy(row) },
-                onToggleFollow = { onToggleFollow(row) },
+            when (row) {
+                is ActivityRow.Rx -> DecodeTableRow(
+                    row = row.row,
+                    myCall = myCall,
+                    slotMs = slotMs,
+                    minHeightDp = rowHeightMin,
+                    myGrid = myGrid,
+                    followed = row.row.parsed.from?.let(followed) ?: false,
+                    onClick = { onRowClick(row.row) },
+                    onDoubleClick = { onRowDoubleClick(row.row) },
+                    onCall = { onCall(row.row) },
+                    onReply = { onReply(row.row) },
+                    onDetail = { onDetail(row.row) },
+                    onOpenLog = { onOpenLog(row.row) },
+                    onSwipeDelete = { onSwipeDelete(row.row) },
+                    onCopy = { onCopy(row.row) },
+                    onToggleFollow = { onToggleFollow(row.row) },
+                )
+
+                // 我方发射行（TX 行，§37）：只占一行、纯展示（无点击 / 无滑动手势）。
+                is ActivityRow.Tx -> TxTableRow(
+                    rec = row.rec,
+                    slotMs = slotMs,
+                    minHeightDp = rowHeightMin,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 我方发射行（TX 行，docs/Ft8Vox.md）：`时隙 | TX | 报文`，**只占一行**。
+ *
+ * - 行底色＝ [HighlightRole.TX] 那一档（黄底，与「自己发的报文 / 正在发射的那条」一致）。
+ * - 「TX」顶替解码行的 **UTC / SNR / dT** 三段（合并居中）——发射没有信噪比与时差。
+ * - 被「停止发射」/ 换目标作废的那次在行尾标**「未发完」**。
+ * - **纯展示**：不加 `combinedClickable` / `pointerInput`，避免左滑误呼叫自己、右滑误删自己。
+ */
+@Composable
+private fun TxTableRow(rec: TxRecord, slotMs: Int, minHeightDp: Int) {
+    val slotLabel = slotParityOf(rec.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeightDp.dp)
+            .background(HlTx.copy(alpha = HL_ALPHA))
+            .padding(start = 8.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            slotLabel,
+            style = mono(MaterialTheme.typography.labelSmall),
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(COL_SLOT),
+        )
+        Text(
+            "TX",
+            style = mono(MaterialTheme.typography.labelSmall),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.width(COL_UTC + COL_SNR + COL_DT),
+        )
+        Text(
+            rec.text,
+            style = mono(MaterialTheme.typography.labelMedium),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 6.dp),
+        )
+        if (rec.outcome == TxOutcome.ABORTED) {
+            Text(
+                "未发完",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
     }
@@ -265,7 +329,7 @@ private fun DecodeTableRow(
     val msgBase = textColor.copy(alpha = alpha)
     val msgColor = decodeMessageColor(style, msgBase)
     val msgCallColor = if (style.toMe) msgColor else VoxError
-    // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/UI-MOBILE.md §14）
+    // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/Ft8Vox.md）
     val metaLine = remember(row, myGrid) {
         val entity = from?.let { Dxcc.resolve(it)?.name }
         val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
@@ -282,6 +346,13 @@ private fun DecodeTableRow(
     val offsetX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
+
+    // 手势回调走 rememberUpdatedState 取**最新**：LazyColumn 按索引复用节点时，
+    // `pointerInput(Unit)` 的协程不会重启，直接捕获的 `onCall` / `onSwipeDelete` 会停留在
+    // 首次组合的那条 row 上 —— 真机现象：左滑最新那条，结果呼叫（或删除）了上一秒
+    // 占同一位置的旧条目（解码列表每 15 s 前插一条，index 0 一直在换人）。
+    val latestOnCall by rememberUpdatedState(onCall)
+    val latestOnSwipeDelete by rememberUpdatedState(onSwipeDelete)
 
     Box(Modifier.fillMaxWidth()) {
         // 滑动背景提示（左移露出右侧「呼叫」，右移露出左侧「删除」）
@@ -321,11 +392,11 @@ private fun DecodeTableRow(
                             scope.launch {
                                 when {
                                     offsetX.value <= -threshold -> {
-                                        onCall()
+                                        latestOnCall()
                                         offsetX.animateTo(0f)
                                     }
                                     offsetX.value >= threshold -> {
-                                        onSwipeDelete()
+                                        latestOnSwipeDelete()
                                         offsetX.animateTo(0f)
                                     }
                                     else -> offsetX.animateTo(0f)
@@ -351,7 +422,7 @@ private fun DecodeTableRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 两行：第一行＝时隙 / UTC / 信号 / dT / 报文；第二行＝声音频率 / 国家 / 距离
-            // （第二行从行首开始，单项之间只留一个空格；表头已去掉，见 docs/UI-MOBILE.md §14）
+            // （第二行从行首开始，单项之间只留一个空格；表头已去掉，见 docs/Ft8Vox.md）
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // 时隙（0/1）
@@ -456,7 +527,7 @@ private fun DecodeTableRow(
                 },
             )
             DropdownMenuItem(
-                text = { Text(if (followed) "取消关注 $callText" else "关注 $callText") },
+                text = { Text(if (followed) "取消跟踪 $callText" else "跟踪 $callText") },
                 enabled = from != null,
                 onClick = {
                     menuOpen = false
@@ -492,7 +563,7 @@ private fun Marker(color: Color) {
 }
 
 /**
- * 高亮报文中的「我的呼号」为 [myCallColor]（默认红，docs/UI-MOBILE.md §29）。
+ * 高亮报文中的「我的呼号」为 [myCallColor]（默认红，docs/Ft8Vox.md）。
  *
  * 「与我有关」的行整列都是红的，此时把呼号也用同一色（只保留加粗）—— 免得一条红报文里
  * 嵌着另一种红。

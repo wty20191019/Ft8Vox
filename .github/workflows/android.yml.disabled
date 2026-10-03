@@ -1,6 +1,6 @@
 # 【已停用】2026-09-25 起 CI 暂不启用，只做本地构建与测试。
 # GitHub Actions 只读取 .github/workflows/*.yml|*.yaml，因此本文件不会被执行。
-# 要重新启用：把本文件改回 android.yml（见 docs/How2use.md 第 19 节）。
+# 要重新启用：把本文件改回 android.yml（构建与测试命令见 README 的「构建与运行」）。
 name: Android CI
 
 on:

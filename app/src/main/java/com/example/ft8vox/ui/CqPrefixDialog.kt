@@ -29,7 +29,7 @@ import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
 import com.example.ft8vox.ui.theme.JtdxGreen
 
 /**
- * 「CQ 前缀」编辑弹窗（发射区第 1 行 `CQ … ▾` 的入口，docs/UI-MOBILE.md §28）。
+ * 「CQ 前缀」编辑弹窗（发射区第 1 行 `CQ … ▾` 的入口，docs/Ft8Vox.md）。
  *
  * 数据模型照旧（`AppSettings.cqPrefixes` + `cqPrefixIndex`）：[CQ_PREFIX_SLOTS] 个格子，前缀插在
  * `CQ` 与我方呼号之间（如 `CQ DX K1ABC FN42`），**空白格子＝普通 CQ**；点一行即选中该格，

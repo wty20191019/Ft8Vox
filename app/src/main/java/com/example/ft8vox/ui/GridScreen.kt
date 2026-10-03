@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.grid.GrayLine
 import com.example.ft8vox.grid.MapProjection
 import com.example.ft8vox.qso.CallMarker
 import com.example.ft8vox.qso.CqFlag
@@ -76,9 +77,10 @@ private const val LINK_PHASE_FRAME_MS = 80L
 private const val LINK_PHASE_PERIOD_MS = 2200L
 
 /**
- * 地图页（docs/UI.md §2.4）：全屏深色底图 + 蓝/黄/红标记 + 呼号标记 + CQ 红旗 + 信号连线。
+ * 地图页（docs/Ft8Vox.md）：全屏深色底图 + 昼夜灰线 + 蓝/黄/红网格标记 + 呼号点 + CQ 旗 + 信号连线。
  *
- * - 蓝色 = 本会话解码（重启清空）；黄色 = 日志已通联；红色 = 日志已确认。
+ * - 网格方块：蓝色 = 本会话解码（重启清空）；黄色 = 日志已通联；红色 = 日志已确认。
+ * - CQ 旗面（§34）：红 = 还没通过、蓝 = 只在别的波段通过、灰 = 本波段通过（照 FT8CN）。
  * - 呼号无网格时用前缀归属地近似坐标（[com.example.ft8vox.qso.CallLocation]）。
  * - 右下浮控缩放 / 回我的位置；底部浮层图例、统计与显示开关。
  */
@@ -109,6 +111,17 @@ fun GridScreen(
     }
     val workedCalls = remember(entries) { entries.map { it.theirCall.trim().uppercase() }.toSet() }
     val confirmedCalls = remember(confirmedEntries) { confirmedEntries.map { it.theirCall.trim().uppercase() }.toSet() }
+    /** 当前波段已通联的呼号：CQ 旗面「本波段已通过」用它（§34）。 */
+    val bandWorkedCalls = remember(entries, status.band) {
+        val b = status.band.trim().uppercase()
+        if (b.isEmpty()) {
+            emptySet<String>()
+        } else {
+            entries.filter { it.band.trim().uppercase() == b }
+                .map { it.theirCall.trim().uppercase() }
+                .toSet()
+        }
+    }
     val gridCache = remember(entries) {
         val m = HashMap<String, String>()
         for (e in entries) {
@@ -117,7 +130,7 @@ fun GridScreen(
         m
     }
 
-    // ---- 地图层：分「历史」与「现在」两层（docs/UI-MOBILE.md §33） ----
+    // ---- 地图层：分「历史」与「现在」两层（docs/Ft8Vox.md） ----
     // 历史层（整会话累计，消息上限 200 条）：网格方块 + 呼号点 —— 「这一场听到过谁、在哪个格」。
     // 现在层（只取**最近一个时隙**）：CQ 旗 + 信号连线 —— 「此刻空中正在发生什么」。
     val decodedSquares = remember(messages) { MapModel.decodedSquares(messages) }
@@ -134,12 +147,14 @@ fun GridScreen(
             gridCache = gridCache,
         )
     }
-    val cqFlags = remember(messages, status.myCall, gridCache) {
+    val cqFlags = remember(messages, status.myCall, gridCache, workedCalls, bandWorkedCalls) {
         MapModel.cqFlags(
             messages = messages,
             myCall = status.myCall,
             gridCache = gridCache,
             latestSlotOnly = true,
+            workedCalls = workedCalls,
+            bandWorkedCalls = bandWorkedCalls,
         )
     }
     val links = remember(messages, status.myCall, status.myGrid, gridCache) {
@@ -172,6 +187,17 @@ fun GridScreen(
             delay(LINK_PHASE_FRAME_MS)
         }
     }
+
+    // ---- 昼夜灰线（照 FT8CN，docs/Ft8Vox.md） ----
+    // 太阳直射点每分钟只走 0.25°，每 5 分钟按 UTC 重算一次即可；灰线本身是 181 个点的折线。
+    var grayLineMs by remember { mutableStateOf(QsoTime.nowUtcMs()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(GrayLine.REFRESH_MS)
+            grayLineMs = QsoTime.nowUtcMs()
+        }
+    }
+    val grayLine = remember(grayLineMs) { GrayLine.terminator(grayLineMs) }
 
     // ---- 交互状态 ----
     var projection by remember { mutableStateOf<MapProjection?>(null) }
@@ -284,6 +310,7 @@ fun GridScreen(
                         showLinkText = settings.mapShowLinkText,
                         selectedCall = selectedCall,
                         linkPhase = { linkPhaseState.floatValue },
+                        grayLine = grayLine,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -416,7 +443,7 @@ private fun MapOverlay(
                 )
             }
 
-            // 图例 + 计数并成一行（docs/UI-MOBILE.md §18）
+            // 图例 + 计数并成一行（docs/Ft8Vox.md）
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -426,7 +453,7 @@ private fun MapOverlay(
                 LegendDot(LegendWorked, "通联")
                 LegendDot(LegendConfirmed, "确认")
                 Text(
-                    "旗=CQ",
+                    "旗=CQ（红 未通联 / 蓝 他波段 / 灰 本波段）",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -443,7 +470,7 @@ private fun MapOverlay(
                 )
             }
 
-            // 显示开关已收进设置页「地图」组（少层级，docs/UI-MOBILE.md §16）
+            // 显示开关已收进设置页「地图」组（少层级，docs/Ft8Vox.md）
             if (selectedCall == null) {
                 Text(
                     "点标记查看台站；单指拖动平移、双指捏合缩放",

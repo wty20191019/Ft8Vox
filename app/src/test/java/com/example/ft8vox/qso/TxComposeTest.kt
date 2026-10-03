@@ -63,6 +63,76 @@ class TxComposeTest {
         assertNull(TxCompose.compose(TxMessageKind.RR73, null, "K1ABC", "FN42"))
     }
 
+    // ---- 六格报文槽（发射区，docs/Ft8Vox.md「格内文字就是真发的报文」） ----
+
+    @Test
+    fun slotsUseMyOwnReportForBothReportAndRoger() {
+        // 序号 2「报告」与序号 3「R报告」必须是**同一个值**（我方实测强度，照 FT8CN `toCallsign.snr`）。
+        // 真机 bug：R 报告误用「对方给我的报告」→ 槽内文字与真正发出的报文不一致，
+        // 发射区的红/绿点（按**文本相等**匹配）就不亮（现象：在发 R-07，3 R报告那格不点灯）。
+        val slots = TxCompose.slots("ja1abc", "K1ABC", "FN42", reportSent = -7)
+        assertEquals(TxMessageKind.REPORT, slots[1].first)
+        assertEquals("JA1ABC K1ABC -07", slots[1].second)
+        assertEquals(TxMessageKind.ROGER, slots[2].first)
+        assertEquals("JA1ABC K1ABC R-07", slots[2].second)
+    }
+
+    @Test
+    fun slotsMatchEngineSpokenText() {
+        // 契约：每一格都要与 QsoEngine 对应序号的 `txText` **逐字相等**，否则 `slotLed`
+        // 的红/绿点匹配不上。六个序号逐一对照（下标 0..5 即序号 1..6）。
+        val slots = TxCompose.slots("JA1ABC", "K1ABC", "FN42", reportSent = -7)
+        val engine = QsoEngine()
+        engine.configure("K1ABC", "FN42")
+
+        // 序号 1：应答对方 CQ → 发网格
+        val p1 = engine.startResponderQso("JA1ABC", "PM95", utcMs = 1_000, snr = -7)
+        assertEquals(1, p1.order)
+        assertEquals(slots[0].second, p1.txText)
+
+        // 序号 2：对方回我网格 → 发实测报告（FT8 定向报文是「<收方> <发方> <载荷>」）
+        val p2 = engine.onDecoded(listOf(decode("K1ABC JA1ABC PM95", -10, slot = 15_000)), 16_000)
+        assertEquals(2, p2.order)
+        assertEquals(slots[1].second, p2.txText)
+
+        // 序号 3：对方给我报告 → 发 R 报告（本次真机截图那一格）
+        val p3 = engine.respondToReport("JA1ABC", theirReport = -12, snr = -7, utcMs = 31_000)
+        assertEquals(3, p3.order)
+        assertEquals(slots[2].second, p3.txText)
+
+        // 序号 4：对方 R 报告 → 发 RR73
+        val p4 = engine.respondToRoger("JA1ABC", theirReport = -12, snr = -7, utcMs = 46_000)
+        assertEquals(4, p4.order)
+        assertEquals(slots[3].second, p4.txText)
+
+        // 序号 5：对方 RR73 → 回 73
+        val p5 = engine.respondToRr73("JA1ABC", snr = -7, utcMs = 61_000)
+        assertEquals(5, p5.order)
+        assertEquals(slots[4].second, p5.txText)
+
+        // 序号 6：主叫 CQ（不受目标影响）
+        val p6 = engine.startCq(utcMs = 76_000)
+        assertEquals(6, p6.order)
+        assertEquals(slots[5].second, p6.txText)
+    }
+
+    @Test
+    fun targetPrefersEngineWhileBusy() {
+        // 引擎在通联 / 有待发报文（engineBusy=true）→ 以引擎对手为准，忽略用户先前点选的旧呼号
+        assertEquals("JA1ABC", TxCompose.targetFor(engineCall = "JA1ABC", engineBusy = true, picked = "N0CALL"))
+        // 引擎忙但没有对手 → 退回点选目标
+        assertEquals("N0CALL", TxCompose.targetFor(engineCall = null, engineBusy = true, picked = "N0CALL"))
+    }
+
+    @Test
+    fun targetFallsBackToPickedWhenEngineIdle() {
+        // 引擎空闲（DONE 残留的对手不算数）→ 用点选目标，方便预先备好报文
+        assertEquals("N0CALL", TxCompose.targetFor(engineCall = "JA1ABC", engineBusy = false, picked = "N0CALL"))
+        // 没有点选目标 → 回落到引擎残留对手；再没有则 null
+        assertEquals("JA1ABC", TxCompose.targetFor(engineCall = "JA1ABC", engineBusy = false, picked = null))
+        assertNull(TxCompose.targetFor(engineCall = null, engineBusy = false, picked = "  "))
+    }
+
     // ---- 类型识别 ----
 
     @Test
@@ -146,8 +216,6 @@ class TxComposeTest {
     fun minSendNowNeedsWholeMessagePlusPreamble() {
         // FT8：12.64 s 报文 + 50 ms 前导
         assertEquals(12_690L, TxScheduler.minSendNowMs(12_640, 50))
-        // FT4：5.04 s 报文 + 200 ms 前导
-        assertEquals(5_240L, TxScheduler.minSendNowMs(5_040, 200))
         // 报文时长未知 → 兜底 2.5 s；前导为负按 0 处理
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0))
         assertEquals(TxScheduler.MIN_SEND_NOW_MS, TxScheduler.minSendNowMs(0, -100))
@@ -241,23 +309,6 @@ class TxComposeTest {
         assertFalse(
             TxScheduler.canRetargetInSlot(
                 nowMs = 0, slotMs = 15_000, txParity = 0, preambleMs = 0, messageMs = 0,
-            ),
-        )
-    }
-
-    @Test
-    fun retargetFt4MessageFitsLater() {
-        // FT4：时隙 7.5 s、报文 5.04 s、前导 300 ms → 0.3 + 0.5 + 5.04 + 0.3 = 6.14 s（pos ≤ 1.36 s）
-        assertTrue(
-            TxScheduler.canRetargetInSlot(
-                nowMs = 1_000, slotMs = 7_500, txParity = 0,
-                preambleMs = 300, messageMs = 5_040,
-            ),
-        )
-        assertFalse(
-            TxScheduler.canRetargetInSlot(
-                nowMs = 2_000, slotMs = 7_500, txParity = 0,
-                preambleMs = 300, messageMs = 5_040,
             ),
         )
     }

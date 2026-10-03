@@ -1,44 +1,14 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(ft8vox)
+project(ft8vox LANGUAGES C CXX)
 
-# FT8 核心：编码 / 解码 / LDPC / CRC / 消息
-file(GLOB FT8_SOURCES
-    ${CMAKE_SOURCE_DIR}/ft8_lib/ft8/*.c
-)
-
-# 通用 DSP：monitor（STFT / 瀑布）、wave（WAV 读写，调试用）
-# 注意：不要包含 common/audio.c，它依赖 PortAudio，Android 无法编译
-set(COMMON_SOURCES
-    ${CMAKE_SOURCE_DIR}/ft8_lib/common/monitor.c
-    ${CMAKE_SOURCE_DIR}/ft8_lib/common/wave.c
-)
-
-# kissfft
-file(GLOB FFT_SOURCES
-    ${CMAKE_SOURCE_DIR}/ft8_lib/fft/*.c
-)
-
-add_library(ft8 SHARED
-    jni_bridge.c
-    audio_engine.c
-    ftx_session.c
-    ${FT8_SOURCES}
-    ${COMMON_SOURCES}
-    ${FFT_SOURCES}
-)
-
-target_include_directories(ft8 PRIVATE
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/ft8_lib
-    ${CMAKE_SOURCE_DIR}/ft8_lib/ft8
-)
-
-find_library(AAUDIO_LIB aaudio)
-
-target_link_libraries(ft8
-    android
-    log
-    dl
-    m
-    ${AAUDIO_LIB}
-)
+# -----------------------------------------------------------------------------
+# FT8 编解码核心：来自 ft8_w/native（编解码 / LDPC / OSD / 多遍信号消除）
+#
+# `ft8w/CMakeLists.txt` 在 Android 下生成：
+#   - ft8core：纯 C 静态库
+#   - ft8：JNI 共享库 => libft8.so（Kotlin 侧 com.ft8.nativecore.Ft8Native）
+#
+# 音频采集/播放/VOX 已改由 Kotlin 实现（engine/AudioEngine.kt），
+# 本 CMake 不再包含旧的 audio_engine.c / ftx_session.c / ft8_lib。
+# -----------------------------------------------------------------------------
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ft8w ft8w)

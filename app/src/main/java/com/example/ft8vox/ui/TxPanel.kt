@@ -43,7 +43,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 底部发射区（docs/UI-MOBILE.md §3.4）：竖屏**常驻**，不再折叠。
+ * 底部发射区（docs/Ft8Vox.md）：竖屏**常驻**，不再折叠。
  *
  * - 第 1 行：`自定义报文 · CQ 前缀 · 发送`（§28 去掉了「生成信息」键）
  * - 第 2 行：`停止发射 · 自动程序 · 正在发送`
@@ -71,21 +71,20 @@ fun TxPanel(
 ) {
     val myCall = status.myCall
     val myGrid = status.myGrid
-    val target = targetCall?.takeIf { it.isNotBlank() } ?: status.qso.theirCall
+    // 目标呼号：引擎在通联时以引擎的真正对手为准，空闲时用用户点选的目标（见 `TxCompose.targetFor`）。
+    val target = TxCompose.targetFor(
+        engineCall = status.qso.theirCall,
+        engineBusy = status.qso.active || status.qso.txText != null,
+        picked = targetCall,
+    )
     val reportSent = status.qso.reportSent ?: TxCompose.reportFor(messages, target)
-    val reportReceived = status.qso.reportReceived ?: reportSent
     val cqPrefix = settings.cqPrefix
 
-    // 六个槽的报文：每帧现算，永远与六步序列一致（docs/UI-MOBILE.md §3.4）
-    val slots = remember(target, myCall, myGrid, reportSent, reportReceived, cqPrefix) {
-        listOf(
-            TxMessageKind.GRID to TxCompose.compose(TxMessageKind.GRID, target, myCall, myGrid),
-            TxMessageKind.REPORT to TxCompose.compose(TxMessageKind.REPORT, target, myCall, myGrid, reportSent),
-            TxMessageKind.ROGER to TxCompose.compose(TxMessageKind.ROGER, target, myCall, myGrid, reportReceived),
-            TxMessageKind.RR73 to TxCompose.compose(TxMessageKind.RR73, target, myCall, myGrid),
-            TxMessageKind.SEVENTY_THREE to TxCompose.compose(TxMessageKind.SEVENTY_THREE, target, myCall, myGrid),
-            TxMessageKind.CQ to TxCompose.compose(TxMessageKind.CQ, null, myCall, myGrid, cqPrefix = cqPrefix),
-        )
+    // 六个槽的报文：每帧现算，永远与六步序列**逐字一致**（docs/Ft8Vox.md：
+    // 「格内文字就是真发的报文」）；组装规则统一在 `TxCompose.slots`，
+    // 由单测锁死「槽内文字 == 引擎渲染的 txText」（红/绿点靠文本相等匹配）。
+    val slots = remember(target, myCall, myGrid, reportSent, cqPrefix) {
+        TxCompose.slots(target, myCall, myGrid, reportSent, cqPrefix)
     }
 
     var custom by remember { mutableStateOf("") }
@@ -93,7 +92,22 @@ fun TxPanel(
     var lastSent by remember { mutableStateOf<String?>(null) }
     var prefixDialog by remember { mutableStateOf(false) }
     val tone = status.displayTxText
-    val pending = status.pendingTxText
+
+    // 槽指示灯按**报文序号**判定，与运算层解耦（见 `slotLed` 的说明）：
+    // 待发序号直接取引擎的 `QsoProgress.order`（1..6）；待发若是**自定义报文**，
+    // 它不属于六步序列，六格都不点灯。引擎 order=0（空闲）同样不点灯。
+    val queuedOrder = if (status.manualTxText.isNullOrBlank()) {
+        status.qso.order.takeIf { it in 1..TxMessageKind.CQ.order }
+    } else {
+        null
+    }
+    // 在播序号从「本时隙实际播放的文本」反推：引擎的 order 表示**下一条**要发的，
+    // 不能拿它判**这一条**（收尾报文已排定时两者不同）。
+    val onAirOrder = if (status.txing) {
+        TxCompose.kindOf(status.lastTxText, myCall)?.order?.takeIf { it in 1..TxMessageKind.CQ.order }
+    } else {
+        null
+    }
     // 排程成功 → 清空自定义框（§28）；被拒 / 编不出来则保留，便于就地改（底部有红字说明原因）
     LaunchedEffect(status.manualTxText) {
         val sent = lastSent
@@ -189,7 +203,7 @@ fun TxPanel(
                         index = index + 1,
                         kind = kind,
                         text = text,
-                        led = slotLed(text, status.lastTxText, pending, status.txing),
+                        led = slotLed(kind.order, queuedOrder, onAirOrder),
                         maxLines = if (portrait) 2 else 3,
                         onClick = {
                             if (kind == TxMessageKind.CQ) onStartCq() else text?.let(onSendOnce)
@@ -236,23 +250,25 @@ internal enum class SlotLed { OFF, QUEUED, ON_AIR }
 /**
  * 判定某一格报文槽的指示灯（实机反馈：**发送中的那格红点、待发的那格绿点**）。
  *
- * @param text 本格报文（`null`＝该步现在没有报文，不点灯）
- * @param onAirText 本时隙**真正在播**的报文（`status.lastTxText`，只在 [txing] 时有意义）
- * @param pendingText 下一次要发的报文（`status.pendingTxText`）
- * @param txing 是否正在发射
+ * **按「报文序号」判定，不看文本**：底层 [com.example.ft8vox.qso.QsoEngine] 已经给出
+ * 我方下一条要发的序号（`QsoProgress.order`），UI 不该再用「自己拼的报文 == 引擎的报文」
+ * 这种字符串比较来猜（那是 UI 与运算层耦合；一旦两边拼法有任何出入，灯就整格不亮）。
+ *
+ * @param kindOrder 本格对应的报文序号（1 网格 / 2 报告 / 3 R报告 / 4 RR73 / 5 73 / 6 CQ）
+ * @param queuedOrder 我方下一条要发的报文序号；`null`＝没有待发，或待发的是**自定义报文**
+ *   （不在六步序列里，六格都不点灯）
+ * @param onAirOrder 本时隙**真正在播**的报文序号；`null`＝没在发射 / 在播的是自定义报文
  *
  * 「正在发送」优先级高于「待发」：收尾报文（RR73/73）已排定但上一条还在播时，
  * 会同时出现「红点在播的那格 + 绿点下一格」，这正是真机想要的读法。
  */
 internal fun slotLed(
-    text: String?,
-    onAirText: String?,
-    pendingText: String?,
-    txing: Boolean,
-): SlotLed = when {
-    text == null -> SlotLed.OFF
-    txing && text == onAirText -> SlotLed.ON_AIR
-    text == pendingText -> SlotLed.QUEUED
+    kindOrder: Int,
+    queuedOrder: Int?,
+    onAirOrder: Int?,
+): SlotLed = when (kindOrder) {
+    onAirOrder -> SlotLed.ON_AIR
+    queuedOrder -> SlotLed.QUEUED
     else -> SlotLed.OFF
 }
 

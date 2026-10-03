@@ -1,9 +1,9 @@
 package com.example.ft8vox.ui
 
-import com.example.ft8vox.engine.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.roundToInt
 
 /**
  * 瀑布「发射频带」像素区间（[txBandPx]）的 JVM 单测。
@@ -24,15 +24,6 @@ class WaterfallBandTest {
         assertEquals(800f, a, 0.001f) // 1000 − 200
         assertEquals(850f, b, 0.001f) // + 50 Hz（FT8 占用带宽）
         assertEquals(50f, b - a, 0.001f)
-    }
-
-    @Test
-    fun ft4BandIsWiderThanFt8() {
-        val ft8 = band(1000, Protocol.FT8.occupiedHz)
-        val ft4 = band(1000, Protocol.FT4.occupiedHz)
-        assertEquals(50f, ft8.second - ft8.first, 0.001f)
-        assertEquals(83f, ft4.second - ft4.first, 0.001f)
-        assertTrue("FT4 占用带宽应比 FT8 宽", ft4.second > ft8.second)
     }
 
     @Test
@@ -79,5 +70,30 @@ class WaterfallBandTest {
         assertEquals(500f, gridStepHz(2800f), 0.001f) // 2800/500 = 5.6 条
         assertEquals(1000f, gridStepHz(6000f), 0.001f) // 6000/500 = 12 太密，退到 1000
         assertEquals(100f, gridStepHz(600f), 0.001f) // 窄轴用细网格
+    }
+
+    // 引擎把幅度写成 `u = round((dBFS + 120) * 2)`（0.5 dB/单位）
+    private fun magForDb(db: Float): Int = ((db + 120f) * 2f).roundToInt().coerceIn(0, 255)
+
+    @Test
+    fun waterfallIdxMapsFixedWindow() {
+        // 默认窗口 -90 ~ -40 dBFS
+        assertEquals(0, waterfallIdx(magForDb(-90f), -90, 50))
+        assertEquals(255, waterfallIdx(magForDb(-40f), -90, 50))
+        // 低于底噪 / 高于顶端都夹到两端
+        assertEquals(0, waterfallIdx(magForDb(-110f), -90, 50))
+        assertEquals(255, waterfallIdx(magForDb(-20f), -90, 50))
+        // 窗口中点 -65 dBFS ≈ 128
+        val mid = waterfallIdx(magForDb(-65f), -90, 50)
+        assertTrue("mid=$mid", mid in 120..135)
+    }
+
+    @Test
+    fun waterfallIdxRespectsAdjustedWindow() {
+        // 底噪抬到 -70、跨度 30（-70 ~ -40）：-70→0，-40→255
+        assertEquals(0, waterfallIdx(magForDb(-70f), -70, 30))
+        assertEquals(255, waterfallIdx(magForDb(-40f), -70, 30))
+        // 跨度为 0 时按 1 处理，不产生除零
+        assertEquals(0, waterfallIdx(magForDb(-70f), -70, 0))
     }
 }

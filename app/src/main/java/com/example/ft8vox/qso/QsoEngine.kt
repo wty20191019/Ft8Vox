@@ -2,23 +2,36 @@ package com.example.ft8vox.qso
 
 import com.example.ft8vox.engine.DecodeResult
 
-/** 本次 QSO 中我的角色。 */
+/** 本次 QSO 中我的角色（**只供 UI**；照 FT8CN，报文转移完全由序号驱动）。 */
 enum class QsoRole { NONE, CALLER, RESPONDER }
 
-/** QSO 状态机的状态。 */
+/**
+ * QSO 状态机的对外状态（[QsoProgress.order] 的可读化；`docs/Ft8Vox.md`）。
+ */
 enum class QsoState {
     IDLE,
-    /** 已发出本轮报文，等待对方有效回复。 */
+
+    /** 已发出序号 1（网格）或 6（CQ），等待对方回复。 */
     WAIT_REPLY,
-    /** 我已发出信号报告，等待对方 R 报告。 */
+
+    /** 已发出序号 2（信号报告），等待对方的 R 报告（序号 3）。 */
     WAIT_REPORT,
-    /** 我已发出 R 报告（或作为应答方），等待对方 RR73/73。 */
+
+    /** 已发出序号 3（R 报告），等待对方的 RR73（序号 4）。 */
     WAIT_RR73,
+
+    /**
+     * 已发出序号 4（RR73）并**已落库**；照 FT8CN 本段**仍未结束**：还要等对方的 73，
+     * 等不到就按「无回应上限 / 对方转呼别人 / 20 次硬上限」收尾（`docs/Ft8Vox.md`）。
+     */
+    WAIT_FINAL,
+
     DONE,
+
     FAILED,
 }
 
-/** 一次完成的通联记录（阶段 7 将持久化到 ADIF）。 */
+/** 一次完成的通联记录（由 `SessionViewModel` 持久化到 ADIF / Room）。 */
 data class QsoLogEntry(
     val theirCall: String,
     val theirGrid: String?,
@@ -44,29 +57,37 @@ data class QsoProgress(
     val reportReceived: Int? = null,
     /** 下一个发射时隙要发送的报文；null 表示不发。 */
     val txText: String? = null,
-    /** 六步指令序列的当前序号（1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；0=无）。 */
+    /**
+     * 我下一条要发的报文序号（FT8CN `functionOrder`）：
+     * 1 网格 / 2 报告 / 3 R 报告 / 4 RR73 / 5 73 / 6 CQ；0＝无。
+     */
     val order: Int = 0,
     /**
      * 无回应计数（FT8CN 口径：按**解码批次**累计，收到有效回复即清零）。
      *
-     * 它对应 FT8CN 的 `noReplyLimit` 安全阀，供第 2 层判断「超出后换台 / 回 CQ」；
-     * 引擎自身**不再**因重试耗尽而放弃（`retryLimit` 体系已退役，见方案 §1.5）。
+     * 照 FT8CN `FT8TransmitSignal.java:812`，**空批（一条解码都没有）不计数**。
      */
     val noReplyCount: Int = 0,
     /**
      * 是否处于「已发 CQ、等回应者」阶段（只由 [QsoEngine.startCq] 置位）。
      *
-     * 该阶段的解码由第 2 层自动程序调度（收集、排序回应者）处理，而不是由状态机
-     * 直接认第一个回应者；`SessionViewModel` 据此分流。
+     * 照 FT8CN `functionOrder == 6` 的状态：该阶段的解码由第 2 层自动程序调度
+     * （收集、排序回应者）处理，状态机不自行认人，也**永不放弃主叫、不自增无回应计数**。
      */
     val awaitingResponders: Boolean = false,
     /**
      * 最近一次 [QsoEngine.onDecoded] 是否发生了推进（收到**当前对手**的有效回复）。
      *
      * 第 2 层据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
-     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/QSO.md` §3.1）。
+     * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/Ft8Vox.md`）。
      */
     val advanced: Boolean = false,
+    /**
+     * 本段不是正常跑完，而是按 FT8CN 的兜底判据收尾的（「我发过 RR73 但对方消失」等）。
+     *
+     * 第 2 层据此走「换台 / 回 CQ」（`AutoScheduler.onTargetGaveUp`）而不是「正常结束」。
+     */
+    val gaveUp: Boolean = false,
     /**
      * 当前 [txText] 是否**已经真正发出去**过。
      *
@@ -103,71 +124,79 @@ data class QsoProgress(
             QsoState.WAIT_RR73 ->
                 if (txSent) "已发 R 报告，等待 $theirCall 的 RR73"
                 else "R 报告 $pendingHint"
+            QsoState.WAIT_FINAL ->
+                if (txSent) "已发 RR73（已落库），等待 $theirCall 的 73"
+                else "RR73 $pendingHint"
         }
 }
 
 /**
- * FT8/FT4 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
+ * FT8 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
  *
- * ### 设计：报文驱动的收敛阶梯
+ * ### 设计：照 FT8CN 的**报文序号**模型
  *
- * 早期版本是「角色优先的固定脚本」（先假定自己是主叫或应答方），只在很窄的
- * 状态转移上推进。两台机器同时自动运行时，只要一端停在 `WAIT_RR73`（已发 R）、
- * 另一端停在 `WAIT_REPORT`（还在发纯报告），前者收到的报文不匹配任何转移，就会
- * 一直重发 R 直到重试耗尽；而重试耗尽后第 2 层又会重新挑同一个台、从错误阶段重启，
- * 于是两个台在同一段上反复跑死（真机现象：`-08` / `R-10` 每 30 s 交替、永不结束）。
+ * 本引擎是一场 QSO 的状态：**我下一条要发的报文序号** [order]（FT8CN `functionOrder`）。
+ * 转移规则只有一条（照 `FT8TransmitSignal.parseMessageToFunction` `:862`）：
  *
- * 现在改成：**任何一个非终态下收到对方任一形态的报文，都用同一条阶梯算出正确的下一步**，
- * 角色（主叫 / 应答）由报文内容动态推断，而不是开局写死。阶梯（按优先级）：
+ * > 收到对方的报文 → 解析出它的序号（[FunctionOrder]）→ **我的序号 ＝ 它的序号 + 1**。
  *
- * 1. 收到 `73`：对方收尾 → 直接完成，不再发。
- * 2. 收到 `RR73`：回 `73` 并完成。
- * 3. 收到 `R<报告>`（Roger）：对方已确认收到我的报告 → 回 `RR73` 并完成。
- * 4. 收到**纯报告** `<我> <对方> <报告>`：
- *    - 我已在 `ROGER`（回过 R）：说明对方没收到我的 R，**直接回 `RR73` 收尾**
- *      （两颗报告其实已互换），从而打破死循环；
- *    - 否则：对方是主叫（senior），我转为应答方，回**我自己实测的** `R<报告>`。
- * 5. 收到**网格** `<我> <对方> <网格>`（对方在应答我 / 双方同时应答）：我为主叫
- *    （senior），直接发**我自己实测的**信号报告；已发过报告之后的重复网格忽略。
+ * 序号含义与渲染（FT8CN `getFunctionCommand` `:251`）：
  *
- * 这样任意两端从任意阶段进入，都会在若干步内收敛到 `DONE`，且空中不出现重复报文。
+ * | 我方序号 | 我方报文 | 来源 |
+ * | :--: | --- | --- |
+ * | 1 | `<对方> <我> [网格]` | 应答对方的 CQ |
+ * | 2 | `<对方> <我> <±dd>` | 收到对方的网格（序号 1）→ 发我实测的报告 |
+ * | 3 | `<对方> <我> R<±dd>` | 收到对方的报告（序号 2）→ 确认 |
+ * | 4 | `<对方> <我> RR73` | 收到对方的 R 报告（序号 3）→ 收尾（**落库**） |
+ * | 5 | `<对方> <我> 73` | 收到对方的 RR73 / RRR（序号 4）→ 收尾 |
+ * | 6 | `CQ [修饰符] <我> [网格]` | 主叫 |
  *
- * ### 无回应与放弃
+ * 收到对方的 **73**（序号 5）→ 通联完成（落库、不再发射）。
  *
- * 引擎自身**不再**因重试耗尽而放弃（`retryLimit` 体系退役，见方案 §1.5）：未推进时按
- * **解码批次**累计 [QsoProgress.noReplyCount]（FT8CN 口径），收到有效回复即清零。
- * 是否「目标作废、换台 / 回 CQ」由第 2 层按设置项 `noReplyLimit` 决定。
+ * ### 与 FT8CN 一致的几处关键口径
+ *
+ * - **报告值**：我发给对方的报告取「**首次测到**的强度」（FT8CN `toCallsign.snr`）——
+ *   进入序号 2 / 3 时算一次，之后**重发不刷新**；序号 3 的 `R<报告>` 与序号 2 **同一个值**。
+ * - **落库**：进入序号 4 / 5（发出 RR73 / 73）即落库，幂等（FT8CN `record.saved`）。
+ * - **无回应**：按**解码批次**累计（空批不计），收到回复清零；是否换台由第 2 层按
+ *   `noReplyLimit` 决定，但 FT8CN 的三路兜底判据在**本引擎**里（见下）。
+ * - **完成判据**（照 FT8CN `:832-843`，5 路 OR）：
+ *   1. 对方的报文序号 = 5（对方发 73）→ 完成；
+ *   2. 我的序号 = 5 且对方沉默（本机结构上不可达：发出 73 后状态已是 [QsoState.DONE]）；
+ *   3. 我的序号 = 4 且 `noReplyLimit > 0` 且 `noReplyCount > noReplyLimit × 2` → 作废换台；
+ *   4. 我的序号 = 4 且**对方开始呼叫别人**（[targetCallingOthers]）→ 作废换台；
+ *   5. 我的序号 = 4 且 `noReplyLimit == 0` 且 `noReplyCount > 20` → 作废换台。
+ *
+ *   第 3~5 路命中时 [QsoProgress.gaveUp] 为真，由第 2 层换台 / 回 CQ。
+ * - **序号 4 不是终态**：发出 RR73 后本段仍在跑（照 FT8CN 每周期重发 RR73），
+ *   直到对方的 73 或上面第 3~5 路兜底。
  *
  * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]。
  */
 class QsoEngine {
 
-    /**
-     * 我在本段 QSO 里**最后已发出**的那一步（报文的语义阶段）。
-     *
-     * 取值即 FT8CN 的 `functionOrder`（见 `docs/QSO.md` §2.1 六步指令序列）：
-     * 1=网格 / 2=报告 / 3=R报告 / 4=RR73 / 5=73 / 6=CQ；[NONE] 为无步骤（order 0）。
-     */
-    private enum class Step(val order: Int) {
-        NONE(0), GRID(1), REPORT(2), ROGER(3), RR73(4), SEVENTY3(5), CQ(6)
+    /** FT8CN `noReplyLimit == 0` 且我方停在 RR73 时的「硬上限」批次（照 `:840` 的字面量 20）。 */
+    private companion object {
+        const val NO_REPLY_HARD_LIMIT = 20
     }
 
     private var myCall: String = ""
     private var myGrid: String = ""
     /** CQ 前缀（`CQ <前缀> <我> <网格>`；空串＝普通 CQ），由 [startCq] 设置。 */
     private var cqModifier: String = ""
+    /** 无回应次数上限（FT8CN `noReplyLimit`；`0`＝忽略）。完成判据要用，由 [configure] 下发。 */
+    private var noReplyLimit = 0
 
     private var role = QsoRole.NONE
     private var state = QsoState.IDLE
-    private var step = Step.NONE
+    /** FT8CN `functionOrder`：**我下一条要发的报文序号**（0＝无）。 */
+    private var order = 0
     private var theirCall: String? = null
     private var theirGrid: String? = null
+    /** 我发给对方的报告（FT8CN `toCallsign.snr`）：进入序号 2 / 3 时算一次，之后不刷新。 */
     private var reportSent: Int? = null
+    /** 对方发给我的报告（FT8CN `receiveTargetReport`）。 */
     private var reportReceived: Int? = null
-    /**
-     * Tx2 实际发出的报告快照：Tx3 的 `R<报告>` **复用**它（见 `docs/QSO.md` §2.4）。
-     */
-    private var lastSentReport: Int? = null
     private var txText: String? = null
     /** 本段 QSO 的起始时间（UTC 毫秒，FT8CN `startTime` 口径；0＝未知，落库时回退为完成时间）。 */
     private var startedUtcMs = 0L
@@ -178,20 +207,31 @@ class QsoEngine {
     /** **真正发出去**的那条报文文本（[onTransmitted] 记录，用于 [QsoProgress.txSent] 判定）。 */
     private var lastSentText: String? = null
     private var logEntry: QsoLogEntry? = null
-
+    /** 本段是否**已经落库**（照 FT8CN `record.saved`；[finish] 幂等，一段只出一条）。 */
+    private var logged = false
     /** 是否处于「已发 CQ、等回应者」阶段（见 [QsoProgress.awaitingResponders]）。 */
     private var awaitingResponders = false
+    /** 本段是否按兜底判据收尾（见 [QsoProgress.gaveUp]）。 */
+    private var gaveUp = false
+    /** 最近一次带时间戳的调用（毫秒）；[finish] 拿不到显式时间时回退它。 */
+    private var lastUtcMs = 0L
 
     /** 是否已配置好呼号，可以开始 QSO。 */
     val canOperate: Boolean get() = myCall.isNotEmpty()
 
-    /** 更新台站信息（来自设置）。 */
+    /**
+     * 更新台站信息与安全阀设置（来自设置页）。
+     *
+     * [noReplyLimit] 是 FT8CN 的「无回应限制」，完成判据要用它（`0`＝忽略）。
+     */
     fun configure(
         myCall: String,
         myGrid: String,
+        noReplyLimit: Int = 0,
     ) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
+        this.noReplyLimit = noReplyLimit.coerceAtLeast(0)
     }
 
     fun progress(): QsoProgress = QsoProgress(
@@ -202,10 +242,11 @@ class QsoEngine {
         reportSent = reportSent,
         reportReceived = reportReceived,
         txText = txText,
-        order = step.order,
+        order = order,
         noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
         advanced = lastAdvanced,
+        gaveUp = gaveUp,
         txSent = txText != null && txText == lastSentText,
     )
 
@@ -227,86 +268,77 @@ class QsoEngine {
      *
      * 所以只有「刚发出去的这一条就是当前应发报文」才允许清空；发的是旧报文时**保留**，
      * 由第 2 层在下一次我方时隙把它发出去（见 `SessionViewModel.txTick`）。
+     *
+     * 照 FT8CN `setCurrentFunctionOrder` `:550`：我方序号进到 4 / 5（RR73 / 73）时**落库**。
      */
-    fun onTransmitted(sentText: String? = null) {
+    fun onTransmitted(sentText: String? = null, utcMs: Long = 0L) {
+        markTime(utcMs)
         // 记录「真正发出去的是哪条」，供 QsoProgress.txSent / description 区分「待发」与「已发出」
         if (sentText != null) lastSentText = sentText
         if (state == QsoState.DONE || state == QsoState.FAILED) {
             if (sentText == null || txText == null || sentText == txText) txText = null
         }
-        // Tx2 实际发出后快照，供 Tx3 的 R 报告复用（报告值固定「第一次测到的强度」⇒ 重发 Tx2 也用同一值）
-        if (step == Step.REPORT && reportSent != null) lastSentReport = reportSent
+        // 收尾报文真正发出即落库（发的是旧报文时不算：那条还没轮到我方的收尾序号）
+        if (order == 4 || order == 5) {
+            finish(utcMs, 0L)
+        }
     }
 
     /**
-     * 开始呼叫 CQ。
+     * 开始呼叫 CQ（我方序号 6）。
      *
      * [utcMs] 为本段起始时间（UTC 毫秒，用于日志 `startTime`）；[cqPrefix] 为 CQ 前缀
      * （插在 `CQ` 与我方呼号之间，空串＝普通 CQ），**整段 CQ 阶段沿用**（每周期重发同一条）。
      */
     fun startCq(utcMs: Long = 0L, cqPrefix: String = ""): QsoProgress {
+        markTime(utcMs)
         require(canOperate) { "未配置呼号" }
         reset()
         startedUtcMs = if (utcMs > 0) utcMs else 0L
         role = QsoRole.CALLER
         awaitingResponders = true
-        step = Step.CQ
         cqModifier = cqPrefix.trim().uppercase()
-        render()
-        syncState()
+        setOrder(FunctionOrder.CQ)
         return progress()
     }
 
     /**
-     * 第 1 层「应答 QSO」：我应答对方的 CQ。
+     * 应答对方的 CQ（我方序号 1：`<对方> <我> [网格]`）。
      *
-     * 先发 `<对方> <我> <网格>`（让 CQ 台拿到我的网格），随后等报告 → 发 `R<报告>` →
-     * 等 RR73 → 发 73 收尾。
+     * 照 FT8CN，此刻不做别的：等对方回应（它多半直接回序号 2 的报告，也可能回序号 1 的网格）。
+     *
+     * @param snr 选台那一刻测到的对方强度（FT8CN `toCallsign.snr`）；给 null 时等对方首次回复再取。
      */
-    fun startResponderQso(call: String, grid: String?, utcMs: Long = 0L): QsoProgress {
-        require(canOperate) { "未配置呼号" }
-        val their = call.trim().uppercase()
-        if (their.isEmpty() || their == myCall) return progress()
-        reset()
-        startedUtcMs = if (utcMs > 0) utcMs else 0L
-        role = QsoRole.RESPONDER
-        theirCall = their
-        theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
-        step = Step.GRID
-        render()
-        syncState()
-        return progress()
-    }
+    fun startResponderQso(
+        call: String,
+        grid: String?,
+        utcMs: Long = 0L,
+        snr: Int? = null,
+    ): QsoProgress = begin(
+        call = call,
+        grid = grid,
+        newOrder = 1,
+        newRole = QsoRole.RESPONDER,
+        sentReport = snr?.let { reportFromSnr(it) },
+        utcMs = utcMs,
+    )
 
     /**
-     * 第 1 层「主叫 QSO」：我方发过 CQ，[call] 是回应者。
-     *
-     * 直接从「发信号报告」开始（对方已经用网格/报告回应了我方的 CQ）：
-     * 发 `<对方> <我> <报告>` → 等 `R<报告>` → 发 RR73 → 完成。
-     *
-     * 也用于「对方主动呼叫我方（`<我> <对方> <网格>`）」：即使我方没有进行中的 QSO，
-     * 也直接补发报告把这段 QSO 跑完。
+     * 我方发过 CQ、或对方主动呼叫我方（`<我> <对方> <网格>`）：直接发信号报告（我方序号 2）。
      *
      * @param snr 本次解码的信噪比（作为我发给对方的报告）
      */
-    fun startCallerQso(call: String, grid: String?, snr: Int, utcMs: Long = 0L): QsoProgress {
-        require(canOperate) { "未配置呼号" }
-        val their = call.trim().uppercase()
-        if (their.isEmpty() || their == myCall) return progress()
-        reset()
-        startedUtcMs = if (utcMs > 0) utcMs else 0L
-        role = QsoRole.CALLER
-        theirCall = their
-        theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
-        reportSent = reportFromSnr(snr)
-        step = Step.REPORT
-        render()
-        syncState()
-        return progress()
-    }
+    fun startCallerQso(call: String, grid: String?, snr: Int, utcMs: Long = 0L): QsoProgress = begin(
+        call = call,
+        grid = grid,
+        newOrder = 2,
+        newRole = QsoRole.CALLER,
+        sentReport = reportFromSnr(snr),
+        utcMs = utcMs,
+    )
 
     /**
-     * 对方直接发来信号报告（未经我应答）：以应答方身份从「已收报告」阶段进入 QSO。
+     * 对方直接发来信号报告（序号 2）→ 我确认（我方序号 3 的 `R<报告>`）。
      *
      * 用于自动程序的「被呼自动应答」：对方发 `<myCall> <theirCall> <report>` 时，
      * 我直接回 `R<报告>` 并等待对方 RR73。
@@ -314,45 +346,60 @@ class QsoEngine {
      * @param theirReport 对方给我的信号报告
      * @param snr 本次解码的信噪比（作为我发给对方的报告）
      */
-    fun respondToReport(call: String, theirReport: Int, snr: Int, utcMs: Long = 0L): QsoProgress {
-        require(canOperate) { "未配置呼号" }
-        val their = call.trim().uppercase()
-        if (their.isEmpty() || their == myCall) return progress()
-        reset()
-        startedUtcMs = if (utcMs > 0) utcMs else 0L
-        role = QsoRole.RESPONDER
-        theirCall = their
-        reportReceived = theirReport
-        reportSent = reportFromSnr(snr)
-        step = Step.ROGER
-        render()
-        syncState()
-        return progress()
-    }
+    fun respondToReport(
+        call: String,
+        theirReport: Int,
+        snr: Int,
+        utcMs: Long = 0L,
+    ): QsoProgress = begin(
+        call = call,
+        grid = null,
+        newOrder = 3,
+        newRole = QsoRole.RESPONDER,
+        sentReport = reportFromSnr(snr),
+        receivedReport = theirReport,
+        utcMs = utcMs,
+    )
 
     /**
-     * 对方已 Roger 我的报告（`<myCall> <theirCall> R<report>`）：回 `RR73` 并直接完成本次通联。
+     * 对方已确认收到我的报告（序号 3 的 `R<报告>`）→ 我收尾（我方序号 4 的 `RR73`）。
      *
-     * 用于自动程序的「被呼自动应答」：我方空闲时收到带 R 的定向报文，说明对方已确认，
-     * 只需收尾即可完成 QSO。
+     * 发出 RR73 即**落库**（FT8CN `setCurrentFunctionOrder(4)`）；本段仍会停在 [QsoState.WAIT_FINAL]
+     * 等对方的 73（照 FT8CN，等不到会重发 RR73 / 按兜底收尾）。
      *
-     * @param utcMs 本次通联的 UTC 时间（毫秒）；<=0 时记录为 0
+     * @param utcMs 落库时间（UTC 毫秒）；<=0 时回退到最近一次带时间戳的调用
      */
-    fun respondToRoger(call: String, theirReport: Int, snr: Int, utcMs: Long = 0L): QsoProgress {
-        require(canOperate) { "未配置呼号" }
-        val their = call.trim().uppercase()
-        if (their.isEmpty() || their == myCall) return progress()
-        reset()
-        role = QsoRole.RESPONDER
-        theirCall = their
-        reportReceived = theirReport
-        reportSent = reportFromSnr(snr)
-        step = Step.RR73
-        render()
-        startedUtcMs = if (utcMs > 0) utcMs else 0L
-        finish(utcMs = if (utcMs > 0) utcMs else 0L, slotUtcMs = 0L)
-        return progress()
-    }
+    fun respondToRoger(
+        call: String,
+        theirReport: Int,
+        snr: Int,
+        utcMs: Long = 0L,
+    ): QsoProgress = begin(
+        call = call,
+        grid = null,
+        newOrder = 4,
+        newRole = QsoRole.RESPONDER,
+        sentReport = reportFromSnr(snr),
+        receivedReport = theirReport,
+        utcMs = utcMs,
+    )
+
+    /**
+     * 对方已发 RR73 / RRR（序号 4）→ 我回 73 收尾（我方序号 5）。
+     *
+     * 照 FT8CN `checkCQMeOrFollowCQMessage` 循环 2（只排除 `73`）：**即使本机没有进行中的 QSO**，
+     * 收到指名给我的 RR73 也要回 73 并落库 —— 这正是「App 重启 / 丢状态后把尾巴接回来」的路径。
+     *
+     * @param utcMs 落库时间（UTC 毫秒）；<=0 时回退到最近一次带时间戳的调用
+     */
+    fun respondToRr73(call: String, snr: Int, utcMs: Long = 0L): QsoProgress = begin(
+        call = call,
+        grid = null,
+        newOrder = 5,
+        newRole = QsoRole.RESPONDER,
+        sentReport = reportFromSnr(snr),
+        utcMs = utcMs,
+    )
 
     /** 中止当前 QSO。 */
     fun stop(): QsoProgress {
@@ -361,172 +408,199 @@ class QsoEngine {
     }
 
     /**
-     * 处理一个接收时隙的解码结果，推进状态机。
+     * 处理一个接收时隙的解码结果，按 FT8CN 的序号模型推进。
      *
-     * 每次调用只消费一条有效报文；未产生推进时按 FT8CN 口径累计 [noReplyCount]
-     * （由第 2 层据此判断换台）；深度/弱信号批次不计。
+     * 流程照 `FT8TransmitSignal.parseMessageToFunction` `:808`：
+     * 找「对方 → 我」的报文序号（找到即清零无回应计数）→ 完成判据 → 推进一格 → 无回应计数。
      */
     fun onDecoded(messages: List<DecodeResult>, utcMs: Long = 0L): QsoProgress {
+        markTime(utcMs)
         lastAdvanced = false
         if (!canOperate) return progress()
         if (!progress().active) return progress()
-        // 「已发 CQ、等回应者」阶段由第 2 层自动程序收集/排序回应者，状态机不自行认人
+        // 序号 6（已发 CQ、等回应者）阶段由第 2 层自动程序收集/排序回应者；
+        // 照 FT8CN，此阶段永不放弃主叫、也不自增无回应计数。
         if (awaitingResponders) return progress()
 
         val them = theirCall
-        var advanced = false
-        for (m in messages) {
-            // 深度（弱信号二次）解码只用于显示，不推进 QSO（FT8CN isDeep；当前恒 false）
-            if (m.deep) continue
+        // 照 FT8CN `checkFunctionOrdFromMessages` `:604`：从**最后一条**往前找「to 是我 && from 是当前目标」
+        var newOrder = FunctionOrder.NONE
+        var hit: DecodeResult? = null
+        var hitParsed: ParsedMessage? = null
+        for (m in messages.asReversed()) {
+            if (m.deep) continue // 深度（弱信号二次）解码只用于显示，不推进 QSO（FT8CN isDeep）
             val p = MessageParser.parse(m.text)
             val from = p.from ?: continue
             if (from.equals(myCall, ignoreCase = true)) continue // 忽略自己
             if (!p.addressedTo(myCall)) continue // 只处理发给我的
             if (them != null && !CallMatch.isFrom(from, them)) continue // 只认当前对手
-            if (applyMessage(p, m, utcMs)) {
-                advanced = true
-                break
-            }
+            val o = FunctionOrder.of(p)
+            if (o == FunctionOrder.NONE) continue
+            newOrder = o
+            hit = m
+            hitParsed = p
+            break
         }
 
-        lastAdvanced = advanced
-        if (advanced) {
+        if (newOrder != FunctionOrder.NONE) {
             noReplyCount = 0
-            // 非终态转移只改了 step，需要把对外 state 同步过来（终态分支里 finish 已同步，幂等）
-            syncState()
-        } else {
-            // Tx2 的报告值**固定为「第一次测到的强度」**（JTDX 口径，docs/QSO.md §2.3）：
-            // 未推进时**不再**用对手最新 SNR 刷新 —— 否则对方每重发一次（强度会抖）我这条待发
-            // 报告就跟着变，真正发出去的值与首次测到的对不上（实机反馈）。
-            // 无回应按解码批次累计（FT8CN 口径；含空批）；纯深度/弱信号批次不计（方案 §1.6）
-            if (messages.isEmpty() || messages.any { !it.deep }) noReplyCount++
-            syncState()
+            // 照 FT8CN `:618-626`：对方给的报告（序号 2 / 3）记下来，落库取这个值
+            if (newOrder == 2 || newOrder == 3) hitParsed?.report?.let { reportReceived = it }
+            theirGrid = theirGrid ?: hitParsed?.grid
         }
+
+        // ---- 照 FT8CN `:832-843`：完成判据 5 路 OR（任一命中即收尾，不再推进）----
+        val giveUpByNoReply = order == 4 &&
+            (
+                (noReplyLimit > 0 && noReplyCount > noReplyLimit * 2) ||
+                    targetCallingOthers(messages, them) ||
+                    (noReplyLimit == 0 && noReplyCount > NO_REPLY_HARD_LIMIT)
+                )
+        if (newOrder == 5 || giveUpByNoReply) {
+            finish(utcMs, hit?.slotUtcMs ?: 0L)
+            gaveUp = giveUpByNoReply
+            order = 0
+            txText = null
+            state = QsoState.DONE
+            lastAdvanced = newOrder != FunctionOrder.NONE
+            return progress()
+        }
+
+        if (newOrder != FunctionOrder.NONE) {
+            // 照 FT8CN `:857-860`：对方第一次回复（序号 1 / 2）时复位目标报告、重建报文表。
+            // 本机没有报文表；报告值本身**不刷新**（照 FT8CN 取的是首次测到的强度）。
+            if (newOrder == 1 || newOrder == 2) reportReceived = reportReceived ?: hitParsed?.report
+            val next = newOrder + 1
+            // 报告值：只在**第一次推进**时按触发报文的 SNR 取一次（照 FT8CN `toCallsign.snr`：
+            // 定下这台时测到的强度，QSO 内不再刷新）。正常流程里 `start*` 已带 SNR，
+            // 这里只兜住「开始时不带 SNR」的路径（如人工从半路接手）。
+            if (reportSent == null) reportSent = reportFromSnr(hit?.snr ?: 0)
+            lastAdvanced = true
+            setOrder(next, utcMs, hit?.slotUtcMs ?: 0L)
+            return progress()
+        }
+
+        // 到此：本批**没有**「对我的回复」。照 FT8CN `:812` 空批直接返回（不计数）；
+        // `:886` 非弱信号批次才 +1（本机 deep 恒 false，故只排空批）。
+        if (messages.isNotEmpty() && messages.any { !it.deep }) noReplyCount++
+        return progress()
+    }
+
+    // ---- 内部 ----
+
+    /**
+     * 照 FT8CN `checkTargetCallMe` `:578`：本批里「当前目标在呼叫别人」吗？
+     *
+     * 计数从 1 起（`:579`）：只要本批**有一条**目标发给我的报文就返回 false；
+     * 否则目标每出现一条就 +1，`>1`（即目标至少有两条发言且都不是给我的）判为「在呼别人」。
+     */
+    private fun targetCallingOthers(messages: List<DecodeResult>, them: String?): Boolean {
+        if (them == null) return false
+        var fromCount = 1
+        for (m in messages) {
+            if (m.deep) continue
+            val p = MessageParser.parse(m.text)
+            val from = p.from ?: continue
+            if (!CallMatch.isFrom(from, them)) continue
+            if (p.addressedTo(myCall)) return false
+            fromCount++
+        }
+        return fromCount > 1
+    }
+
+    /**
+     * 开始一段 QSO 并直接进入某个序号（照 FT8CN `setTransmit` `:199`：目标 + 序号 + 网格）。
+     *
+     * 呼号非法（空 / 等于自己）时什么都不做，返回当前进度。
+     */
+    private fun begin(
+        call: String,
+        grid: String?,
+        newOrder: Int,
+        newRole: QsoRole,
+        sentReport: Int?,
+        receivedReport: Int? = null,
+        utcMs: Long = 0L,
+    ): QsoProgress {
+        require(canOperate) { "未配置呼号" }
+        val their = call.trim().uppercase()
+        if (their.isEmpty() || their == myCall) return progress()
+        reset()
+        startedUtcMs = if (utcMs > 0) utcMs else 0L
+        role = newRole
+        theirCall = their
+        theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
+        reportSent = sentReport
+        reportReceived = receivedReport
+        setOrder(newOrder, utcMs)
         return progress()
     }
 
     /**
-     * 用一条报文推进状态；返回是否发生推进。
-     *
-     * 见类注释的「收敛阶梯」：这里对**任意非终态**都接受任意形态的报文，并按阶梯
-     * 决定下一步，从而保证两端无论从哪个阶段进入都能收敛。
+     * 设定**我方要发的报文序号**（照 FT8CN `setCurrentFunctionOrder` `:542`）：
+     * 渲染报文、同步对外状态；序号 4 / 5（发出 RR73 / 73）即落库。
      */
-    private fun applyMessage(p: ParsedMessage, m: DecodeResult, utcMs: Long): Boolean {
-        val them = theirCall ?: p.from ?: return false
-        if (state == QsoState.DONE || state == QsoState.FAILED) return false
-
-        return when {
-            // 1) 对方收尾（73）：我无需再发，直接完成
-            p.is73 -> {
-                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
-                step = Step.SEVENTY3
-                txText = null
-                finish(utcMs, m.slotUtcMs)
-                true
-            }
-
-            // 2) 对方 RR73：回 73 并完成
-            p.isRr73 -> {
-                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
-                step = Step.SEVENTY3
-                render()
-                finish(utcMs, m.slotUtcMs)
-                true
-            }
-
-            // 3) 对方 R 报告：已确认收到我的报告 → 回 RR73 并完成
-            p.isRoger -> {
-                reportReceived = reportReceived ?: p.report
-                reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
-                step = Step.RR73
-                render()
-                finish(utcMs, m.slotUtcMs)
-                true
-            }
-
-            // 4) 对方发来（纯）信号报告
-            p.report != null -> {
-                theirGrid = theirGrid ?: p.grid
-                if (step == Step.ROGER) {
-                    // 4a) 我已经回过 R（对方没收到）→ 直接 RR73 收尾，打破死循环
-                    reportReceived = reportReceived ?: p.report
-                    reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
-                    step = Step.RR73
-                } else {
-                    // 4b) 对方是主叫（senior），我转为应答方 → 回我自己实测的 R 报告
-                    role = QsoRole.RESPONDER
-                    reportReceived = p.report
-                    reportSent = lastSentReport ?: reportSent ?: reportFromSnr(m.snr)
-                    step = Step.ROGER
-                }
-                render()
-                if (step == Step.RR73) finish(utcMs, m.slotUtcMs)
-                true
-            }
-
-            // 5) 对方用网格应答（我为主叫 / 双方同时应答）
-            p.grid != null -> {
-                if (step == Step.NONE || step == Step.CQ || step == Step.GRID) {
-                    theirGrid = p.grid
-                    role = QsoRole.CALLER
-                    reportSent = reportFromSnr(m.snr)
-                    step = Step.REPORT
-                    render()
-                    true
-                } else {
-                    // 已发过报告及以后：重复/滞后的网格忽略（保持当前 txText）
-                    false
-                }
-            }
-
-            else -> false
-        }
+    private fun setOrder(newOrder: Int, utcMs: Long = 0L, slotUtcMs: Long = 0L) {
+        order = newOrder
+        role = roleOfOrder(newOrder) ?: role
+        render()
+        syncState()
+        if (order == 4 || order == 5) finish(utcMs, slotUtcMs)
     }
 
-    /** 依据 [step] 渲染当前应发报文到 [txText]。 */
+    /** 序号隐含的角色（只供 UI；4 / 5 沿用进入时的角色）。 */
+    private fun roleOfOrder(o: Int): QsoRole? = when (o) {
+        1, 3 -> QsoRole.RESPONDER
+        2, 6 -> QsoRole.CALLER
+        else -> null
+    }
+
+    /** 依据 [order] 渲染当前应发报文到 [txText]（照 FT8CN `getFunctionCommand`）。 */
     private fun render() {
         val them = theirCall
-        txText = when (step) {
-            Step.NONE -> null
-            Step.CQ -> listOf("CQ", cqModifier, myCall, myGrid)
-                .filter { it.isNotEmpty() }
-                .joinToString(" ")
-            Step.GRID ->
-                if (them == null) null
-                else listOf(them, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
-            Step.REPORT ->
-                if (them == null || reportSent == null) null
-                else "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
-            Step.ROGER ->
-                if (them == null || reportSent == null) null
-                else "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
-            Step.RR73 -> if (them == null) null else "$them $myCall RR73"
-            Step.SEVENTY3 -> if (them == null) null else "$them $myCall 73"
+        txText = when (order) {
+            0 -> null
+            1 -> if (them == null) null
+            else listOf(them, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            2 -> if (them == null || reportSent == null) null
+            else "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
+            3 -> if (them == null || reportSent == null) null
+            else "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
+            4 -> if (them == null) null else "$them $myCall RR73"
+            5 -> if (them == null) null else "$them $myCall 73"
+            6 -> listOf("CQ", cqModifier, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
+            else -> null
         }
     }
 
     /**
-     * 依 [step] 同步对外状态。
+     * 依 [order] 同步对外状态。
      *
-     * 注意：[QsoState.FAILED] 已不再由「重试耗尽」产生（`retryLimit` 体系退役）；保留该枚举值
-     * 仅为兼容 UI，异常/中止一律走 [stop]（回到 IDLE）。
+     * 注意：[QsoState.FAILED] 已无来源（旧的 `retryLimit` 重试体系已退役）；保留该枚举值仅
+     * 为兼容 UI，异常 / 中止一律走 [stop]（回到 IDLE）。
      */
     private fun syncState() {
-        state = when {
-            step == Step.RR73 || step == Step.SEVENTY3 -> QsoState.DONE
-            step == Step.REPORT -> QsoState.WAIT_REPORT
-            step == Step.ROGER -> QsoState.WAIT_RR73
-            step == Step.CQ || step == Step.GRID -> QsoState.WAIT_REPLY
-            role != QsoRole.NONE -> QsoState.WAIT_REPLY
-            else -> QsoState.IDLE
+        state = when (order) {
+            4 -> QsoState.WAIT_FINAL
+            5 -> QsoState.DONE
+            2 -> QsoState.WAIT_REPORT
+            3 -> QsoState.WAIT_RR73
+            1, 6 -> QsoState.WAIT_REPLY
+            else -> if (role != QsoRole.NONE) QsoState.WAIT_REPLY else QsoState.IDLE
         }
     }
 
-    /** 写入通联记录（幂等；同一段只记一条）。 */
+    /** 写入通联记录（**幂等**：同一段只出一条，照 FT8CN `record.saved`）。 */
     private fun finish(utcMs: Long, slotUtcMs: Long) {
-        if (logEntry != null) return
+        if (logged) return
         val them = theirCall ?: return
-        val endMs = if (utcMs > 0) utcMs else slotUtcMs
+        logged = true
+        val endMs = when {
+            utcMs > 0 -> utcMs
+            // 完成时间优先取**触发收尾那条报文**的时隙起点（照 FT8CN 的「本次解码时刻」）
+            slotUtcMs > 0 -> slotUtcMs
+            else -> lastUtcMs
+        }
         logEntry = QsoLogEntry(
             theirCall = them,
             theirGrid = theirGrid,
@@ -536,25 +610,30 @@ class QsoEngine {
             // 起始时间未知时回退为完成时间（ADIF 的 TIME_ON 与 TIME_OFF 相同）
             startUtcMs = if (startedUtcMs > 0) startedUtcMs else endMs,
         )
-        syncState()
+    }
+
+    /** 记下最近一次带时间戳的调用（供 [finish] 缺时间时回退）。 */
+    private fun markTime(utcMs: Long) {
+        if (utcMs > 0) lastUtcMs = utcMs
     }
 
     private fun reset() {
         role = QsoRole.NONE
         state = QsoState.IDLE
-        step = Step.NONE
+        order = 0
         theirCall = null
         theirGrid = null
         reportSent = null
         reportReceived = null
-        lastSentReport = null
         txText = null
         startedUtcMs = 0L
         noReplyCount = 0
         lastAdvanced = false
         lastSentText = null
         logEntry = null
+        logged = false
         awaitingResponders = false
+        gaveUp = false
     }
 
     /** 用解码 SNR 作为要发送的信号报告（clamp 到 -24..+30 dB）。 */

@@ -1,7 +1,7 @@
 package com.example.ft8vox.qso
 
 /**
- * FT8/FT4 常用报文的解析结果。
+ * FT8 常用报文的解析结果。
  *
  * 只覆盖 QSO 需要的主要形态（CQ / 呼号网格 / 信号报告 / R 报告 / RR73 / 73），
  * 其余一律归为自由文本。
@@ -17,6 +17,13 @@ data class ParsedMessage(
     val to: String? = null,
     /** 发方呼号（CQ 时为呼叫者）。 */
     val from: String? = null,
+    /**
+     * 载荷原文（收方 / 发方两个呼号之后的全部内容），即 FT8CN 的 `extraInfo`。
+     *
+     * 报文序号判据 [FunctionOrder] **只看它**（照 FT8CN `GeneralVariables.checkFunOrder`）：
+     * `JN25` → 1、`-10` → 2、`R-10` → 3、`RR73`/`RRR` → 4、`73` → 5、空串 → 1。
+     */
+    val payload: String = "",
     /** 网格（如 JN25 / PM95ab）。 */
     val grid: String? = null,
     /** 信号报告（dB，如 -12、+05）。 */
@@ -47,7 +54,7 @@ data class ParsedMessage(
 }
 
 /**
- * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/QSO.md` §7）。
+ * 呼号匹配（照 FT8CN 的宽松口径，见 `docs/Ft8Vox.md`）。
  *
  * FT8CN 判「是否呼叫我」用 `callsign.contains(短呼号)`，判「目标带 `/`」用 `contains`：
  * `BG7ZJW/P` 与 `BG7ZJW` 互认，`F4FSY` 与 `F4FSY/P` 互认。这样复合呼号（便携/移动台）
@@ -73,7 +80,7 @@ object CallMatch {
      * 文本里是否出现我方呼号（宽松：含我方短呼号，`F4FSY/P` 与 `F4FSY` 视为同一个人）。
      *
      * 与 [isCallingMe] 同一口径，区别是看**整条报文文本**：地图连线用它判定「报文里有我 → 标红」
-     * （docs/UI-MOBILE.md §30）。
+     * （docs/Ft8Vox.md）。
      */
     fun mentions(text: String?, myCall: String): Boolean {
         val me = shortCall(myCall)
@@ -136,6 +143,7 @@ object MessageParser {
                 isCq = true,
                 cqModifier = modifier,
                 from = from,
+                payload = tail.joinToString(" "),
                 grid = grid,
             )
         }
@@ -148,25 +156,25 @@ object MessageParser {
             return parsePayload(raw, to, from, payload)
         }
 
-        return ParsedMessage(raw = raw, isFreeText = true)
+        return ParsedMessage(raw = raw, payload = raw, isFreeText = true)
     }
 
     private fun parsePayload(raw: String, to: String, from: String, payload: String): ParsedMessage {
         val upper = payload.uppercase()
         return when {
-            upper == "RR73" -> ParsedMessage(raw = raw, to = to, from = from, isRr73 = true)
-            upper == "RRR" -> ParsedMessage(raw = raw, to = to, from = from, isRoger = true)
-            upper == "73" -> ParsedMessage(raw = raw, to = to, from = from, is73 = true)
+            upper == "RR73" -> ParsedMessage(raw = raw, to = to, from = from, payload = upper, isRr73 = true)
+            upper == "RRR" -> ParsedMessage(raw = raw, to = to, from = from, payload = upper, isRoger = true)
+            upper == "73" -> ParsedMessage(raw = raw, to = to, from = from, payload = upper, is73 = true)
             ROGER_REGEX.matches(upper) ->
                 ParsedMessage(
-                    raw = raw, to = to, from = from,
+                    raw = raw, to = to, from = from, payload = upper,
                     isRoger = true, report = upper.drop(1).toIntOrNull(),
                 )
             REPORT_REGEX.matches(upper) ->
-                ParsedMessage(raw = raw, to = to, from = from, report = upper.toIntOrNull())
+                ParsedMessage(raw = raw, to = to, from = from, payload = upper, report = upper.toIntOrNull())
             GRID_REGEX.matches(upper) ->
-                ParsedMessage(raw = raw, to = to, from = from, grid = upper)
-            else -> ParsedMessage(raw = raw, to = to, from = from, isFreeText = true)
+                ParsedMessage(raw = raw, to = to, from = from, payload = upper, grid = upper)
+            else -> ParsedMessage(raw = raw, to = to, from = from, payload = upper, isFreeText = true)
         }
     }
 }

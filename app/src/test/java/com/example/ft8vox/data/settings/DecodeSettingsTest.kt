@@ -49,15 +49,22 @@ class DecodeSettingsTest {
     }
 
     @Test
-    fun waterfallHeightsAreScreenPercentagesWithCompactDefault() {
-        // 默认 = 原来的「紧凑」＝ 24% 屏高
-        assertEquals(WaterfallHeight.PCT24, AppSettings().waterfallHeight)
-        assertEquals(0.24f, WaterfallHeight.PCT24.fraction, 0.0001f)
-        assertEquals(listOf("15%", "24%", "45%"), WaterfallHeight.entries.map { it.label })
-        assertEquals(
-            listOf(0.15f, 0.24f, 0.45f),
-            WaterfallHeight.entries.map { it.fraction },
-        )
+    fun waterfallThresholdDefaultsAreMinus90ToMinus40() {
+        val s = AppSettings()
+        assertEquals(-90, s.waterfallFloorDb)
+        assertEquals(50, s.waterfallRangeDb)
+        assertEquals(-90, WATERFALL_FLOOR_DB_DEFAULT)
+        assertEquals(50, WATERFALL_RANGE_DB_DEFAULT)
+        // 默认窗口：-90 ~ -40 dBFS
+        assertEquals(-40, s.waterfallFloorDb + s.waterfallRangeDb)
+    }
+
+    @Test
+    fun waterfallThresholdClampsToAllowedRange() {
+        assertEquals(WATERFALL_FLOOR_DB_RANGE.first, clampWaterfallFloorDb(-999))
+        assertEquals(WATERFALL_FLOOR_DB_RANGE.last, clampWaterfallFloorDb(999))
+        assertEquals(WATERFALL_RANGE_DB_RANGE.first, clampWaterfallRangeDb(-999))
+        assertEquals(WATERFALL_RANGE_DB_RANGE.last, clampWaterfallRangeDb(999))
     }
 
     @Test

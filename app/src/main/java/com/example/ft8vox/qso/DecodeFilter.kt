@@ -3,7 +3,7 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 
 /**
- * 解码列表的筛选项（docs/UI.md §3.3）。
+ * 解码列表的筛选项（docs/Ft8Vox.md）。
  *
  * [ALL] 为互斥项：选中它表示不再过滤；选中其余任意项会自动取消 [ALL]，其余项之间为**多选并集**。
  */
@@ -25,10 +25,10 @@ data class DecodeFilterState(
     /** 被用户忽略的呼号（右滑忽略 / 长按菜单忽略），一律不显示。 */
     val ignoredCalls: Set<String> = emptySet(),
     /**
-     * 关注的呼号（**长按「关注 / 取消关注」**，或「自动收录 CQ 台」自动加入）。
+     * 跟踪的呼号（**长按「跟踪 / 取消跟踪」手动加入**；照 FT8CN 不由解码自动写入）。
      *
      * **不参与显示过滤**，只作为自动程序的输入：在 [com.example.ft8vox.qso.AutoProgramSelector.collect]
-     * 里它们是 `autoAddCqToFollow` 的例外（照 FT8CN，关掉开关仍会呼叫其 CQ）。操作页的「关注呼号列表」
+     * 里它们是 `autoAddCqToFollow` 的例外（照 FT8CN，关掉开关仍会呼叫其 CQ）。操作页的「跟踪 CQ 列表」
      * 面板也直接读它。
      */
     val followedCalls: Set<String> = emptySet(),

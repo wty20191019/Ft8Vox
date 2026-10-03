@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * 一次性发射（自定义报文框的「发送」/ 长按解码行「逐条发送」）的闸门逻辑单测
- * （`docs/UI-MOBILE.md` §27）。
+ * （`docs/Ft8Vox.md`）。
  *
  * 两个纯函数各管一半：
  * - [txBlockReason]：**现在能不能发**，不能发时给出红字原因（以前只写进没人显示的 `status` 字段，

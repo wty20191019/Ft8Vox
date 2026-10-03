@@ -3,9 +3,9 @@ package com.example.ft8vox.qso
 import com.example.ft8vox.engine.DecodeResult
 
 /**
- * 发射抽屉里的报文类型（docs/UI.md §2.3）。
+ * 发射抽屉里的报文类型（docs/Ft8Vox.md）。
  *
- * 即 FT8CN 的**六步指令序列**（见 `docs/QSO.md` §2.1）：1=网格 / 2=报告 / 3=R报告 /
+ * 即 FT8CN 的**六步指令序列**（见 `docs/Ft8Vox.md`）：1=网格 / 2=报告 / 3=R报告 /
  * 4=RR73 / 5=73 / 6=CQ。[order] 与 `QsoEngine` 的 `Step.order` 一致（[CUSTOM] 为 0）。
  */
 enum class TxMessageKind(val label: String, val order: Int) {
@@ -51,6 +51,48 @@ object TxCompose {
             TxMessageKind.SEVENTY_THREE -> them?.let { join(it, me, "73") }
             TxMessageKind.CUSTOM -> null
         }
+    }
+
+    /**
+     * 发射区**六个报文槽**的文本（3 列 × 2 行、列优先 `1 3 5` / `2 4 6`；下标 `0..5` 即序号 `1..6`）。
+     *
+     * **必须与 [QsoEngine] 的 `txText` 逐字一致**：发射区的红/绿点靠**文本相等**匹配
+     * （`com.example.ft8vox.ui.slotLed`），差一个字符就不点灯 —— 真机现象是「在发 `R-07`，
+     * 但 `3 R报告` 那格不亮红框红点」。
+     *
+     * 序号 3 的 `R<报告>` 用**我方实测的 [reportSent]**（与序号 2 **同一个值**，照 FT8CN
+     * `toCallsign.snr`），**不是**对方给我的报告。
+     */
+    fun slots(
+        target: String?,
+        myCall: String,
+        myGrid: String,
+        reportSent: Int,
+        cqPrefix: String = "",
+    ): List<Pair<TxMessageKind, String?>> = listOf(
+        TxMessageKind.GRID to compose(TxMessageKind.GRID, target, myCall, myGrid),
+        TxMessageKind.REPORT to compose(TxMessageKind.REPORT, target, myCall, myGrid, reportSent),
+        TxMessageKind.ROGER to compose(TxMessageKind.ROGER, target, myCall, myGrid, reportSent),
+        TxMessageKind.RR73 to compose(TxMessageKind.RR73, target, myCall, myGrid),
+        TxMessageKind.SEVENTY_THREE to compose(TxMessageKind.SEVENTY_THREE, target, myCall, myGrid),
+        TxMessageKind.CQ to compose(TxMessageKind.CQ, null, myCall, myGrid, cqPrefix = cqPrefix),
+    )
+
+    /**
+     * 发射区该以**谁**为目标呼号（六槽组包用）。
+     *
+     * **引擎有进行中的 QSO / 有待发报文时，以引擎真正在通联的对手为准** —— 否则用户先前
+     * 点选过的目标（UI 里只赋值、从不清空、还是 `rememberSaveable`）会一直优先，六槽按旧呼号
+     * 组包，与「正在发送」对不上（真机现象：自动程序已与 B 通联，槽内却还写着 A）。
+     * 引擎空闲时才用点选目标，方便为还没开始的 QSO 预先备好报文。
+     *
+     * @param engineCall 引擎当前对手（`QsoProgress.theirCall`）
+     * @param engineBusy 引擎是否在进行中或有待发报文（`active || txText != null`）
+     * @param picked 用户点选的目标（解码行单击 / 左滑 / 跟踪列表 / 详情「呼叫」）
+     */
+    fun targetFor(engineCall: String?, engineBusy: Boolean, picked: String?): String? {
+        val engine = engineCall?.takeIf { engineBusy && it.isNotBlank() }
+        return engine ?: picked?.trim()?.takeIf { it.isNotBlank() } ?: engineCall?.takeIf { it.isNotBlank() }
     }
 
     /** 识别一段报文的类型（用于收起态的「当前消息类型」）。 */
@@ -106,11 +148,11 @@ val DEFAULT_CQ_PREFIXES: List<String> = listOf(
 )
 
 /**
- * 发射调度（docs/UI.md §2.3 第 6 条）：
+ * 发射调度（docs/Ft8Vox.md）：
  * 「本周期剩余时间够播完这一条报文就立即发，否则排下一周期」。
  *
- * 判据是**报文波形 + 前导必须能在本时隙内播完**：FT8 报文 12.64 s / 时隙 15 s、
- * FT4 报文 5.04 s / 时隙 7.5 s，因此本时隙开头约 2 s 都还来得及就地发射 ——
+ * 判据是**报文波形 + 前导必须能在本时隙内播完**：FT8 报文 12.64 s / 时隙 15 s，
+ * 因此本时隙开头约 2 s 都还来得及就地发射 ——
  * 不必白等一个周期（解码结果本来就是在时隙结束后几百毫秒才到手）。
  */
 object TxScheduler {
@@ -166,11 +208,11 @@ object TxScheduler {
      * + 重启余量 [marginMs] ≤ 本时隙剩余时间；且当前必须是**我方发射时隙**
      * （换目标时可能刚按对方时隙重锁了周期，那就只能在下一个我方时隙发）。
      *
-     * FT8：报文 12.64 s / 时隙 15 s → 只在时隙开头约 1.5 s 内换目标才来得及；
-     * FT4：报文约 5.04 s / 时隙 7.5 s → 约 1.6 s。够就当场重发，不够则照旧等下一个我方周期。
+     * FT8：报文 12.64 s / 时隙 15 s → 只在时隙开头约 1.5 s 内换目标才来得及。
+     * 够就当场重发，不够则照旧等下一个我方周期。
      *
      * @param nowMs 当前 UTC 毫秒
-     * @param slotMs 时隙长度（FT8 15000 / FT4 7500）
+     * @param slotMs 时隙长度（FT8 为 15000）
      * @param txParity 我方发射周期（0=偶，1=奇）
      * @param preambleMs 本次发射的完整前导（PTT 延迟 + 前导音，见 `AppSettings.txPreambleMs`）
      * @param messageMs 新报文的波形时长（ms，见 `Protocol.messageMs`）；≤0 视为未知 → 不可就地重发

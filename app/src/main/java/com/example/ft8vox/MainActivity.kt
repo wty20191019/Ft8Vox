@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            // 新竖屏外壳固定深色、固定字号（docs/UI-MOBILE.md §1：去掉亮/暗主题与字体档位）
+            // 新竖屏外壳固定深色、固定字号（docs/Ft8Vox.md：去掉亮/暗主题与字体档位）
             Ft8VoxTheme {
                 MainShell(session = session, log = log, settings = settings)
             }

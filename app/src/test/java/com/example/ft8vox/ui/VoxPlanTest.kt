@@ -9,7 +9,6 @@ import org.junit.Test
 class VoxPlanTest {
 
     private val ft8 = 15_000L
-    private val ft4 = 7_500L
 
     @Test
     fun `无前导且周期匹配时就地发射`() {
@@ -109,24 +108,6 @@ class VoxPlanTest {
 
         assertEquals(100L, p.targetSlotIndex)
         assertEquals(now, p.startAtMs)
-    }
-
-    @Test
-    fun `FT4 报文更短就地窗口更宽`() {
-        // FT4 时隙 7500ms、报文 5.04s（105 符号 × 48 ms）：起点后 2400 + 50 + 5040 = 7490 ≤ 7500 → 就地发射
-        val now = 10 * ft4 + 2_400
-        val p = planTx(now, ft4, txParity = 0, preambleMs = 50, messageMs = 5_040)
-
-        assertEquals(10L, p.targetSlotIndex)
-        assertEquals(now, p.startAtMs)
-    }
-
-    @Test
-    fun `FT4 时隙同样成立`() {
-        val now = 10 * ft4 + 50
-        val p = planTx(now, ft4, txParity = 0, preambleMs = 0)
-        assertEquals(10L, p.targetSlotIndex)
-        assertEquals(now, p.targetStartMs)
     }
 
     @Test

@@ -77,14 +77,14 @@ import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 /**
- * 手机竖屏外壳（docs/UI-MOBILE.md §2、§3.1、§7、§26）：**四行信息头 / 底部导航**。
+ * 手机竖屏外壳（docs/Ft8Vox.md）：**四行信息头 / 底部导航**。
  *
- * 取代旧 `docs/UI-JTDX.md` 的「菜单栏 + 控制行 + 左侧竖导航」横屏外壳。
+ * 取代旧横屏外壳的「菜单栏 + 控制行 + 左侧竖导航」。
  * 保留原有工具函数（[rememberUtcNowMs] / [decodesPerMinute] / [timeSyncWarning] /
  * [decodeTimeLabel] / [voxLabel] / [BandFreqDialog]），供页面与单测继续使用。
  */
 
-/** docs/UI.md §2.1：秒级 UTC 时钟（对齐到整秒刷新）。 */
+/** docs/Ft8Vox.md：秒级 UTC 时钟（对齐到整秒刷新）。 */
 @Composable
 fun rememberUtcNowMs(): Long {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -178,14 +178,14 @@ private fun mono(fontSize: Int) = MaterialTheme.typography.labelLarge.copy(
 // ---------------------------------------------------------------- 信息头（三行）
 
 /**
- * 竖屏信息头（docs/UI-MOBILE.md §3.1），三行紧凑：
+ * 竖屏信息头（docs/Ft8Vox.md），三行紧凑：
  *
  * 1. 大频率 + 波段·模式 + **发送总开关**（唯一发射闸门）
  * 2. UTC 时钟 + 时隙进度 + **我方发射时序 `TX0/TX1`** + 输入电平 + 收发状态点
  * 3. 我方呼号/网格 + DX 目标回显（未设呼号时红字「请到设置填写」）
  * 4. 统计读数（解码速率 / 解码总数 / 通联数 / 队列）+ 时间同步 + 日期
  *
- * 第二行原先的「音频」「?」两个小按钮已收走（实机太挤，见 docs/UI-MOBILE.md §16）：
+ * 第二行原先的「音频」「?」两个小按钮已收走（实机太挤，见 docs/Ft8Vox.md）：
  * 音频速览移进设置页「音频」组，手势速查移进设置页「关于」组。
  *
  * 第 4 行是**原底部细状态条**（§26）：整条搬到顶端，并去掉与上三行重复的
@@ -383,7 +383,7 @@ private fun MasterSwitch(enabled: Boolean, onChange: (Boolean) -> Unit) {
 
 // ---------------------------------------------------------------- 底部导航
 
-/** 页面图标（`material-icons-core` 现有图标，docs/UI-MOBILE.md §7）。 */
+/** 页面图标（`material-icons-core` 现有图标，docs/Ft8Vox.md）。 */
 private fun tabIcon(tab: MainTab): ImageVector = when (tab) {
     MainTab.OPERATE -> Icons.AutoMirrored.Filled.List
     MainTab.SPECTRUM -> Icons.Filled.Refresh
@@ -439,7 +439,7 @@ private fun TabIcon(tab: MainTab, selected: Boolean, color: Color) {
 /**
  * 自绘「频谱」图标：4 条横向瀑布色带（蓝 → 青 → 绿 → 黄）+ 一条红色发射线。
  *
- * `material-icons-core` 里没有瀑布图标，所以这一项自己画（docs/UI-MOBILE.md §7）；
+ * `material-icons-core` 里没有瀑布图标，所以这一项自己画（docs/Ft8Vox.md）；
  * 未选中时整体降透明度，跟其它 Material 图标观感一致。
  */
 @Composable
@@ -472,7 +472,7 @@ private fun WaterfallTabIcon(selected: Boolean) {
 // ---------------------------------------------------------------- 发射时序徽标
 
 /**
- * 信息头第 2 行的「我方发射时序」徽标（docs/UI-MOBILE.md §21、§26）：`TX0` / `TX1`。
+ * 信息头第 2 行的「我方发射时序」徽标（docs/Ft8Vox.md）：`TX0` / `TX1`。
  *
  * @param parity 我方发射时隙奇偶
  * @param on 现在轮到我方（或正在发射）时红底黑字，否则深灰底灰字
@@ -496,7 +496,7 @@ private fun TxParityBadge(parity: Int, on: Boolean) {
 
 // ---------------------------------------------------------------- 对话框
 
-/** 「帮助」对话框：快捷键与手势速查（docs/UI-MOBILE.md §8）。 */
+/** 「帮助」对话框：快捷键与手势速查（docs/Ft8Vox.md）。 */
 @Composable
 fun JtdxHelpDialog(onDismiss: () -> Unit) {
     AlertDialog(
@@ -506,10 +506,10 @@ fun JtdxHelpDialog(onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (line in listOf(
                     "竖屏五页：底部导航「操作 / 频谱 / 地图 / 日志 / 设置」",
-                    "解码表格：单击 = 设为目标并对频；双击 = 跳地图定位；长按 = 菜单（呼叫 / 回复 / 详情 / 日志 / 复制 / 关注）",
+                    "解码表格：单击 = 设为目标并对频；双击 = 跳地图定位；长按 = 菜单（呼叫 / 回复 / 详情 / 日志 / 复制 / 跟踪）",
                     "解码表格：左滑 = 设为目标并呼叫；右滑 = 删除该条",
                     "解码行底色 = JTDX 默认高亮：黄 = 自己发的、红 = 叫我、绿 = CQ、品红 = 新 DXCC、橙 = 新网格、青 = 新呼号",
-                    "关注列表：左滑 = 呼叫；右滑 = 取消关注；右上「全部清除」清空整份名单",
+                    "跟踪列表：左滑 = 呼叫；右滑 = 取消跟踪；右上「全部清除」清空整份名单",
                     "频谱页：按住水平拖动红线 = 设发射频率；瀑布上按频率位置叠加最近解码的报文（竖排、随瀑布上滚）",
                     "发射区：六个报文槽排成 3 列 × 2 行、列优先（1 3 5 / 2 4 6），点哪一格就发那一格的报文",
                     "发射区：自定义报文框会自动同步当前待发报文（手动改过就先按手动的，发送完自动回到同步）",
@@ -529,7 +529,7 @@ fun JtdxHelpDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * 「波段与频率」弹窗：列出各波段及常用 FT8/FT4 刻度频率，并支持自定义波段名与频率。
+ * 「波段与频率」弹窗：列出各波段及常用 FT8 刻度频率，并支持自定义波段名与频率。
  *
  * [currentBand]/[currentHz] 用于标记当前项；[onConfirm] 回传最终（波段名, 频率 Hz）。
  */
@@ -662,6 +662,5 @@ fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
             "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
             style = MaterialTheme.typography.labelSmall,
         )
-        Text("看门狗  ${appSettings.watchdogMs} ms", style = MaterialTheme.typography.labelSmall)
     }
 }

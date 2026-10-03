@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * 「CQ 前缀」格子规整的单测（`docs/UI-MOBILE.md` §28）。
+ * 「CQ 前缀」格子规整的单测（`docs/Ft8Vox.md`）。
  *
  * 弹窗「确定」提交的就是 [cleanCqPrefixes]：固定 8 格、去空格转大写、**空格子保留**（＝普通 CQ）、
  * 全空回落默认值、选中下标夹住。格子序号必须稳定——`cqPrefixIndex` 记的是下标，

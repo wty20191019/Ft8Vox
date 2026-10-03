@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 地图文字防重叠（[selectLabels]）的 JVM 单测（docs/UI-MOBILE.md §31）。
+ * 地图文字防重叠（[selectLabels]）的 JVM 单测（docs/Ft8Vox.md）。
  *
  * 口径：**按输入顺序（＝优先级）依次落位，与已落位标签重叠的直接跳过**；
  * 被挤掉的台站只是没文字，点/旗照旧。

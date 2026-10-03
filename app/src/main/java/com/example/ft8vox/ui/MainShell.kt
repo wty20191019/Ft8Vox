@@ -36,7 +36,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 主壳的五个页面（docs/UI-MOBILE.md §1）：**操作 / 频谱 / 地图 / 日志 / 设置**。
+ * 主壳的五个页面（docs/Ft8Vox.md）：**操作 / 频谱 / 地图 / 日志 / 设置**。
  *
  * 频谱从操作页拆出来单独成页，是这一轮改造的核心诉求。
  */
@@ -49,7 +49,7 @@ enum class MainTab(val label: String) {
 }
 
 /**
- * 应用主壳（docs/UI-MOBILE.md §2）：**竖屏，四行信息头 + 内容 + 底部导航**。
+ * 应用主壳（docs/Ft8Vox.md）：**竖屏，四行信息头 + 内容 + 底部导航**。
  *
  * - 全局锁定竖屏（`AndroidManifest` 的 `sensorPortrait`）。
  * - 三个 ViewModel 都是 Activity 作用域，切换页面不重建，接收与 QSO 流程不中断。
@@ -71,7 +71,7 @@ fun MainShell(
     var logFocusSeq by rememberSaveable { mutableStateOf(0) }
     var autoDialogOpen by rememberSaveable { mutableStateOf(false) }
     var helpDialogOpen by rememberSaveable { mutableStateOf(false) }
-    // 关注列表弹窗由本壳持有（跨页跳转时保持状态）
+    // 跟踪列表弹窗由本壳持有（跨页跳转时保持状态）
     var followOpen by rememberSaveable { mutableStateOf(false) }
 
     val appSettings by settings.settings.collectAsState()
@@ -197,6 +197,7 @@ fun MainShell(
                 MainTab.SPECTRUM -> SpectrumScreen(
                     viewModel = session,
                     settings = appSettings,
+                    settingsViewModel = settings,
                     hasPermission = permissionGranted,
                     onRequestStart = requestStart,
                     onOpenLog = { call ->

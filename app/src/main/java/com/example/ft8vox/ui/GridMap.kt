@@ -34,6 +34,7 @@ import com.example.ft8vox.grid.MapProjection
 import com.example.ft8vox.grid.Maidenhead
 import com.example.ft8vox.qso.CallMarker
 import com.example.ft8vox.qso.CqFlag
+import com.example.ft8vox.qso.CqWorked
 import com.example.ft8vox.qso.GridMarker
 import com.example.ft8vox.qso.MapTier
 import com.example.ft8vox.qso.SignalLink
@@ -44,13 +45,22 @@ import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// ---- docs/UI.md §2.4 配色 ----
+// ---- docs/Ft8Vox.md 配色 ----
 private val Ocean = Color(0xFF0B0B12)
 private val World = Color(0xFF171C2B)
 private val TierDecoded = Color(0xFF89B4FA) // 蓝：本会话解码
 private val TierWorked = Color(0xFFF9E2AF) // 黄：日志已通联
 private val TierConfirmed = Color(0xFFE64553) // 红：日志已确认
 private val MyColor = Color(0xFF00E5FF)
+
+// ---- CQ 旗面：**通联状态**色（照 FT8CN `tracker_cq_marker_*`，docs/Ft8Vox.md） ----
+// FT8CN 的第三档是「黑」（本波段已通联），在深色底图上不可见 → 本机改**灰**。
+private val CqNewColor = Color(0xFFFF5252) // 红：还没通过
+private val CqOtherBandColor = Color(0xFF64B5F6) // 蓝：只在别的波段通过
+private val CqWorkedColor = Color(0xFF9E9E9E) // 灰：本波段已通过
+
+/** 昼夜灰线（照 FT8CN `tracker_gray_line_color`；深色底图上略提亮）。 */
+private val GrayLineColor = Color(0x3DFFFFFF)
 
 /**
  * 层次细节（§31）：低于该缩放（相对「适应窗口」）不画**本会话解码**的网格方块。
@@ -80,7 +90,20 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
 }
 
 /**
- * 离线深色地图（docs/UI.md §2.4）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
+ * CQ 旗面颜色 = **通联状态**（照 FT8CN `tracker_cq_marker_*`，docs/Ft8Vox.md）。
+ *
+ * 与 [tierColor] 的类别色**不共用**：网格方块的蓝/黄/红描述「这一格是解码/通联/确认」，
+ * 旗色描述「这个喊 CQ 的呼号做过没有」—— 红旗=还没通过（优先应答）、蓝旗=别的波段做过、
+ * 灰旗=本波段做过（自动程序也不会再呼叫它）。
+ */
+private fun cqFlagColor(worked: CqWorked): Color = when (worked) {
+    CqWorked.NONE -> CqNewColor
+    CqWorked.OTHER_BAND -> CqOtherBandColor
+    CqWorked.THIS_BAND -> CqWorkedColor
+}
+
+/**
+ * 离线深色地图（docs/Ft8Vox.md）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
  * 按可见区域流式解码，乘 0.7 暗化），其上叠加网格标记、呼号、CQ 旗帜与信号连线，**无网格线图层**。
  *
  * 底图资产缺失/解码失败时退回原来的纯色世界矩形，保证地图页始终可用。
@@ -88,12 +111,16 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
  * [linkPhase] 为 0–1 的循环相位，用于让连线内容沿通信方向运动；**以 lambda 传入**，
  * 使其只在 Canvas 的绘制作用域被读取 —— 相位变化因此只触发重绘、不触发整页重组。
  *
- * 去密设计（docs/UI-MOBILE.md §31，手机屏小、标注一多就糊）：
+ * 去密设计（docs/Ft8Vox.md，手机屏小、标注一多就糊）：
  * 1. **一个台站只画一处标记**：喊过 CQ 的台站画旗子，其他台站画圆点；两者都与呼号文字一一对应，
  *    不会出现「同一个点又画旗又画点、还出两行文字」；
  * 2. **文字统一最后落位 + 防重叠**（[selectLabels]）：优先级 我的位置 > 选中台 > CQ 台 > 其余呼号，
  *    挤掉只挤文字，点/旗照旧（点一下仍能看详情）；
  * 3. **网格方块分级**：世界视野只画已通联/已确认，放大后才补上本会话解码的蓝格。
+ *
+ * 另有两项照 FT8CN（docs/Ft8Vox.md）：
+ * - **昼夜灰线**（[grayLine]，`GrayLine.terminator` 算出的 `(lon, lat)` 折线）画在底图之上、所有标记之下；
+ * - **CQ 旗面颜色 = 通联状态**（红=未通联 / 蓝=他波段 / 灰=本波段），与网格方块的类别色无关。
  */
 @Composable
 fun GridMap(
@@ -108,6 +135,7 @@ fun GridMap(
     showLinkText: Boolean,
     selectedCall: String?,
     linkPhase: () -> Float,
+    grayLine: List<Pair<Double, Double>> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -212,6 +240,35 @@ fun GridMap(
                 }
             }
 
+            // ---- 昼夜灰线（照 FT8CN computeDayNightTerminator，§34） ----
+            // 画在底图之上、所有标记之下；相邻点取「离上一个点最近的世界副本」连接，
+            // 跨 180° 接缝不会横穿整张地图。
+            if (grayLine.size >= 2) {
+                val stroke = 1.6.dp.toPx()
+                var lastUV: Pair<Double, Double>? = null
+                var lastX = 0f
+                var lastY = 0f
+                for (g in grayLine) {
+                    val u = MapProjection.mercX(g.first)
+                    val v = MapProjection.mercY(g.second)
+                    val prevUV = lastUV
+                    val uv = if (prevUV == null) {
+                        p.nearestCopy(u, v)
+                    } else {
+                        p.copyNearestTo(prevUV.first, prevUV.second, u, v)
+                    }
+                    val s = p.toScreenUV(uv)
+                    val x = s.x.toFloat()
+                    val y = s.y.toFloat()
+                    if (prevUV != null) {
+                        drawLine(GrayLineColor, Offset(lastX, lastY), Offset(x, y), stroke)
+                    }
+                    lastUV = uv
+                    lastX = x
+                    lastY = y
+                }
+            }
+
             // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸） ----
             // 层次细节（§31）：全球视野**不画「本会话解码」的蓝格** —— 它们数量最大，缩到世界尺度
             // 只会糊成一片；已通联（黄）/ 已确认（红）数量少且是重点，任何缩放都画。
@@ -283,8 +340,9 @@ fun GridMap(
 
             // ---- 台站标记：**一个台站只画一处**（§31） ----
             // 喊过 CQ 的台站用「旗子」当标记：不再叠一个圆点、也不再出两行文字；其余台站画圆点。
-            // 旗面与圆点同色，颜色始终表示**类别**（蓝=本会话解码 / 黄=已通联 / 红=已确认），
-            // 「在 CQ」由**形状**（旗）表达 —— 这样「红花+红点」那种重合就没了。
+            // 圆点颜色 = **类别**（蓝=本会话解码 / 黄=已通联 / 红=已确认）；
+            // 旗面颜色 = **通联状态**（红=未通联 / 蓝=他波段 / 灰=本波段，§34）——「在 CQ」由**形状**（旗）表达，
+            // 这样「红花+红点」那种重合就没了，且不看文字也知道这个 CQ 台值不值得应答。
             // 遍历以**呼号标记**为准：CQ 台一定也有呼号标记（同一张定位表、且呼号标记的时间窗更宽，
             // 见 MapModel.gridLookup）；极端情况（标记数超过 maxMarkers 上限被截断）下宁可不画旗，
             // 也不画一面没有对应台站的旗。
@@ -324,7 +382,8 @@ fun GridMap(
                             lineTo(x, y - poleH + flagH)
                             close()
                         },
-                        color = color,
+                        // 旗面颜色 = **通联状态**（§34），不是网格方块的类别色
+                        color = cqFlagColor(flag.worked),
                     )
                 } else {
                     drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = Offset(x, y))

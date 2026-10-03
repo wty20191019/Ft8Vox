@@ -9,9 +9,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * 阶段 3 的自回环测试：用编码器生成发射 PCM，再交给解码器解出，验证文本往返一致。
+ * 自回环测试：用编码器生成发射 PCM，再交给解码器解出，验证文本往返一致。
  *
- * 覆盖 FT8 / FT4 两种协议，以及 CQ、通联、73、自由文本等常见报文。
+ * 覆盖 CQ、通联、73、自由文本等常见报文。
  */
 @RunWith(AndroidJUnit4::class)
 class Ft8EncodeTest {
@@ -51,19 +51,6 @@ class Ft8EncodeTest {
         )
         for (message in messages) {
             assertRoundTrip(Protocol.FT8, message)
-        }
-    }
-
-    @Test
-    fun ft4RoundTrip() {
-        val messages = listOf(
-            "CQ F4FSY JN25",
-            "GJ0KYZ RK9AX MO05",
-            "VK4BLE OH8JK R-17",
-            "HI HI HI HI",
-        )
-        for (message in messages) {
-            assertRoundTrip(Protocol.FT4, message)
         }
     }
 

@@ -51,12 +51,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
-import com.example.ft8vox.data.settings.FontSize
 import com.example.ft8vox.data.settings.OUTPUT_GAIN_MAX_DB
 import com.example.ft8vox.data.settings.OUTPUT_GAIN_MIN_DB
 import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.data.settings.SampleRatePref
-import com.example.ft8vox.data.settings.ThemeMode
+import com.example.ft8vox.data.settings.WATERFALL_FLOOR_DB_RANGE
+import com.example.ft8vox.data.settings.WATERFALL_RANGE_DB_RANGE
+import com.example.ft8vox.data.settings.clampWaterfallFloorDb
+import com.example.ft8vox.data.settings.clampWaterfallRangeDb
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
@@ -76,10 +78,10 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 
 /**
- * 设置页（安卓 Preference 风格，docs/UI.md §2.6）。
+ * 设置页（安卓 Preference 风格，docs/Ft8Vox.md）。
  *
- * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 高亮与提醒 / 日志 / 地图 / 关于
- * （「外观」组已随新竖屏外壳去掉，见 docs/UI-MOBILE.md §1）。
+ * 分组：台站 / 电台（仅 VOX）/ 音频 / FT8 / 瀑布 / 高亮与提醒 / 日志 / 地图 / 关于
+ * （「外观」组已随新竖屏外壳去掉，见 docs/Ft8Vox.md）。
  * 尚未接通后端能力的项统一置灰并标注「U7」。
  */
 @Composable
@@ -118,7 +120,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/UI-MOBILE.md §15）
+        // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/Ft8Vox.md）
 
         // ---------- 台站（设计外补充：无 CAT，台站信息必填） ----------
         SettingsGroup("台站") {
@@ -231,21 +233,11 @@ fun SettingsScreen(
                 unit = " ms",
                 onChange = { v -> settings.update { it.copy(pttDelayMs = v) } },
             )
-            PrefDivider()
-            PrefStepper(
-                title = "看门狗超时",
-                subtitle = "发射写入卡死保护；实际会抬高到本次发射时长以上，不会截断合法发射",
-                value = app.watchdogMs,
-                range = 1000..60000,
-                step = 1000,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(watchdogMs = v) } },
-            )
         }
 
         // ---------- 6.2 音频 ----------
         SettingsGroup("音频") {
-            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/UI-MOBILE.md §16）
+            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/Ft8Vox.md）
             AudioQuickPanel(sessionStatus, app)
             PrefDivider()
             PrefDropdown(
@@ -280,8 +272,7 @@ fun SettingsScreen(
         SettingsGroup("FT8") {
             PrefChoice(
                 title = "模式",
-                subtitle = "FT8 时隙 15 s、FT4 时隙 7.5 s。运行中切换会自动重建引擎（接收短暂中断，" +
-                    "发送总开关状态保留）；未接收时下次开始接收生效。",
+                subtitle = "当前仅支持 FT8（时隙 15 s）。",
                 options = Protocol.entries,
                 selected = app.protocol,
                 onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
@@ -297,14 +288,13 @@ fun SettingsScreen(
                 signed = true,
                 subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
                     "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
-                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前；FT8 可到 ±2.5s，" +
-                    "FT4 的搜索窗只有 ±0.5s，偏移过大会解不出。",
+                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。",
                 onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
             )
             PrefDivider()
             PrefChoice(
                 title = "解码深度",
-                subtitle = "预设「快」＝下面的默认值（照搬 FT8CN「快速解码」：迭代 20 / 候选 120 / 单时隙上限 100）。" +
+                subtitle = "预设「快」＝下面的默认值。" +
                     "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
                     "「快」按钮可一键恢复上面 7 项的默认值（频率范围不随预设变化）。" +
                     "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
@@ -443,7 +433,36 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.4 高亮与提醒（docs/UI-MOBILE.md §29：颜色恒启用，开关全部取消） ----------
+        // ---------- 6.4 瀑布显示（固定阈值，可调；频谱页也可直接调） ----------
+        SettingsGroup("瀑布") {
+            PrefNote(
+                "瀑布强度按固定窗口映射到色带：低于噪声底＝深蓝，达到「底噪 + 动态范围」＝红，" +
+                    "不再随信号自适应。频谱页顶部同样可以直接调这两项。"
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "噪声底",
+                value = app.waterfallFloorDb,
+                range = WATERFALL_FLOOR_DB_RANGE,
+                step = 5,
+                unit = " dBFS",
+                subtitle = "低于此值的 bin 画成最深蓝（默认 -90 dBFS）。调高：噪声被压黑、信号对比更强。",
+                onChange = { v -> settings.update { it.copy(waterfallFloorDb = clampWaterfallFloorDb(v)) } },
+            )
+            PrefDivider()
+            PrefStepper(
+                title = "动态范围",
+                value = app.waterfallRangeDb,
+                range = WATERFALL_RANGE_DB_RANGE,
+                step = 5,
+                unit = " dB",
+                subtitle = "色带跨度（默认 50 dB）：窗口顶端 = 噪声底 + 本值，达到即画成红。" +
+                    "调大：弱信号更可见，但底色纹理更明显。",
+                onChange = { v -> settings.update { it.copy(waterfallRangeDb = clampWaterfallRangeDb(v)) } },
+            )
+        }
+
+        // ---------- 6.5 高亮与提醒（docs/Ft8Vox.md：颜色恒启用，开关全部取消） ----------
         SettingsGroup("高亮与提醒") {
             PrefNote(
                 "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
@@ -461,9 +480,9 @@ fun SettingsScreen(
             PrefDivider()
         }
 
-        // ---------- 6.5 外观：已随新竖屏外壳去掉（docs/UI-MOBILE.md §1：无亮/暗主题、无字体档位） ----------
+        // ---------- 6.6 外观：已随新竖屏外壳去掉（docs/Ft8Vox.md：无亮/暗主题、无字体档位） ----------
 
-        // ---------- 6.6 日志 ----------
+        // ---------- 6.7 日志 ----------
         SettingsGroup("日志") {
             PrefInfo(
                 title = "ADIF 路径",
@@ -495,7 +514,7 @@ fun SettingsScreen(
             )
         }
 
-        // ---------- 6.7 地图（原地图页浮层的三个显示开关，收进设置；docs/UI-MOBILE.md §16） ----------
+        // ---------- 6.8 地图（原地图页浮层的三个显示开关，收进设置；docs/Ft8Vox.md） ----------
         SettingsGroup("地图") {
             PrefSwitch(
                 title = "CQ 旗帜显示呼号",
@@ -682,7 +701,7 @@ private fun PrefNote(text: String) {
 /**
  * 开关行。
  *
- * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/UI.md §3.1）。
+ * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/Ft8Vox.md）。
  */
 @Composable
 private fun PrefSwitch(
@@ -705,7 +724,7 @@ private fun PrefSwitch(
     })
 }
 
-/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/UI-MOBILE.md §12：从旧操作页控制行搬来）。 */
+/** 手动输入 DX 呼号 / 网格并立即呼叫（docs/Ft8Vox.md：从旧操作页控制行搬来）。 */
 @Composable
 private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
     var dxCall by remember { mutableStateOf("") }
@@ -760,7 +779,7 @@ private fun ColorDot(color: Color) {
 }
 
 /**
- * 「颜色说明」图例（docs/UI-MOBILE.md §29）：列出每个颜色的含义。
+ * 「颜色说明」图例（docs/Ft8Vox.md）：列出每个颜色的含义。
  *
  * 这些颜色**全部固定启用**（原来的逐个开关已取消），所以这里既是说明、也是唯一的口径来源。
  */
@@ -785,7 +804,7 @@ private fun HighlightLegend() {
         LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
         LegendRow(BarNewGrid, "紫：新网格")
         LegendRow(BarNewEntity, "棕：新 DXCC / ITU / CQ 区域 / 新前缀")
-        LegendRow(BarNewCall, "粉：已关注的呼号")
+        LegendRow(BarNewCall, "粉：已跟踪的呼号")
 
         LegendSection("地图")
         LegendRow(MapLinkMine, "红线 / 红字：报文里有我的连线（我发出的 / 发给我的）")

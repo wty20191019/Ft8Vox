@@ -218,6 +218,31 @@ class MapModelTest {
     }
 
     @Test
+    fun cqFlagsCarryWorkedStatusForFlagColor() {
+        // §34：旗面颜色 = 通联状态（本波段 > 他波段 > 未通联）
+        val messages = listOf(
+            decoded("CQ JA1ABC PM95", slotUtcMs = 2000),
+            decoded("CQ DL1ABC JN48", slotUtcMs = 2000),
+            decoded("CQ K1ABC FN42", slotUtcMs = 2000),
+        )
+        val flags = MapModel.cqFlags(
+            messages = messages,
+            latestSlotOnly = true,
+            workedCalls = setOf("DL1ABC", "K1ABC"),
+            bandWorkedCalls = setOf("K1ABC"),
+        ).associateBy { it.call }
+        assertEquals(CqWorked.NONE, flags.getValue("JA1ABC").worked)
+        assertEquals(CqWorked.OTHER_BAND, flags.getValue("DL1ABC").worked)
+        assertEquals(CqWorked.THIS_BAND, flags.getValue("K1ABC").worked)
+    }
+
+    @Test
+    fun cqFlagsDefaultToNotWorked() {
+        val flags = MapModel.cqFlags(listOf(decoded("CQ JA1ABC PM95", slotUtcMs = 2000)))
+        assertEquals(CqWorked.NONE, flags.single().worked)
+    }
+
+    @Test
     fun latestSlotMsIgnoresZeroTimestamps() {
         assertEquals(
             2000L,

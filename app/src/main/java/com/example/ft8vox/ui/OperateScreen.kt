@@ -50,7 +50,7 @@ import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxTxRed
 
 /**
- * 操作页（docs/UI-MOBILE.md §3）：**控制行 + 解码表 + 常驻发射区**。
+ * 操作页（docs/Ft8Vox.md）：**控制行 + 解码表 + 常驻发射区**。
  *
  * 信息头/底部导航/状态条由 [MainShell] 统一提供，本页只负责「控制行 + 表格 + 发射区」。
  * 第五轮起无筛选 / 搜索（§20），解码表永远显示全部解码。
@@ -74,12 +74,13 @@ fun OperateScreen(
 
     val status by viewModel.status.collectAsState()
     val messages by viewModel.messages.collectAsState()
+    val txRecords by viewModel.txRecords.collectAsState()
     val worked by viewModel.workedIndex.collectAsState()
 
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 当前发射目标（点选解码行 / 左滑呼叫 / 详情「呼叫」设置）
     var targetCall by rememberSaveable { mutableStateOf<String?>(null) }
-    // 「关注列表 → 全部清除」的二次确认
+    // 「跟踪列表 → 全部清除」的二次确认
     var clearFollowConfirm by remember { mutableStateOf(false) }
 
     fun copyToClipboard(text: String) {
@@ -87,13 +88,14 @@ fun OperateScreen(
         cm.setPrimaryClip(ClipData.newPlainText("FT8 消息", text))
     }
 
-    // 高亮 + 忽略名单（docs/UI-MOBILE.md §20：操作页不再做筛选 / 搜索，解码表永远显示全部）
+    // 高亮 + 忽略名单（docs/Ft8Vox.md：操作页不再做筛选 / 搜索，解码表永远显示全部）
     val filter = DecodeFilterState(
         ignoredCalls = settings.ignoredCalls,
         followedCalls = settings.followCalls,
     )
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
-    val rows = remember(
+    // 接收解码行
+    val rxRows = remember(
         messages, filter, worked, status.myCall, status.qso.theirCall,
         status.txing, status.lastTxText, duplicateKeys,
     ) {
@@ -108,8 +110,10 @@ fun OperateScreen(
             DecodeRow(m, p, style)
         }
     }
+    // 与「我方发射行」按同一时间轴混排（docs/Ft8Vox.md）；两类共用一个 200 条上限。
+    val rows = remember(rxRows, txRecords) { mergeActivity(rxRows, txRecords) }
 
-    // ---- 自动翻到最新（docs/UI.md §3.3）----
+    // ---- 自动翻到最新（docs/Ft8Vox.md）----
     val listState = rememberLazyListState()
     var followNewest by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
@@ -122,7 +126,7 @@ fun OperateScreen(
             if (idx == 0) followNewest = true
         }
     }
-    val newestKey = rows.firstOrNull()?.let { it.msg.text + "@" + it.msg.slotUtcMs }
+    val newestKey = rows.firstOrNull()?.key
     LaunchedEffect(newestKey) {
         if (newestKey != null && followNewest && !listState.isScrollInProgress) {
             listState.animateScrollToItem(0)
@@ -130,7 +134,7 @@ fun OperateScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().padding(4.dp)) {
-        // ---- 表格上方只留一行：监听 / 清除 / 关注 / 时间告警 ----
+        // ---- 表格上方只留一行：监听 / 清除 / 跟踪 / 时间告警 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -144,10 +148,10 @@ fun OperateScreen(
             JtdxButton(
                 text = "清除",
                 onClick = { viewModel.clearMessages() },
-                enabled = messages.isNotEmpty(),
+                enabled = messages.isNotEmpty() || txRecords.isNotEmpty(),
             )
             JtdxButton(
-                text = "关注 ${settings.followCalls.size}",
+                text = "跟踪 ${settings.followCalls.size}",
                 onClick = { onFollowOpenChange(true) },
                 active = followOpen,
             )
@@ -159,7 +163,7 @@ fun OperateScreen(
             }
         }
 
-        // 表头已去掉（两行制里含义自明，省一行高度，docs/UI-MOBILE.md §14）
+        // 表头已去掉（两行制里含义自明，省一行高度，docs/Ft8Vox.md）
 
         // ---- 解码表格（竖屏整宽）----
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -224,7 +228,7 @@ fun OperateScreen(
 
         Spacer(Modifier.height(3.dp))
 
-        // ---- 底发射区（竖屏常驻，docs/UI-MOBILE.md §3.4）----
+        // ---- 底发射区（竖屏常驻，docs/Ft8Vox.md）----
         TxPanel(
             status = status,
             settings = settings,
@@ -241,7 +245,7 @@ fun OperateScreen(
     if (followOpen) {
         AlertDialog(
             onDismissRequest = { onFollowOpenChange(false) },
-            title = { Text("关注呼号列表") },
+            title = { Text("跟踪 CQ 列表") },
             text = {
                 Box(Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 320.dp)) {
                     FollowListPanel(
@@ -266,8 +270,8 @@ fun OperateScreen(
     if (clearFollowConfirm) {
         AlertDialog(
             onDismissRequest = { clearFollowConfirm = false },
-            title = { Text("清空关注名单") },
-            text = { Text("将移除全部 ${settings.followCalls.size} 个关注呼号（手动关注与自动收录的都会清掉），不可撤销。") },
+            title = { Text("清空跟踪名单") },
+            text = { Text("将移除全部 ${settings.followCalls.size} 个跟踪呼号，不可撤销。") },
             confirmButton = {
                 Button(
                     onClick = {

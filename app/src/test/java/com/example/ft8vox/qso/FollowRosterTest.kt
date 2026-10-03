@@ -6,7 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 「自动收录 CQ 台」的 JVM 单测（见 `FollowRoster`）。 */
+/** 「自动跟踪 CQ（本波段）」自动收录的 JVM 单测（见 `FollowRoster`）。 */
 class FollowRosterTest {
 
     private fun decoded(text: String) = DecodeResult(
@@ -27,7 +27,7 @@ class FollowRosterTest {
                 decoded("CQ W1AW FN42"),
                 decoded("DL1ABC W1AW -12"), // 不是 CQ
                 decoded("CQ F4FSY JN25"), // 自己
-                decoded("CQ JA1ABC PM95"), // 已在关注名单
+                decoded("CQ JA1ABC PM95"), // 已在跟踪名单
                 decoded("CQ XX1XXX AA00"), // 已忽略
                 decoded("CQ W1AW FN42"), // 同批重复
                 decoded("73"),
@@ -87,7 +87,7 @@ class FollowRosterTest {
 
     @Test
     fun mergeEvictsOldestAutoCallBeyondCapButKeepsManual() {
-        // 手动关注的 M 不在 order 里 ⇒ 永远不淘汰
+        // 手动跟踪的 M 不在 order 里 ⇒ 永远不淘汰
         val first = FollowRoster.merge(setOf("M"), emptyList(), listOf("AAA111"), max = 2)
         assertEquals(setOf("M", "AAA111"), first.first)
         assertEquals(listOf("AAA111"), first.second)
@@ -96,7 +96,7 @@ class FollowRosterTest {
         assertEquals(setOf("M", "AAA111", "BBB222"), second.first)
         assertEquals(listOf("BBB222", "AAA111"), second.second)
 
-        // 再加一个：最早的 AAA111 被淘汰，手动关注的 M 仍在
+        // 再加一个：最早的 AAA111 被淘汰，手动跟踪的 M 仍在
         val third = FollowRoster.merge(second.first, second.second, listOf("CCC333"), max = 2)
         assertEquals(setOf("M", "BBB222", "CCC333"), third.first)
         assertEquals(listOf("CCC333", "BBB222"), third.second)

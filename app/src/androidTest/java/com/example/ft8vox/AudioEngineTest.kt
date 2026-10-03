@@ -75,18 +75,6 @@ class AudioEngineTest {
         }
     }
 
-    /** FT4 时隙应为 7500 ms。 */
-    @Test
-    fun ft4SlotLength() {
-        AudioEngine.initialize(Ft8Config(protocol = Protocol.FT4))
-        try {
-            val state = AudioEngine.state()
-            assertEquals("FT4 时隙应为 7500 ms", 7500L, state!!.slotMs)
-        } finally {
-            AudioEngine.release()
-        }
-    }
-
     /**
      * 端到端验证实时重采样链路：12 kHz 的 FT8 信号升到 48 kHz（模拟设备采样率）
      * 再降回 12 kHz 后，仍应能被解码器解出。
