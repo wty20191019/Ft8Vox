@@ -668,6 +668,7 @@ object AudioEngine {
 
         private fun buildDecodeConfig(): Ft8DecodeConfig {
             val p = decodeParams
+            val cores = Runtime.getRuntime().availableProcessors()
             return Ft8DecodeConfig(
                 fMinHz = decodeConfig.fMinHz,
                 fMaxHz = decodeConfig.fMaxHz,
@@ -679,9 +680,10 @@ object AudioEngine {
                 ldpcIterations = p.ldpcIterations,
                 decodeDepth = p.passes,
                 enableSubtract = p.passes > 1,
-                numThreads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
+                numThreads = decodeThreadsFor(cores),
                 returnDuplicates = false,
                 osdDepth = 2,
+                numBands = decodeBandsFor(cores),
             )
         }
 

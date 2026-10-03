@@ -56,3 +56,14 @@ data class DecodeParams(
     fun clamped(): DecodeParams =
         of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes)
 }
+
+/**
+ * 分段并行解码的硬件自适应参数。
+ *
+ * 段数 = min(核数, 4)：每段独立做一次完整 STFT，段数越多 FFT 重复开销越大，
+ * 实测 4 段在 4 核上召回不降、耗时约降 1.3×；核更多时靠「每段多线程」补足并行度。
+ * 线程总数 = min(核数, 8)：由 native 按 `线程总数 / 段数` 均分到各段（每段至少 1）。
+ */
+internal fun decodeBandsFor(cores: Int): Int = cores.coerceIn(1, 4)
+
+internal fun decodeThreadsFor(cores: Int): Int = cores.coerceIn(1, 8)

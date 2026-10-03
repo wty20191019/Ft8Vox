@@ -146,6 +146,7 @@ object Ft8Engine {
 
     private fun decodeConfig(): Ft8DecodeConfig {
         val p = decodeParams
+        val cores = Runtime.getRuntime().availableProcessors()
         return Ft8DecodeConfig(
             fMinHz = config.fMin,
             fMaxHz = config.fMax,
@@ -157,8 +158,9 @@ object Ft8Engine {
             ldpcIterations = p.ldpcIterations,
             decodeDepth = p.passes,
             enableSubtract = p.passes > 1,
-            numThreads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4),
+            numThreads = decodeThreadsFor(cores),
             osdDepth = 2,
+            numBands = decodeBandsFor(cores),
         )
     }
 

@@ -93,6 +93,7 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
     cfg->return_duplicates = false;
     cfg->osd_depth = 2; /**< 默认启用 OSD 2 阶（历史数据：+14 命中 / extra 3.3%） */
     cfg->enable_llr_refine = false; /**< P2.3 实验项，默认关闭 */
+    cfg->num_bands = 1; /**< P3：默认不分段，保持既有单段行为 */
 }
 
 void ft8_encode_config_default(ft8_encode_config_t* cfg)
@@ -897,9 +898,12 @@ static int decode_slot_multipass(monitor_t* mon, const float* samples, int num_s
 /*  一次性解码                                                                */
 /* ========================================================================= */
 
-int ft8_decode_slot(const float* samples, int num_samples,
-                    const ft8_decode_config_t* cfg,
-                    ft8_message_result_t* out, int max_out)
+/* 单频段解码：现行整段逻辑（原 ft8_decode_slot 主体）。
+ * 注意：此函数不再调用 ft8_hash_cleanup —— 分段模式下多段并发会重复老化哈希表，
+ * 统一由外层 ft8_decode_slot() 每时隙清理一次。 */
+static int decode_slot_single(const float* samples, int num_samples,
+                              const ft8_decode_config_t* cfg,
+                              ft8_message_result_t* out, int max_out)
 {
     if (!samples || !cfg || num_samples <= 0)
     {
@@ -935,7 +939,184 @@ int ft8_decode_slot(const float* samples, int num_samples,
     }
 
     monitor_free(&mon);
-    ft8_hash_cleanup(10);
+    return result;
+}
+
+/* ========================================================================= */
+/*  P3：按频率分段并行解码                                                     */
+/* ========================================================================= */
+
+#define FT8_MAX_BANDS 8             /**< 最大分段数（受总 FFT 开销约束） */
+#define FT8_BAND_OVERLAP_HZ 100.0f  /**< 相邻频段重叠带宽：> FT8 信号占用 50 Hz，
+                                     *   保证落在边界上的信号至少被一段完整覆盖。 */
+#define FT8_BAND_MIN_WIDTH_HZ 200.0f /**< 单段最小带宽：再窄则 FFT 重复开销得不偿失。 */
+
+typedef struct
+{
+    const float* samples;
+    int num_samples;
+    ft8_decode_config_t cfg; /**< 本段配置（f_min/f_max/num_threads 已改写） */
+    ft8_message_result_t* out;
+    int max_out;
+    int count; /**< 本段输出条数；<0 为 FT8 错误码 */
+} band_arg_t;
+
+static void band_worker(void* arg)
+{
+    band_arg_t* b = (band_arg_t*)arg;
+    b->count = decode_slot_single(b->samples, b->num_samples, &b->cfg, b->out, b->max_out);
+}
+
+/* 把 [f_min, f_max] 拆成 num_bands 个带宽近似、带重叠的频段并行解码，再合并去重。 */
+static int decode_slot_bands(const float* samples, int num_samples,
+                             const ft8_decode_config_t* cfg, int num_bands,
+                             ft8_message_result_t* out, int max_out)
+{
+    if (num_bands < 2)
+        num_bands = 2;
+    if (num_bands > FT8_MAX_BANDS)
+        num_bands = FT8_MAX_BANDS;
+
+    const float fmin = cfg->f_min_hz;
+    const float fmax = cfg->f_max_hz;
+    if (!(fmax > fmin + 1.0f))
+        return decode_slot_single(samples, num_samples, cfg, out, max_out);
+
+    /* 段数受总带宽限制，避免出现极窄段导致 FFT 重复开销过大 */
+    int max_by_span = (int)((fmax - fmin) / FT8_BAND_MIN_WIDTH_HZ);
+    if (max_by_span < 1)
+        max_by_span = 1;
+    if (num_bands > max_by_span)
+        num_bands = max_by_span;
+    if (num_bands < 2)
+        return decode_slot_single(samples, num_samples, cfg, out, max_out);
+
+    /* 线程预算按段数均分：每段至少 1 个线程 */
+    int per_band_threads = cfg->num_threads / num_bands;
+    if (per_band_threads < 1)
+        per_band_threads = 1;
+
+    band_arg_t* args = (band_arg_t*)calloc((size_t)num_bands, sizeof(band_arg_t));
+    ft8_thread_t** threads = (ft8_thread_t**)calloc((size_t)num_bands, sizeof(ft8_thread_t*));
+    if (!args || !threads)
+    {
+        free(args);
+        free(threads);
+        set_error("分段解码资源分配失败");
+        return FT8_ERR_NOMEM;
+    }
+
+    const float span = fmax - fmin;
+    const float base = span / (float)num_bands;
+    const float half = FT8_BAND_OVERLAP_HZ * 0.5f;
+
+    bool alloc_ok = true;
+    for (int i = 0; i < num_bands; ++i)
+    {
+        args[i].cfg = *cfg;
+        float lo = fmin + base * (float)i - ((i > 0) ? half : 0.0f);
+        float hi = fmin + base * (float)(i + 1) + ((i < num_bands - 1) ? half : 0.0f);
+        if (lo < 0.0f)
+            lo = 0.0f;
+        args[i].cfg.f_min_hz = lo;
+        args[i].cfg.f_max_hz = hi;
+        args[i].cfg.num_threads = per_band_threads;
+        args[i].samples = samples;
+        args[i].num_samples = num_samples;
+        args[i].max_out = max_out;
+        args[i].count = 0;
+        args[i].out = (ft8_message_result_t*)malloc(
+            (size_t)(max_out > 0 ? max_out : 1) * sizeof(ft8_message_result_t));
+        if (!args[i].out)
+            alloc_ok = false;
+    }
+
+    int rc = FT8_OK;
+    if (!alloc_ok)
+    {
+        rc = FT8_ERR_NOMEM;
+    }
+    else
+    {
+        for (int i = 0; i < num_bands; ++i)
+        {
+            threads[i] = ft8_thread_create(band_worker, &args[i]);
+            if (!threads[i])
+                band_worker(&args[i]); /* 线程创建失败：当前线程补跑该段 */
+        }
+        for (int i = 0; i < num_bands; ++i)
+        {
+            if (threads[i])
+            {
+                ft8_thread_join(threads[i]);
+                ft8_thread_free(threads[i]);
+            }
+        }
+        for (int i = 0; i < num_bands; ++i)
+        {
+            if (args[i].count < 0)
+            {
+                rc = args[i].count; /* 任一段失败则整体失败，保留其错误码 */
+                break;
+            }
+        }
+    }
+
+    int total = 0;
+    if (rc == FT8_OK)
+    {
+        if (!out || max_out <= 0)
+        {
+            /* 仅查询条数：累加（重叠段可能重复计数，调用方一般不用此路径） */
+            for (int i = 0; i < num_bands; ++i)
+                total += args[i].count;
+        }
+        else
+        {
+            /* 合并去重：按解码文本去重，保留首次出现（段序即频段从低到高） */
+            for (int i = 0; i < num_bands && total < max_out; ++i)
+            {
+                for (int k = 0; k < args[i].count && total < max_out; ++k)
+                {
+                    const ft8_message_result_t* r = &args[i].out[k];
+                    bool dup = false;
+                    for (int j = 0; j < total; ++j)
+                    {
+                        if (strcmp(out[j].text, r->text) == 0)
+                        {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (!dup)
+                        out[total++] = *r;
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < num_bands; ++i)
+        free(args[i].out);
+    free(args);
+    free(threads);
+    return (rc == FT8_OK) ? total : rc;
+}
+
+int ft8_decode_slot(const float* samples, int num_samples,
+                    const ft8_decode_config_t* cfg,
+                    ft8_message_result_t* out, int max_out)
+{
+    if (!samples || !cfg || num_samples <= 0)
+    {
+        set_error("解码输入参数非法");
+        return FT8_ERR_ARG;
+    }
+
+    int result = (cfg->num_bands > 1)
+                     ? decode_slot_bands(samples, num_samples, cfg, cfg->num_bands, out, max_out)
+                     : decode_slot_single(samples, num_samples, cfg, out, max_out);
+
+    ft8_hash_cleanup(10); /* 每个时隙只老化一次，避免分段并发重复老化 */
     return result;
 }
 
