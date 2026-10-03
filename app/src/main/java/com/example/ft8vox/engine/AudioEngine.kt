@@ -241,6 +241,12 @@ object AudioEngine {
         private var running = false
         private var captureThread: Thread? = null
         private var captureRate = DECODE_RATE
+        /** 最近一次成功打开的录音源与采样格式（诊断用）。 */
+        private var captureSource = MediaRecorder.AudioSource.MIC
+        private var captureEncoding = AudioFormat.ENCODING_PCM_16BIT
+        /** 采集诊断日志节流。 */
+        private var diagBlocks = 0L
+        private var diagLastLogMs = 0L
         @Volatile
         private var inSlot = false
         @Volatile
@@ -312,11 +318,26 @@ object AudioEngine {
 
         // ---- 采集 ----
 
+        /**
+         * 重新武装时隙对齐：丢弃到下一个 UTC 时隙边界后再开始累积 15 s 窗口。
+         *
+         * 只在采集线程（建流/换源）调用；`alignRemaining` 的单位是**重采样后的 12 kHz 样本**，
+         * 因此必须用 [DECODE_RATE] 换算（详见 [startCapture] 里的说明）。
+         */
+        private fun armAlignment() {
+            val now = System.currentTimeMillis() - slotOffsetMs
+            val posInSlot = ((now % SLOT_MS) + SLOT_MS) % SLOT_MS
+            alignRemaining = (((SLOT_MS - posInSlot) % SLOT_MS) * DECODE_RATE / 1000).toInt()
+            aligned = false
+            slotBuf.fill(0f)
+            fedSamples = 0
+        }
+
         @SuppressLint("MissingPermission")
         fun startCapture(preferredRate: Int, deviceId: Int): Int {
             if (running) return captureRate
             val rate = preferredRate.takeIf { it > 0 } ?: 48000
-            val rec = try {
+            val opened = try {
                 openRecord(rate, deviceId)
             } catch (e: SecurityException) {
                 Log.w(TAG, "无录音权限", e)
@@ -324,59 +345,105 @@ object AudioEngine {
             } catch (e: Exception) {
                 Log.w(TAG, "创建采集流失败", e)
                 return -2
-            }
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                rec.release()
-                return -3
-            }
-            captureRate = rec.sampleRate
-            // 对齐到下一个时隙边界
-            val now = System.currentTimeMillis() - slotOffsetMs
-            val posInSlot = ((now % SLOT_MS) + SLOT_MS) % SLOT_MS
-            alignRemaining = (((SLOT_MS - posInSlot) % SLOT_MS) * captureRate / 1000).toInt()
-            aligned = false
-            slotBuf.fill(0f)
-            fedSamples = 0
+            } ?: return -3
+            captureRate = opened.rec.sampleRate
+            // 对齐到下一个时隙边界（单位与说明见 armAlignment）。
+            // 关键：alignRemaining 是作用在**重采样后的 12 kHz 样本**（onSamples 里的 at12k）上，
+            // 因此必须按 DECODE_RATE 换算，绝不能用设备采样率 captureRate——
+            // 否则 48 kHz 设备会把待丢弃样本数放大 4 倍，导致解码窗口停在随机相位、
+            // 且之后一直保持该错位（表现为「有电平、有解码耗时，却一条都解不出」）。
+            armAlignment()
             droppedSamples = 0
             voxLevelDb = -100f
+            diagBlocks = 0L
+            diagLastLogMs = 0L
             waterfall.reset()
             running = true
-            captureThread = Thread({ captureLoop(rec) }, "ft8-capture").apply {
+            captureThread = Thread({ captureLoop(opened) }, "ft8-capture").apply {
                 isDaemon = true
                 start()
             }
             return captureRate
         }
 
+        /** 候选录音源顺序：优先绕开系统语音处理（降噪 / AGC / 高通）。 */
+        private val captureSources = intArrayOf(
+            MediaRecorder.AudioSource.UNPROCESSED,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
+        )
+
+        /** 已打开的采集流及其来源信息。 */
+        private class OpenedRecord(
+            val rec: AudioRecord,
+            val sourceIndex: Int,
+            val source: Int,
+            val encoding: Int,
+            val deviceId: Int,
+        )
+
+        /**
+         * 从 [startIndex] 起依次打开采集流。
+         *
+         * FT8 是纯数据信号，**必须优先绕开系统的语音处理链路**（降噪 / AGC / 高通）：
+         * vivo 等机型在 `MIC` 预设下会把弱信号当噪声抑制掉，现象就是「收不到音频」。
+         * 因此按 `UNPROCESSED → VOICE_RECOGNITION → MIC` 依次尝试（与旧 native 引擎一致），
+         * 每种预设再按 `FLOAT → 16-bit` 回退采样格式。
+         *
+         * 建流本身很快；「能建流但恒返回全 0」由采集线程里的静音检测处理（见 [readStream]）。
+         */
         @SuppressLint("MissingPermission")
-        private fun openRecord(rate: Int, deviceId: Int): AudioRecord {
-            val minBuf = AudioRecord.getMinBufferSize(
-                rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT,
-            )
-            val bufBytes = max(minBuf, rate / 10 * 4) * 2
-            val floatRec = buildRecord(rate, AudioFormat.ENCODING_PCM_FLOAT, bufBytes)
-            if (floatRec != null && floatRec.state == AudioRecord.STATE_INITIALIZED) {
-                applyInputDevice(floatRec, deviceId)
-                floatRec.startRecording()
-                return floatRec
+        private fun openRecord(rate: Int, deviceId: Int, startIndex: Int = 0): OpenedRecord? {
+            for (i in startIndex until captureSources.size) {
+                val source = captureSources[i]
+                for (encoding in intArrayOf(
+                    AudioFormat.ENCODING_PCM_FLOAT,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                )) {
+                    val rec = tryOpenRecord(rate, source, encoding, deviceId) ?: continue
+                    captureSource = source
+                    captureEncoding = encoding
+                    Log.i(
+                        TAG,
+                        "采集流已打开：source=$source encoding=${encodingName(encoding)} " +
+                            "rate=$rate device=$deviceId",
+                    )
+                    return OpenedRecord(rec, i, source, encoding, deviceId)
+                }
+                Log.w(TAG, "录音源不可用：source=$source（继续尝试下一个）")
             }
-            floatRec?.release()
-            // 回退 16-bit PCM
-            val min16 = AudioRecord.getMinBufferSize(
-                rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-            )
-            val buf16 = max(min16, rate / 10 * 2) * 2
-            val rec = buildRecord(rate, AudioFormat.ENCODING_PCM_16BIT, buf16)
-                ?: throw IllegalStateException("AudioRecord 创建失败")
-            applyInputDevice(rec, deviceId)
-            rec.startRecording()
-            return rec
+            return null
         }
 
+        /** 用指定录音源 + 采样格式尝试建流并启动；失败返回 null（不抛异常）。 */
         @SuppressLint("MissingPermission")
-        private fun buildRecord(rate: Int, encoding: Int, bufBytes: Int): AudioRecord? = try {
+        private fun tryOpenRecord(rate: Int, source: Int, encoding: Int, deviceId: Int): AudioRecord? {
+            val bytesPerSample = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+            val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, encoding)
+            val bufBytes = max(minBuf, rate / 10 * bytesPerSample) * 2
+            val rec = buildRecord(rate, source, encoding, bufBytes) ?: return null
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                runCatching { rec.release() }
+                return null
+            }
+            applyInputDevice(rec, deviceId)
+            return try {
+                rec.startRecording()
+                rec
+            } catch (e: Exception) {
+                Log.w(TAG, "startRecording 失败（source=$source encoding=$encoding）", e)
+                runCatching { rec.release() }
+                null
+            }
+        }
+
+        private fun encodingName(encoding: Int): String =
+            if (encoding == AudioFormat.ENCODING_PCM_FLOAT) "FLOAT" else "I16"
+
+        @SuppressLint("MissingPermission")
+        private fun buildRecord(rate: Int, source: Int, encoding: Int, bufBytes: Int): AudioRecord? = try {
             AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.MIC)
+                .setAudioSource(source)
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(encoding)
@@ -387,7 +454,7 @@ object AudioEngine {
                 .setBufferSizeInBytes(bufBytes)
                 .build()
         } catch (e: Exception) {
-            Log.w(TAG, "AudioRecord.Builder 失败（encoding=$encoding）", e)
+            Log.w(TAG, "AudioRecord.Builder 失败（source=$source encoding=$encoding）", e)
             null
         }
 
@@ -397,12 +464,54 @@ object AudioEngine {
             runCatching { rec.setPreferredDevice(dev) }
         }
 
-        private fun captureLoop(rec: AudioRecord) {
-            // API 23+：AudioRecord.format 返回 AudioFormat，需取其 encoding 判断采样格式
-            val isFloat = rec.format.encoding == AudioFormat.ENCODING_PCM_FLOAT
+        /**
+         * 采集线程：读取当前流；若检测到「恒返回全 0」则自动回退到下一个录音源。
+         *
+         * 静音检测放在采集线程而不是建流时同步探测，避免在主线程阻塞（最坏接近 ANR）。
+         */
+        private fun captureLoop(first: OpenedRecord) {
+            var opened: OpenedRecord? = first
+            while (running && opened != null) {
+                val cur = opened
+                val silent = readStream(cur)
+                val rate = cur.rec.sampleRate
+                runCatching { cur.rec.stop() }
+                runCatching { cur.rec.release() }
+                opened = null
+                if (!running || !silent) break
+                Log.w(TAG, "录音源 ${cur.source} 恒返回全 0，回退下一个源")
+                opened = openRecord(rate, cur.deviceId, cur.sourceIndex + 1)
+                opened?.let {
+                    captureRate = it.rec.sampleRate
+                    // 换源后新流的起点与墙钟不再连续，重新对齐，避免把旧流的采样计数偏差带进来
+                    armAlignment()
+                }
+                if (running && opened == null) {
+                    Log.e(TAG, "所有录音源均返回静音，采集无法继续（请检查系统麦克风权限/隐私开关）")
+                }
+            }
+            // 停止请求恰好在换源建流之后到达时，补一次释放，避免泄漏
+            opened?.let {
+                runCatching { it.rec.stop() }
+                runCatching { it.rec.release() }
+            }
+        }
+
+        /**
+         * 读取一个采集流，直到停止 / 出错 / 开头静音检测窗口内持续全 0。
+         *
+         * @return true 表示检测到「恒返回全 0」（需要换源）；false 表示正常结束或致命错误。
+         */
+        private fun readStream(opened: OpenedRecord): Boolean {
+            val rec = opened.rec
+            val isFloat = opened.encoding == AudioFormat.ENCODING_PCM_FLOAT
             val chunk = max(rec.sampleRate / 10, 1024)
             val floatBuf = FloatArray(chunk)
             val shortBuf = ShortArray(chunk)
+            // 前 ~1 s 做静音检测：真麦克风即使安静也有量化底噪，整段全 0 只可能是源被静音
+            var probeRemaining = rec.sampleRate
+            var probeNonZero = false
+            Log.i(TAG, "采集线程启动：encoding=${encodingName(opened.encoding)} chunk=$chunk")
             try {
                 while (running) {
                     val n = if (isFloat) {
@@ -410,16 +519,33 @@ object AudioEngine {
                     } else {
                         rec.read(shortBuf, 0, shortBuf.size, AudioRecord.READ_BLOCKING)
                     }
-                    if (n <= 0) continue
+                    if (n < 0) {
+                        Log.w(TAG, "AudioRecord.read 返回错误码 $n")
+                        // ERROR_DEAD_OBJECT：流已失效，尝试换源；其它错误直接结束
+                        return n == AudioRecord.ERROR_DEAD_OBJECT
+                    }
+                    if (n == 0) {
+                        Thread.sleep(5)
+                        continue
+                    }
+                    if (probeRemaining > 0) {
+                        if (isFloat) {
+                            for (i in 0 until n) if (floatBuf[i] != 0f) { probeNonZero = true; break }
+                        } else {
+                            for (i in 0 until n) if (shortBuf[i].toInt() != 0) { probeNonZero = true; break }
+                        }
+                        probeRemaining -= n
+                        if (probeRemaining <= 0 && !probeNonZero) return true
+                    }
                     val samples = if (isFloat) floatBuf else shortToFloat(shortBuf, n)
                     onSamples(samples, n)
                 }
+            } catch (e: InterruptedException) {
+                // 正常停止
             } catch (e: Exception) {
                 Log.w(TAG, "采集循环异常", e)
-            } finally {
-                runCatching { rec.stop() }
-                runCatching { rec.release() }
             }
+            return false
         }
 
         private fun shortToFloat(src: ShortArray, n: Int): FloatArray {
@@ -442,6 +568,19 @@ object AudioEngine {
             val rms = sqrt(sumSq / n.coerceAtLeast(1)).toFloat().coerceAtLeast(1e-5f)
             val db = (20f * log10(rms)).coerceIn(-100f, 0f)
             voxLevelDb = voxLevelDb * 0.8f + db * 0.2f
+
+            // 诊断：每 5 s 打一次录音源/格式/电平，便于真机上区分「没数据」与「被降噪压制」
+            diagBlocks++
+            val nowDiagMs = System.currentTimeMillis()
+            if (nowDiagMs - diagLastLogMs >= 5000) {
+                diagLastLogMs = nowDiagMs
+                Log.i(
+                    TAG,
+                    "采集诊断：源=$captureSource 格式=" +
+                        "${if (captureEncoding == AudioFormat.ENCODING_PCM_FLOAT) "FLOAT" else "I16"} " +
+                        "电平=%.1f dBFS 块=%d".format(db, diagBlocks),
+                )
+            }
 
             val at12k = if (captureRate == DECODE_RATE) raw else Resampler.convert(raw, captureRate, DECODE_RATE)
 
