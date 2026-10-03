@@ -623,10 +623,14 @@ object AudioEngine {
 
         private fun submitDecode(snapshot: FloatArray, atSlotMs: Long) {
             val cfg = buildDecodeConfig()
+            // 「单时隙上限」(maxDecoded) 在 Kotlin 侧截断：native 的 ft8_decode_config_t 没有该字段，
+            // JNI 固定用 FT8_MAX_RESULTS(256) 作为输出上限（见 ft8_jni.cpp），因此必须在这里落地，
+            // 否则设置页那一项是空转。
+            val maxDecoded = decodeParams.maxDecoded
             decoder.execute {
                 val t0 = System.currentTimeMillis()
                 val messages: List<Ft8Message> = try {
-                    Ft8Native.decode(snapshot, cfg)
+                    Ft8Native.decode(snapshot, cfg).take(maxDecoded)
                 } catch (e: Exception) {
                     Log.w(TAG, "时隙解码异常", e)
                     emptyList()

@@ -96,7 +96,7 @@ object Ft8Engine {
         if (bufferLen <= 0) return emptyList()
         val samples = if (bufferLen == buffer.size) buffer else buffer.copyOf(bufferLen)
         return runCatching {
-            Ft8Native.decode(samples, decodeConfig()).map(::toDecodeResult)
+            Ft8Native.decode(samples, decodeConfig()).map(::toDecodeResult).take(decodeParams.maxDecoded)
         }.getOrDefault(emptyList())
     }
 
