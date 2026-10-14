@@ -153,21 +153,24 @@ private val COL_DT = 38.dp
  *
  * 两行制里报文固定占**第一行**：一行放不下「呼号+网格+报告」时**逐级缩小字号**
  * （12sp → 9sp）塞进去，而不是省略号截断（长报文少见，缩一点比看不清好）。
- * 第二行的「声音频率 · 国家 · 距离」由 [DecodeTableRow] 单独画。
+ *
+ * 字号由调用方持有（[fontSizeSp] / [onFontSize]）而非本函数内部状态：第二行的「国家行」
+ * 要用**同一字号**渲染，才能对齐到报文里各自呼号的列（见 [CallCountry.grid]）。
  */
 @Composable
 private fun InfoText(
     text: AnnotatedString,
     color: Color,
     decoration: TextDecoration?,
+    fontSizeSp: Int,
+    onFontSize: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var fontSize by remember(text) { mutableStateOf(12) }
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium.copy(
             fontFamily = FontFamily.Monospace,
-            fontSize = fontSize.sp,
+            fontSize = fontSizeSp.sp,
         ),
         color = color,
         textDecoration = decoration,
@@ -175,7 +178,7 @@ private fun InfoText(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
         onTextLayout = { layout ->
-            if (layout.hasVisualOverflow && fontSize > 9) fontSize -= 1
+            if (layout.hasVisualOverflow && fontSizeSp > 9) onFontSize(fontSizeSp - 1)
         },
     )
 }
@@ -322,18 +325,11 @@ private fun DecodeTableRow(
     val msgBase = textColor.copy(alpha = alpha)
     val msgColor = decodeMessageColor(style, msgBase)
     val msgCallColor = if (style.toMe) msgColor else VoxError
-    // 第二行：声音频率 · 每个呼号·国家 · 距离（单项之间只留一个空格，docs/Ft8Vox.md）
-    // 国家按报文中各自的呼号分别标注（如 `VK4BLE·澳大利亚 OH8JK·芬兰`），
-    // 未收录进 DXCC 表的呼号不占位（见 qso/CallCountry.kt）。
-    val metaLine = remember(row, myGrid) {
-        val countries = CallCountry.segment(row.parsed)
-        val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
-        buildString {
-            append("${msg.df}Hz")
-            if (countries.isNotEmpty()) append(" $countries")
-            distKm?.let { append(String.format(Locale.US, " %.0fkm", it)) }
-        }
-    }
+    // 第二行：声音频率（左）· 国家（各自对齐上一行的呼号）· 距离（贴最右）
+    val countries = remember(row) { CallCountry.grid(row.parsed) }
+    val distKm = remember(row, myGrid) { Geo.betweenGrids(myGrid, row.parsed.grid)?.first }
+    // 报文列当前字号（12sp 起、放不下逐级缩到 9sp）：第二行的国家行要与它同字号对齐
+    var msgFontSp by remember(row) { mutableStateOf(12) }
 
     val density = LocalDensity.current
     val maxSwipe = with(density) { 140.dp.toPx() }
@@ -462,6 +458,8 @@ private fun DecodeTableRow(
                         text = annotatedMessage(msg.text, myCall, msgCallColor),
                         color = msgColor,
                         decoration = if (style.workedThisBand) workedDecoration else null,
+                        fontSizeSp = msgFontSp,
+                        onFontSize = { msgFontSp = it },
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
                     // 行尾只保留「未通联分区」的红框字母标志（照 FT8CN 手册）：
@@ -470,15 +468,37 @@ private fun DecodeTableRow(
                     if (style.newEntity) ZoneBadge("D")
                     if (style.newItu) ZoneBadge("I")
                 }
-                // 声音频率 · 每个呼号·国家 · 距离
-                Text(
-                    metaLine,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = textColor.copy(alpha = 0.6f * alpha),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 2.dp),
-                )
+                // 第二行：声音频率（左）+ 国家（对齐上面各自的呼号）+ 距离（贴最右）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${msg.df}Hz",
+                        style = mono(MaterialTheme.typography.labelSmall),
+                        color = textColor.copy(alpha = 0.6f * alpha),
+                        maxLines = 1,
+                        modifier = Modifier.width(COL_SLOT + COL_UTC + COL_SNR + COL_DT),
+                    )
+                    // 国家行：与报文列同起点、同字号，空格按报文里的列位置补齐（CallCountry.grid）
+                    Text(
+                        countries,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = msgFontSp.sp,
+                        ),
+                        color = textColor.copy(alpha = 0.6f * alpha),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                    distKm?.let { km ->
+                        Text(
+                            String.format(Locale.US, "%.0fkm", km),
+                            style = mono(MaterialTheme.typography.labelSmall),
+                            color = textColor.copy(alpha = 0.6f * alpha),
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                }
             }
         }
 
