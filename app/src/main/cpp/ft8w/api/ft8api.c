@@ -94,6 +94,7 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
     cfg->osd_depth = 2; /**< 默认启用 OSD 2 阶（历史数据：+14 命中 / extra 3.3%） */
     cfg->enable_llr_refine = false; /**< P2.3 实验项，默认关闭 */
     cfg->num_bands = 1; /**< P3：默认不分段，保持既有单段行为 */
+    cfg->global_candidates = true; /**< P3.1：分段时默认「全局择优」分配候选名额 */
 }
 
 void ft8_encode_config_default(ft8_encode_config_t* cfg)
@@ -981,10 +982,486 @@ static void band_worker(void* arg)
     b->count = decode_slot_single(b->samples, b->num_samples, &b->cfg, b->out, b->max_out);
 }
 
+/* ---- P3.1：候选全局择优（各段只搜候选 → 全局去重排序取前 N → 按段分发解码） ---- */
+
+/** 第 i 段的频率边界（两条候选分配路径共用同一套边界公式）。 */
+static void band_bounds(float fmin, float fmax, int num_bands, int i, float* lo, float* hi)
+{
+    const float base = (fmax - fmin) / (float)num_bands;
+    const float half = FT8_BAND_OVERLAP_HZ * 0.5f;
+    *lo = fmin + base * (float)i - ((i > 0) ? half : 0.0f);
+    *hi = fmin + base * (float)(i + 1) + ((i < num_bands - 1) ? half : 0.0f);
+    if (*lo < 0.0f)
+        *lo = 0.0f;
+}
+
+/** 全局择优时每段的候选池下限。池子越大越不容易在「进全局排名前」先丢人；
+ *  候选扫描成本与池子大小无关，池子只影响堆操作（log n）与内存。 */
+#define FT8_GLOBAL_POOL_MIN 256
+
+/** 同一个信号最多保留几个候选代表。留 ≥2 是因为同步得分只是代理指标：
+ *  得分最高的那个副本不一定能解出（差半个 sub 格可能对齐更好）。 */
+#define FT8_GLOBAL_CLUSTER_KEEP 3
+
+/** 带绝对频率/时间的候选：跨段合并、去重、排序用。 */
+typedef struct
+{
+    ftx_candidate_t cand; /**< 段内坐标：解码时要回传给所属段的瀑布 */
+    float freq_hz;        /**< 绝对频率 Hz */
+    float time_s;         /**< 绝对时间 s（相对时隙起点） */
+    int band;             /**< 所属频段下标 */
+} global_cand_t;
+
+/** 同步得分降序（分高者优先拿名额）。 */
+static int global_cand_compare(const void* a, const void* b)
+{
+    const global_cand_t* x = (const global_cand_t*)a;
+    const global_cand_t* y = (const global_cand_t*)b;
+    return (y->cand.score > x->cand.score) - (y->cand.score < x->cand.score);
+}
+
+/** 每段的候选池上限：不小于 [FT8_GLOBAL_POOL_MIN]，也不小于总名额（上限 2048）。 */
+static int global_pool_for(int total_cap)
+{
+    int pool = (total_cap > FT8_GLOBAL_POOL_MIN) ? total_cap : FT8_GLOBAL_POOL_MIN;
+    if (pool > 2048)
+        pool = 2048;
+    if (pool < 1)
+        pool = 1;
+    return pool;
+}
+
+/** 把某段搜出的候选（段内坐标）换算成绝对频率/时间后写入全局池，返回候选数。 */
+static int collect_band_candidates(const monitor_t* mon, const ftx_candidate_t* cands, int n,
+                                   int band, global_cand_t* pool)
+{
+    const float freq_osr = (float)mon->wf.freq_osr;
+    const float time_osr = (float)mon->wf.time_osr;
+    for (int i = 0; i < n; ++i)
+    {
+        global_cand_t* g = &pool[i];
+        g->cand = cands[i];
+        g->freq_hz = (mon->min_bin + cands[i].freq_offset +
+                      (float)cands[i].freq_sub / freq_osr) / mon->symbol_period;
+        g->time_s = ((float)cands[i].time_offset +
+                     (float)cands[i].time_sub / time_osr) * mon->symbol_period;
+        g->band = band;
+    }
+    return n;
+}
+
+/** 全局择优：按得分降序扫描，同一个信号（频率 ±[freq_radius_hz]、时间 ±[time_radius_s]
+ *  以内）最多留 [FT8_GLOBAL_CLUSTER_KEEP] 个代表，取满 total_cap 个候选即停。
+ *  返回选中的候选数（sel 内已按得分降序）。 */
+static int select_global_candidates(global_cand_t* pool, int n, int total_cap,
+                                    float freq_radius_hz, float time_radius_s,
+                                    global_cand_t* sel)
+{
+    if (n <= 0 || total_cap <= 0)
+        return 0;
+    qsort(pool, (size_t)n, sizeof(global_cand_t), global_cand_compare);
+
+    int n_sel = 0;
+    for (int i = 0; i < n && n_sel < total_cap; ++i)
+    {
+        const global_cand_t* c = &pool[i];
+        int near = 0;
+        bool saturated = false;
+        for (int k = 0; k < n_sel; ++k)
+        {
+            if (fabsf(sel[k].freq_hz - c->freq_hz) <= freq_radius_hz &&
+                fabsf(sel[k].time_s - c->time_s) <= time_radius_s)
+            {
+                if (++near >= FT8_GLOBAL_CLUSTER_KEEP)
+                {
+                    saturated = true; /* 该信号的代表已够，后面的副本丢掉 */
+                    break;
+                }
+            }
+        }
+        if (!saturated)
+            sel[n_sel++] = *c;
+    }
+    return n_sel;
+}
+
+/** 分段工作线程的统一启动/回收（线程创建失败的在当前线程补跑，保证结果正确）。 */
+static void run_band_workers(ft8_thread_fn fn, void* args, size_t stride,
+                             ft8_thread_t** threads, int num)
+{
+    for (int i = 0; i < num; ++i)
+    {
+        char* a = (char*)args + (size_t)i * stride;
+        threads[i] = ft8_thread_create(fn, a);
+        if (!threads[i])
+            fn(a);
+    }
+    for (int i = 0; i < num; ++i)
+    {
+        if (threads[i])
+        {
+            ft8_thread_join(threads[i]);
+            ft8_thread_free(threads[i]);
+        }
+    }
+}
+
+/** 「只搜候选」阶段的段参数。 */
+typedef struct
+{
+    monitor_t* mon;
+    float* resid;
+    int num_samples;
+    const ft8_decode_config_t* cfg;
+    int pool_cap;
+    ftx_candidate_t* scratch; /**< 本段搜索暂存（pool_cap 个） */
+    global_cand_t* pool;      /**< 本段池子切片 */
+    int band;
+    int count; /**< 搜出的候选数；<0 为 FT8 错误码 */
+} band_search_arg_t;
+
+static void band_search_worker(void* arg)
+{
+    band_search_arg_t* b = (band_search_arg_t*)arg;
+    /* 每遍都重新填充瀑布：第 1 遍喂原始音频，后续遍喂减谱后的残差 */
+    monitor_feed_slot(b->mon, b->resid, b->num_samples);
+    int n = ftx_find_candidates(&b->mon->wf, b->pool_cap, b->scratch, b->cfg->min_sync_score);
+    b->count = collect_band_candidates(b->mon, b->scratch, n, b->band, b->pool);
+}
+
+/** 「解码本段候选」阶段的段参数。 */
+typedef struct
+{
+    const monitor_t* mon;
+    const float* resid;
+    int num_samples;
+    int sample_rate;
+    const ft8_decode_config_t* cfg;
+    const ftx_candidate_t* cands;
+    int num_cand;
+    const ftx_message_t* seen;
+    int num_seen;
+    pass_hit_t* out;
+    int max_out;
+    int count;
+} band_decode_arg_t;
+
+static void band_decode_worker(void* arg)
+{
+    band_decode_arg_t* b = (band_decode_arg_t*)arg;
+    b->count = decode_candidate_set(b->mon, b->resid, b->num_samples, b->sample_rate, b->cfg,
+                                    b->cands, b->num_cand, b->seen, b->num_seen,
+                                    b->out, b->max_out);
+}
+
+/** 分段解码 + 候选全局择优（`cfg->global_candidates`）。
+ *
+ * 与「按段均分」的区别：名额不属于任何一段，而是全频谱共用一个 `max_candidates`，
+ * 由全局排名决定花落谁家 —— 所以某段再拥挤也不会因为「本段配额用尽」而挤掉别的段
+ * 分数更高的弱台；反过来 100 Hz 重叠区里同一信号被两段各搜一次的重复也会被折叠。
+ *
+ * 每个 SIC 趟都重做一次「各段搜候选 → 全局择优 → 按段分发解码」，
+ * 所以第 2 趟在残差谱上重搜时同样是全局口径。 */
+static int decode_slot_bands_global(const float* samples, int num_samples,
+                                    const ft8_decode_config_t* cfg, int num_bands,
+                                    float fmin, float fmax,
+                                    ft8_message_result_t* out, int max_out)
+{
+    const int sample_rate = (cfg->sample_rate > 0) ? cfg->sample_rate : 12000;
+
+    int total_cap = cfg->max_candidates;
+    if (total_cap < 1)
+        total_cap = 1;
+    if (total_cap > 2048)
+        total_cap = 2048;
+    const int pool_cap = global_pool_for(total_cap);
+
+    int passes = 1;
+    if (cfg->enable_subtract)
+    {
+        passes = (cfg->decode_depth > 0) ? cfg->decode_depth : 3;
+        if (passes > 8)
+            passes = 8;
+    }
+
+    int per_band_threads = cfg->num_threads / num_bands;
+    if (per_band_threads < 1)
+        per_band_threads = 1;
+
+    int rc = FT8_OK;
+    int num_results = 0;
+    int num_seen = 0;
+    bool subtract_ok = true;
+    uint8_t tones[FT8_NN];
+
+    monitor_t* mons = (monitor_t*)calloc((size_t)num_bands, sizeof(monitor_t));
+    ft8_decode_config_t* bcfg =
+        (ft8_decode_config_t*)calloc((size_t)num_bands, sizeof(ft8_decode_config_t));
+    float** resid = (float**)calloc((size_t)num_bands, sizeof(float*));
+    ft8_subtract_t** subs = (ft8_subtract_t**)calloc((size_t)num_bands, sizeof(ft8_subtract_t*));
+    ftx_candidate_t* scratch = (ftx_candidate_t*)malloc(
+        (size_t)num_bands * (size_t)pool_cap * sizeof(ftx_candidate_t));
+    global_cand_t* pool = (global_cand_t*)malloc(
+        (size_t)num_bands * (size_t)pool_cap * sizeof(global_cand_t));
+    global_cand_t* sel = (global_cand_t*)malloc((size_t)total_cap * sizeof(global_cand_t));
+    int* band_n = (int*)calloc((size_t)num_bands, sizeof(int));
+    int* band_off = (int*)calloc((size_t)num_bands, sizeof(int));
+    ftx_candidate_t* band_cands =
+        (ftx_candidate_t*)malloc((size_t)total_cap * sizeof(ftx_candidate_t));
+    pass_hit_t* hits = (pass_hit_t*)malloc((size_t)total_cap * sizeof(pass_hit_t));
+    int* new_idx = (int*)malloc((size_t)total_cap * sizeof(int));
+    int* new_band = (int*)malloc((size_t)total_cap * sizeof(int));
+    ftx_message_t* seen = (ftx_message_t*)malloc(
+        (size_t)(total_cap * (passes + 1) + 8) * sizeof(ftx_message_t));
+    ft8_thread_t** threads = (ft8_thread_t**)calloc((size_t)num_bands, sizeof(ft8_thread_t*));
+    band_search_arg_t* sargs =
+        (band_search_arg_t*)calloc((size_t)num_bands, sizeof(band_search_arg_t));
+    band_decode_arg_t* dargs =
+        (band_decode_arg_t*)calloc((size_t)num_bands, sizeof(band_decode_arg_t));
+
+    if (!mons || !bcfg || !resid || !subs || !scratch || !pool || !sel || !band_n ||
+        !band_off || !band_cands || !hits || !new_idx || !new_band || !seen || !threads ||
+        !sargs || !dargs)
+    {
+        rc = FT8_ERR_NOMEM;
+        goto cleanup;
+    }
+
+    /* 每段一套：自己的 monitor（覆盖本段频段）+ 自己的残差与消除器 */
+    for (int i = 0; i < num_bands; ++i)
+    {
+        float lo = 0.0f;
+        float hi = 0.0f;
+        monitor_config_t mc;
+
+        band_bounds(fmin, fmax, num_bands, i, &lo, &hi);
+
+        memset(&mc, 0, sizeof(mc));
+        mc.f_min = lo;
+        mc.f_max = hi;
+        mc.sample_rate = sample_rate;
+        mc.time_osr = (cfg->time_osr >= 1) ? cfg->time_osr : 1;
+        mc.freq_osr = (cfg->freq_osr >= 1) ? cfg->freq_osr : 1;
+        mc.protocol = FTX_PROTOCOL_FT8;
+        monitor_init(&mons[i], &mc);
+
+        bcfg[i] = *cfg;
+        bcfg[i].f_min_hz = lo;
+        bcfg[i].f_max_hz = hi;
+        bcfg[i].num_threads = per_band_threads;
+
+        resid[i] = (float*)malloc((size_t)num_samples * sizeof(float));
+        if (!resid[i])
+        {
+            rc = FT8_ERR_NOMEM;
+            goto cleanup;
+        }
+        memcpy(resid[i], samples, (size_t)num_samples * sizeof(float));
+
+        if (passes > 1)
+        {
+            subs[i] = ft8_subtract_create(sample_rate, num_samples);
+            if (!subs[i])
+                subtract_ok = false; /* 消除器创建失败：退化为单遍（仍走全局择优） */
+        }
+    }
+    if (!subtract_ok)
+        passes = 1;
+
+    for (int pass = 0; pass < passes; ++pass)
+    {
+        int n_raw = 0;
+        int n_sel = 0;
+        int off = 0;
+        int n_new = 0;
+
+        /* 1) 各段并行：重填瀑布 + 只搜候选（宽松池，不在这里定额度） */
+        for (int i = 0; i < num_bands; ++i)
+        {
+            sargs[i].mon = &mons[i];
+            sargs[i].resid = resid[i];
+            sargs[i].num_samples = num_samples;
+            sargs[i].cfg = &bcfg[i];
+            sargs[i].pool_cap = pool_cap;
+            sargs[i].scratch = scratch + (size_t)i * (size_t)pool_cap;
+            sargs[i].pool = pool + (size_t)i * (size_t)pool_cap;
+            sargs[i].band = i;
+            sargs[i].count = 0;
+        }
+        run_band_workers(band_search_worker, sargs, sizeof(band_search_arg_t), threads, num_bands);
+
+        for (int i = 0; i < num_bands; ++i)
+        {
+            if (sargs[i].count < 0)
+            {
+                rc = sargs[i].count; /* 任一段失败则整体失败，保留其错误码 */
+                break;
+            }
+            /* 各段候选写在各自的池子切片里，这里紧凑拼接到 pool 头部：
+             * 全局排序/去重必须作用在一段连续的数组上（目标偏移恒 ≤ 源偏移，可原地搬）。 */
+            const int cnt = sargs[i].count;
+            global_cand_t* src = pool + (size_t)i * (size_t)pool_cap;
+            global_cand_t* dst = pool + n_raw;
+            if (cnt > 0 && src != dst)
+                memmove(dst, src, (size_t)cnt * sizeof(global_cand_t));
+            n_raw += cnt;
+        }
+        if (rc != FT8_OK)
+            break;
+
+        /* 2) 全局去重 + 按得分排序 + 取前 total_cap。
+         *    聚类半径按瀑布分辨率取「±1 个频率格、±1 个符号」：两个 FT8 信号落在
+         *    同一格同一符号内本就互相压制、无法分辨，折叠安全。 */
+        n_sel = select_global_candidates(pool, n_raw, total_cap,
+                                         (float)(1.0 / mons[0].symbol_period),
+                                         mons[0].symbol_period, sel);
+
+        /* 3) 按所属段分桶（顺带得到每段在 band_cands / hits 里的偏移） */
+        for (int i = 0; i < num_bands; ++i)
+        {
+            band_off[i] = off;
+            band_n[i] = 0;
+            for (int k = 0; k < n_sel; ++k)
+            {
+                if (sel[k].band != i)
+                    continue;
+                band_cands[off++] = sel[k].cand;
+                band_n[i]++;
+            }
+        }
+
+        /* 4) 各段并行：用本段自己的瀑布解码本段候选 */
+        for (int i = 0; i < num_bands; ++i)
+        {
+            dargs[i].mon = &mons[i];
+            dargs[i].resid = resid[i];
+            dargs[i].num_samples = num_samples;
+            dargs[i].sample_rate = sample_rate;
+            dargs[i].cfg = &bcfg[i];
+            dargs[i].cands = band_cands + band_off[i];
+            dargs[i].num_cand = band_n[i];
+            dargs[i].seen = seen;
+            dargs[i].num_seen = num_seen; /* 本遍开始前的既有消息（只读快照） */
+            dargs[i].out = hits + band_off[i];
+            dargs[i].max_out = band_n[i];
+            dargs[i].count = 0;
+        }
+        run_band_workers(band_decode_worker, dargs, sizeof(band_decode_arg_t), threads, num_bands);
+
+        /* 5) 汇总：按 seen 跨段去重，并记下新增命中（供下面的减谱用） */
+        for (int i = 0; i < num_bands; ++i)
+        {
+            if (dargs[i].count < 0)
+            {
+                rc = dargs[i].count;
+                break;
+            }
+            for (int k = 0; k < dargs[i].count; ++k)
+            {
+                const int h_idx = band_off[i] + k;
+                const pass_hit_t* h = &hits[h_idx];
+
+                if (hit_seen_before(&h->message, seen, num_seen))
+                {
+                    if (cfg->return_duplicates && out && num_results < max_out)
+                    {
+                        emit_hit(h, pass, &out[num_results]);
+                        num_results++;
+                    }
+                    continue;
+                }
+
+                seen[num_seen++] = h->message;
+                new_idx[n_new] = h_idx;
+                new_band[n_new] = i;
+                n_new++;
+                if (out && num_results < max_out)
+                    emit_hit(h, pass, &out[num_results]);
+                num_results++;
+            }
+        }
+        if (rc != FT8_OK)
+            break;
+
+        if (pass + 1 >= passes || n_new == 0)
+            break; /* 没有新增可减、或已是最后一趟：残差不变，再搜也是同样结果 */
+
+        /* 6) 减谱（SIC）：新增命中按原始 SNR 由强到弱，减到各自所属段的残差上 */
+        for (int a = 0; a < n_new; ++a)
+        {
+            for (int b = a + 1; b < n_new; ++b)
+            {
+                if (hits[new_idx[b]].snr_order > hits[new_idx[a]].snr_order)
+                {
+                    int t = new_idx[a];
+                    new_idx[a] = new_idx[b];
+                    new_idx[b] = t;
+                    t = new_band[a];
+                    new_band[a] = new_band[b];
+                    new_band[b] = t;
+                }
+            }
+        }
+        for (int a = 0; a < n_new; ++a)
+        {
+            const pass_hit_t* h = &hits[new_idx[a]];
+            const int b = new_band[a];
+            ft8_encode(h->message.payload, tones);
+            ft8_subtract_signal(subs[b], resid[b], num_samples, tones, h->freq, h->time);
+        }
+    }
+
+cleanup:
+    if (resid)
+    {
+        for (int i = 0; i < num_bands; ++i)
+            free(resid[i]);
+    }
+    if (subs)
+    {
+        for (int i = 0; i < num_bands; ++i)
+            if (subs[i])
+                ft8_subtract_free(subs[i]);
+    }
+    if (mons)
+    {
+        for (int i = 0; i < num_bands; ++i)
+            monitor_free(&mons[i]);
+    }
+    free(mons);
+    free(bcfg);
+    free(resid);
+    free(subs);
+    free(scratch);
+    free(pool);
+    free(sel);
+    free(band_n);
+    free(band_off);
+    free(band_cands);
+    free(hits);
+    free(new_idx);
+    free(new_band);
+    free(seen);
+    free(threads);
+    free(sargs);
+    free(dargs);
+
+    if (rc != FT8_OK)
+    {
+        set_error("候选全局择优资源分配失败");
+        return rc;
+    }
+    if (out && max_out > 0 && num_results > max_out)
+        num_results = max_out; /* 只写了前 max_out 条，返回条数不要越界 */
+    return num_results;
+}
+
 /* 把 [f_min, f_max] 拆成 num_bands 个带宽近似、带重叠的频段并行解码，再合并去重。
  *
- * 「候选上限」（cfg->max_candidates）是**整个频谱**的总名额，这里按段均分后下发（余数分给
- * 低频段）：不如此则每段各拿满额，全频谱实际候选池≈上限×段数，设置值与实际不符。 */
+ * 「候选上限」（cfg->max_candidates）是**整个频谱**的总名额，两种分配口径（P3.1）：
+ *   - 全局择优（默认，[decode_slot_bands_global]）：各段先取宽松池，汇总去重后按得分全局排序取前 N；
+ *   - 按段均分：把总名额均分到各段（余数分给低频段），每段在段内取前 N/段数。
+ * 不分配则每段各拿满额，全频谱实际候选池≈上限×段数，设置值与实际不符。 */
 static int decode_slot_bands(const float* samples, int num_samples,
                              const ft8_decode_config_t* cfg, int num_bands,
                              ft8_message_result_t* out, int max_out)
@@ -1008,12 +1485,17 @@ static int decode_slot_bands(const float* samples, int num_samples,
     if (num_bands < 2)
         return decode_slot_single(samples, num_samples, cfg, out, max_out);
 
+    /* 候选名额的两种分配口径（P3.1）：默认「全局择优」，关掉则退回「按段均分」 */
+    if (cfg->global_candidates)
+        return decode_slot_bands_global(samples, num_samples, cfg, num_bands, fmin, fmax,
+                                       out, max_out);
+
     /* 线程预算按段数均分：每段至少 1 个线程 */
     int per_band_threads = cfg->num_threads / num_bands;
     if (per_band_threads < 1)
         per_band_threads = 1;
 
-    /* 「候选上限」是**整个频谱**的总名额：按段均分（余数分给低频段），每段至少 1 个 */
+    /* 「按段均分」口径：总名额均分到各段（余数分给低频段），每段至少 1 个 */
     int total_cand = cfg->max_candidates;
     if (total_cand < 1)
         total_cand = 1;
@@ -1030,18 +1512,13 @@ static int decode_slot_bands(const float* samples, int num_samples,
         return FT8_ERR_NOMEM;
     }
 
-    const float span = fmax - fmin;
-    const float base = span / (float)num_bands;
-    const float half = FT8_BAND_OVERLAP_HZ * 0.5f;
-
     bool alloc_ok = true;
     for (int i = 0; i < num_bands; ++i)
     {
+        float lo = 0.0f;
+        float hi = 0.0f;
         args[i].cfg = *cfg;
-        float lo = fmin + base * (float)i - ((i > 0) ? half : 0.0f);
-        float hi = fmin + base * (float)(i + 1) + ((i < num_bands - 1) ? half : 0.0f);
-        if (lo < 0.0f)
-            lo = 0.0f;
+        band_bounds(fmin, fmax, num_bands, i, &lo, &hi);
         args[i].cfg.f_min_hz = lo;
         args[i].cfg.f_max_hz = hi;
         args[i].cfg.num_threads = per_band_threads;

@@ -59,6 +59,7 @@ enum
     DC_OSD_DEPTH,
     DC_ENABLE_LLR_REFINE,
     DC_NUM_BANDS,
+    DC_GLOBAL_CANDIDATES,
     DC_COUNT
 };
 
@@ -134,6 +135,7 @@ static void read_decode_cfg(JNIEnv* env, jfloatArray arr, ft8_decode_config_t* c
     if (n > DC_OSD_DEPTH) cfg->osd_depth = (int)buf[DC_OSD_DEPTH];
     if (n > DC_ENABLE_LLR_REFINE) cfg->enable_llr_refine = buf[DC_ENABLE_LLR_REFINE] != 0.0f;
     if (n > DC_NUM_BANDS) cfg->num_bands = (int)buf[DC_NUM_BANDS];
+    if (n > DC_GLOBAL_CANDIDATES) cfg->global_candidates = buf[DC_GLOBAL_CANDIDATES] != 0.0f;
 }
 
 static void read_encode_cfg(JNIEnv* env, jfloatArray arr, ft8_encode_config_t* cfg)
@@ -235,6 +237,7 @@ Java_com_ft8_nativecore_Ft8Native_decodeConfigDefault(JNIEnv* env, jclass)
     buf[DC_OSD_DEPTH] = (float)cfg.osd_depth;
     buf[DC_ENABLE_LLR_REFINE] = cfg.enable_llr_refine ? 1.0f : 0.0f;
     buf[DC_NUM_BANDS] = (float)cfg.num_bands;
+    buf[DC_GLOBAL_CANDIDATES] = cfg.global_candidates ? 1.0f : 0.0f;
 
     jfloatArray arr = env->NewFloatArray(DC_COUNT);
     if (arr)
