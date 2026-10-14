@@ -1,6 +1,7 @@
 package com.example.ft8vox.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,19 +17,19 @@ class DecodeParamsTest {
         assertEquals(20, d.ldpcIterations)
         assertEquals(100, d.maxDecoded)
         assertEquals(2, d.passes) // SIC 默认 2 趟
-        assertTrue("候选名额默认走「全局择优」", d.globalCandidates)
+        assertFalse("候选名额默认走「按段均分」", d.globalCandidates)
     }
 
     @Test
     fun globalCandidatesSwitchPassesThroughWithoutClamping() {
-        // 布尔开关没有范围可钳：默认「开」，显式关闭时原样透传（含 clamped()）
-        assertTrue(DecodeParams.of(10, 120, 20, 100).globalCandidates)
-        val off = DecodeParams.of(
+        // 布尔开关没有范围可钳：默认「关」，显式打开时原样透传（含 clamped()）
+        assertFalse(DecodeParams.of(10, 120, 20, 100).globalCandidates)
+        val on = DecodeParams.of(
             minScore = 10, maxCandidates = 120, ldpcIterations = 20, maxDecoded = 100,
-            passes = 2, globalCandidates = false,
+            passes = 2, globalCandidates = true,
         )
-        assertEquals(false, off.globalCandidates)
-        assertEquals(false, off.clamped().globalCandidates)
+        assertEquals(true, on.globalCandidates)
+        assertEquals(true, on.clamped().globalCandidates)
     }
 
     @Test

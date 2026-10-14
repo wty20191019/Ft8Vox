@@ -91,12 +91,12 @@ data class DecodeSettings(
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
     /**
-     * 候选名额的分配口径：true（默认）＝「全局择优」，false＝「按段均分」。
+     * 候选名额的分配口径：false（默认）＝「按段均分」，true＝「全局择优」。
      *
      * 与 [fMinHz]/[fMaxHz] 一样**不随预设变化**（它是策略开关，不是「快」预设的数值项）：
      * [applyPreset] 原样保留、[samePresetValues] 不比较它，所以拨动开关不会把预设变成「自定义」。
      */
-    val globalCandidates: Boolean = true,
+    val globalCandidates: Boolean = false,
 ) {
     /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {

@@ -94,7 +94,11 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
     cfg->osd_depth = 2; /**< 默认启用 OSD 2 阶（历史数据：+14 命中 / extra 3.3%） */
     cfg->enable_llr_refine = false; /**< P2.3 实验项，默认关闭 */
     cfg->num_bands = 1; /**< P3：默认不分段，保持既有单段行为 */
-    cfg->global_candidates = true; /**< P3.1：分段时默认「全局择优」分配候选名额 */
+    cfg->global_candidates = false; /**< P3.1：默认「按段均分」（改动前行为）。
+                                    *   打开（true）才用「全频谱全局择优」分配候选名额 ——
+                                    *   60 文件 / 1298 条语料实测：默认名额（120）下召回与均分
+                                    *   几乎持平（81.9% vs 81.5%），耗时却约 ×1.8（段间负载不均）；
+                                    *   只有把名额收紧时收益才明显（20 名额 +2.1pp）。 */
 }
 
 void ft8_encode_config_default(ft8_encode_config_t* cfg)

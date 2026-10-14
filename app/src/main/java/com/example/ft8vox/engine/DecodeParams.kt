@@ -16,8 +16,8 @@ data class DecodeParams(
     /**
      * **整个频谱**的候选上限（名额不属于任何一段，见 [globalCandidates]）。
      *
-     * 分段并行时默认按「全局择优」分配：各段先各取一个宽松池，汇总跨段去重后按同步
-     * 得分全局排序取前 N，再分发回各段解码；关掉该开关则退回「按段均分」。
+     * 分段并行时默认按「按段均分」分配：总名额均分到各段；打开「候选全局择优」
+     * 开关后改由全频谱统一排序取前 N。
      */
     val maxCandidates: Int = 120,
     /** LDPC 最大迭代次数，越高越慢但弱信号解码率更高。 */
@@ -33,13 +33,16 @@ data class DecodeParams(
     val passes: Int = 2,
     /**
      * 候选名额的分配口径（仅频率分段并行时有意义）：
-     * - `true`（默认）：**全局择优** —— 名额不属于任何一段，跨段去重（同一信号最多留
-     *   3 个代表）后按同步得分全局排序取前 N，再按所属段分发解码；每个 SIC 趟都重做。
-     * - `false`：**按段均分** —— 总名额均分到各段，某段配额用尽就不再收了。
+     * - `false`（默认）：**按段均分** —— 总名额均分到各段，某段配额用尽就不再收了。
+     *   各段负载天然均衡、耗时更稳，也是加这个开关之前的历史行为。
+     * - `true`：**全局择优** —— 名额不属于任何一段，跨段去重（同一信号最多留 3 个代表）
+     *   后按同步得分全局排序取前 N，再按所属段分发解码；每个 SIC 趟都重做。
+     *   名额越紧、频段越拥挤，多解出的弱台越多（语料实测 20 名额 +2.1pp），
+     *   代价是名额向拥挤段聚集、段内单线程时耗时约 ×1.8（默认名额下则只有 +0.4pp）。
      *
      * 属策略开关（设置页「候选全局择优」），不是「快」预设的数值项。
      */
-    val globalCandidates: Boolean = true,
+    val globalCandidates: Boolean = false,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {
@@ -57,7 +60,7 @@ data class DecodeParams(
             ldpcIterations: Int,
             maxDecoded: Int,
             passes: Int = 2,
-            globalCandidates: Boolean = true,
+            globalCandidates: Boolean = false,
         ): DecodeParams = DecodeParams(
             minScore = minScore.coerceIn(MIN_SCORE_RANGE),
             maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
