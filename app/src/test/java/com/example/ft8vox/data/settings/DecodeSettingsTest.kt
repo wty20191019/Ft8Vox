@@ -84,6 +84,20 @@ class DecodeSettingsTest {
     }
 
     @Test
+    fun globalCandidatesSwitchIsNotPartOfThePreset() {
+        // 策略开关（与频率范围同处理）：预设原样保留它，手改它也不算「自定义」
+        assertTrue(DecodeSettings().globalCandidates)
+        val base = DecodeSettings(globalCandidates = false)
+        for (p in DecodePreset.entries) {
+            assertEquals(false, base.applyPreset(p).globalCandidates)
+        }
+        assertEquals(
+            DecodePreset.FAST,
+            AppSettings(decode = DecodeSettings(globalCandidates = false)).decodePreset,
+        )
+    }
+
+    @Test
     fun clampingFixesOutOfRangeValues() {
         val wild = DecodeSettings(
             timeOsr = 0,
