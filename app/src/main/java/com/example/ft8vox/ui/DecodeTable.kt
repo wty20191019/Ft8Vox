@@ -59,8 +59,8 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Geo
+import com.example.ft8vox.qso.CallCountry
 import com.example.ft8vox.qso.DecodeStyle
-import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
 import com.example.ft8vox.ui.theme.BarWorked
@@ -322,13 +322,15 @@ private fun DecodeTableRow(
     val msgBase = textColor.copy(alpha = alpha)
     val msgColor = decodeMessageColor(style, msgBase)
     val msgCallColor = if (style.toMe) msgColor else VoxError
-    // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/Ft8Vox.md）
+    // 第二行：声音频率 · 每个呼号·国家 · 距离（单项之间只留一个空格，docs/Ft8Vox.md）
+    // 国家按报文中各自的呼号分别标注（如 `VK4BLE·澳大利亚 OH8JK·芬兰`），
+    // 未收录进 DXCC 表的呼号不占位（见 qso/CallCountry.kt）。
     val metaLine = remember(row, myGrid) {
-        val entity = from?.let { Dxcc.resolve(it)?.name }
+        val countries = CallCountry.segment(row.parsed)
         val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
         buildString {
             append("${msg.df}Hz")
-            entity?.takeIf { it.isNotEmpty() }?.let { append(" $it") }
+            if (countries.isNotEmpty()) append(" $countries")
             distKm?.let { append(String.format(Locale.US, " %.0fkm", it)) }
         }
     }
@@ -468,7 +470,7 @@ private fun DecodeTableRow(
                     if (style.newEntity) ZoneBadge("D")
                     if (style.newItu) ZoneBadge("I")
                 }
-                // 声音频率 · 国家 · 距离
+                // 声音频率 · 每个呼号·国家 · 距离
                 Text(
                     metaLine,
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),

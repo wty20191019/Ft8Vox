@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.log.QsoEntity
+import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.ui.theme.VoxAccent
 import com.example.ft8vox.ui.theme.VoxRxGreen
@@ -504,6 +505,15 @@ private fun LogCard(entity: QsoEntity, onEdit: () -> Unit, onDelete: () -> Unit)
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(entity.theirCall, style = MaterialTheme.typography.titleMedium)
+                        // 呼号对应的国家（按前缀近似判定；未收录则不显示，见 qso/Dxcc.kt）
+                        Dxcc.resolve(entity.theirCall)?.name?.let { country ->
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                country,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         if (confirmed) {
                             Spacer(Modifier.width(4.dp))
                             Text(
