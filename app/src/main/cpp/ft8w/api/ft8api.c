@@ -967,7 +967,10 @@ static void band_worker(void* arg)
     b->count = decode_slot_single(b->samples, b->num_samples, &b->cfg, b->out, b->max_out);
 }
 
-/* 把 [f_min, f_max] 拆成 num_bands 个带宽近似、带重叠的频段并行解码，再合并去重。 */
+/* 把 [f_min, f_max] 拆成 num_bands 个带宽近似、带重叠的频段并行解码，再合并去重。
+ *
+ * 「候选上限」（cfg->max_candidates）是**整个频谱**的总名额，这里按段均分后下发（余数分给
+ * 低频段）：不如此则每段各拿满额，全频谱实际候选池≈上限×段数，设置值与实际不符。 */
 static int decode_slot_bands(const float* samples, int num_samples,
                              const ft8_decode_config_t* cfg, int num_bands,
                              ft8_message_result_t* out, int max_out)
@@ -996,6 +999,13 @@ static int decode_slot_bands(const float* samples, int num_samples,
     if (per_band_threads < 1)
         per_band_threads = 1;
 
+    /* 「候选上限」是**整个频谱**的总名额：按段均分（余数分给低频段），每段至少 1 个 */
+    int total_cand = cfg->max_candidates;
+    if (total_cand < 1)
+        total_cand = 1;
+    const int per_band_cand_base = total_cand / num_bands;
+    const int per_band_cand_rem = total_cand % num_bands;
+
     band_arg_t* args = (band_arg_t*)calloc((size_t)num_bands, sizeof(band_arg_t));
     ft8_thread_t** threads = (ft8_thread_t**)calloc((size_t)num_bands, sizeof(ft8_thread_t*));
     if (!args || !threads)
@@ -1021,6 +1031,8 @@ static int decode_slot_bands(const float* samples, int num_samples,
         args[i].cfg.f_min_hz = lo;
         args[i].cfg.f_max_hz = hi;
         args[i].cfg.num_threads = per_band_threads;
+        int band_cand = per_band_cand_base + ((i < per_band_cand_rem) ? 1 : 0);
+        args[i].cfg.max_candidates = (band_cand >= 1) ? band_cand : 1;
         args[i].samples = samples;
         args[i].num_samples = num_samples;
         args[i].max_out = max_out;

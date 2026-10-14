@@ -1,5 +1,6 @@
 package com.example.ft8vox.ui
 
+import com.example.ft8vox.engine.DecodeParallel
 import com.example.ft8vox.engine.DecodeResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -53,6 +54,14 @@ class AppChromeTest {
     fun decodeTimeShowsMillisecondsWhileRunning() {
         assertEquals("解码 118ms", decodeTimeLabel(118L, running = true))
         assertEquals("解码 1500ms", decodeTimeLabel(1500L, running = true))
+    }
+
+    @Test
+    fun decodeParallelLabelShowsBandsAndThreads() {
+        // 顶栏读数行：分段时是「段数×每段线程」，不分段时只剩线程总数；没传就不占位
+        assertNull(decodeParallelLabel(null))
+        assertEquals("4段×2", decodeParallelLabel(DecodeParallel(bands = 4, threadsPerBand = 2, totalThreads = 8)))
+        assertEquals("8线程", decodeParallelLabel(DecodeParallel(bands = 1, threadsPerBand = 8, totalThreads = 8)))
     }
 
     // ---- 信息头 DX 栏（实机反馈：不能与「CQ 已发出」自相矛盾）----

@@ -61,6 +61,7 @@ import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.engine.AudioDevices
+import com.example.ft8vox.engine.DecodeParallel
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
@@ -112,6 +113,14 @@ fun timeSyncWarning(latestDt: Float?): String? =
  */
 fun decodeTimeLabel(lastDecodeMs: Long, running: Boolean): String? =
     if (running && lastDecodeMs > 0L) "解码 ${lastDecodeMs}ms" else null
+
+/**
+ * 顶栏读数行「解码并行度」文案（`4段×2`＝4 个频率段 × 每段 2 线程；不分段时 `8线程`）。
+ *
+ * 并行度按 CPU 核数与频率范围自动决定、**没有设置项**（见 `decodeParallelism`），所以这里
+ * 只是如实展示；和「解码 118ms」放一起看「并行度 / 耗时」。null 时整项不占位。
+ */
+fun decodeParallelLabel(parallel: DecodeParallel?): String? = parallel?.shortLabel
 
 /** 状态条「电平」文案：输入电平（dBFS）。 */
 internal fun voxLabel(levelDb: Float, running: Boolean): String {
@@ -204,6 +213,8 @@ fun MobileInfoHeader(
     onBandFreq: (String, Long) -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
+    /** 解码并行度（按 CPU 核数 + 频率范围自适应）；顶栏读数行展示，见 [decodeParallelLabel]。 */
+    decodeParallel: DecodeParallel? = null,
     modifier: Modifier = Modifier,
 ) {
     val dialHz = status.dialHz.takeIf { it > 0 } ?: BandPlan.resolveDialHz(status.band, 0L)
@@ -334,6 +345,7 @@ fun MobileInfoHeader(
             JtdxCaption("总$decodedTotal")
             JtdxCaption("QSO$qsoCount")
             JtdxCaption("队列$queueCount")
+            decodeParallelLabel(decodeParallel)?.let { JtdxCaption(it) }
             Spacer(Modifier.weight(1f))
             val syncWarning = timeSyncWarning(messages.firstOrNull()?.dt)
             if (syncWarning != null) {

@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.SessionService
+import com.example.ft8vox.engine.decodeParallelism
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,6 +82,15 @@ fun MainShell(
     val nowMs = rememberUtcNowMs()
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+
+    // 解码并行度（顶栏读数行）：按 CPU 核数 + 频率范围自适应；与设置页、native 同一规则
+    val decodeParallel = remember(appSettings.decode.fMinHz, appSettings.decode.fMaxHz) {
+        decodeParallelism(
+            appSettings.decode.fMinHz,
+            appSettings.decode.fMaxHz,
+            Runtime.getRuntime().availableProcessors(),
+        )
+    }
 
     // ---- 录音权限：操作页与频谱页共用 ----
     var permissionGranted by remember {
@@ -161,6 +171,7 @@ fun MainShell(
             onBandFreq = session::setBandFreq,
             onTxEnabledChange = session::setTxEnabled,
             onOpenSettings = { tab = MainTab.SETTINGS },
+            decodeParallel = decodeParallel,
         )
 
         Box(

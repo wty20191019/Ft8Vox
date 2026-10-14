@@ -61,6 +61,7 @@ import com.example.ft8vox.data.settings.clampWaterfallFloorDb
 import com.example.ft8vox.data.settings.clampWaterfallRangeDb
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
+import com.example.ft8vox.engine.decodeParallelism
 import com.example.ft8vox.grid.Maidenhead
 import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCq
@@ -97,6 +98,12 @@ fun SettingsScreen(
     var statusText by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
+
+    // 解码并行度（按 CPU 核数 + 频率范围自适应，无设置项）：与顶栏读数、native 同一规则
+    val decodeCores = remember { Runtime.getRuntime().availableProcessors() }
+    val decodeParallel = remember(app.decode.fMinHz, app.decode.fMaxHz, decodeCores) {
+        decodeParallelism(app.decode.fMinHz, app.decode.fMaxHz, decodeCores)
+    }
 
     // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
     var call by remember { mutableStateOf(app.myCall) }
@@ -346,8 +353,9 @@ fun SettingsScreen(
                 value = app.decode.maxCandidates,
                 range = DecodeSettings.MAX_CANDIDATES_RANGE,
                 step = 20,
-                subtitle = "单时隙保留的同步候选数量上限（20–500）。调高：给弱信号更多机会，" +
-                    "更慢；调低时名额先被强台占满、弱台漏解。",
+                subtitle = "「整个频谱」的同步候选名额上限（20–500），按频率分段均分到各段" +
+                    "（当前 ${decodeParallel.bands} 段 → 每段约 ${decodeParallel.candidatesPerBand(app.decode.maxCandidates)} 个）。" +
+                    "调高：给弱信号更多机会，更慢；调低时名额先被强台占满、弱台漏解。",
                 onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
             )
             PrefDivider()
@@ -392,6 +400,14 @@ fun SettingsScreen(
                 subtitle = "解码搜索与瀑布显示的上边界（默认 3000 Hz）。范围越窄解码越快，" +
                     "但超出范围的信号不会被解出。需重开接收生效。",
                 onChange = { v -> settings.updateDecode { it.copy(fMaxHz = v) } },
+            )
+            PrefDivider()
+            PrefInfo(
+                title = "解码并行",
+                subtitle = "按 CPU 核数（$decodeCores）自动分配、没有设置项：频率分段数 × 每段线程数。" +
+                    "「候选上限」等按段计额度的项都由这里的段数均分；频率范围收窄会自动减少段数" +
+                    "（单段最小 200 Hz，窄到 400 Hz 以内就不分段了）。",
+                badge = decodeParallel.label,
             )
             PrefDivider()
             PrefSwitch(
