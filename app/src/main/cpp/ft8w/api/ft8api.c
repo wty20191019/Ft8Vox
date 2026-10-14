@@ -481,34 +481,21 @@ static int raw_compare(const void* a, const void* b)
     return (ra->cand_index > rb->cand_index) - (ra->cand_index < rb->cand_index);
 }
 
-/* 单遍解码：在瀑布上搜索候选 + 多线程解码，返回按候选顺序排列的命中
- * （不做去重，由调用方处理）。返回命中条数，负数见 ft8_error_t。 */
-static int decode_pass(const monitor_t* mon, const float* samples, int num_samples, int sample_rate,
-                       const ft8_decode_config_t* cfg,
-                       const ftx_message_t* seen, int num_seen,
-                       pass_hit_t* out, int max_out)
+/* 单遍解码的后半段：对**给定的一批候选**做多线程 LDPC 解码，返回按候选序号排列的命中
+ * （不做跨遍去重，由调用方处理）。返回命中条数，负数见 ft8_error_t。
+ *
+ * 与 [decode_pass] 拆开是为了「分段并行 + 候选全局择优」：各段先只做候选搜索，把候选汇总到
+ * 全局去重/排序，再按段把候选分发回各自的瀑布解码；本函数负责其中「一段 + 一批候选」。 */
+static int decode_candidate_set(const monitor_t* mon, const float* samples, int num_samples,
+                                int sample_rate, const ft8_decode_config_t* cfg,
+                                const ftx_candidate_t* cands, int num_cand,
+                                const ftx_message_t* seen, int num_seen,
+                                pass_hit_t* out, int max_out)
 {
     const ftx_waterfall_t* wf = &mon->wf;
 
-    int max_cand = cfg->max_candidates;
-    if (max_cand < 1)
-        max_cand = 1;
-    if (max_cand > 2048)
-        max_cand = 2048;
-
-    ftx_candidate_t* cands = (ftx_candidate_t*)malloc((size_t)max_cand * sizeof(ftx_candidate_t));
-    if (!cands)
-    {
-        set_error("候选缓冲分配失败");
-        return FT8_ERR_NOMEM;
-    }
-
-    int num_cand = ftx_find_candidates(wf, max_cand, cands, cfg->min_sync_score);
     if (num_cand <= 0)
-    {
-        free(cands);
         return 0;
-    }
 
     int iters = (cfg->ldpc_iterations > 0) ? cfg->ldpc_iterations : 25;
 
@@ -527,7 +514,6 @@ static int decode_pass(const monitor_t* mon, const float* samples, int num_sampl
     ft8_thread_t** threads = (ft8_thread_t**)calloc((size_t)num_threads, sizeof(ft8_thread_t*));
     if (!regions || !args || !threads)
     {
-        free(cands);
         free(regions);
         free(args);
         free(threads);
@@ -678,8 +664,36 @@ static int decode_pass(const monitor_t* mon, const float* samples, int num_sampl
     free(threads);
     free(args);
     free(regions);
-    free(cands);
     return num_hits;
+}
+
+/* 单遍解码：在瀑布上搜索候选 + 多线程解码，返回按候选顺序排列的命中
+ * （不做去重，由调用方处理）。返回命中条数，负数见 ft8_error_t。 */
+static int decode_pass(const monitor_t* mon, const float* samples, int num_samples, int sample_rate,
+                       const ft8_decode_config_t* cfg,
+                       const ftx_message_t* seen, int num_seen,
+                       pass_hit_t* out, int max_out)
+{
+    const ftx_waterfall_t* wf = &mon->wf;
+
+    int max_cand = cfg->max_candidates;
+    if (max_cand < 1)
+        max_cand = 1;
+    if (max_cand > 2048)
+        max_cand = 2048;
+
+    ftx_candidate_t* cands = (ftx_candidate_t*)malloc((size_t)max_cand * sizeof(ftx_candidate_t));
+    if (!cands)
+    {
+        set_error("候选缓冲分配失败");
+        return FT8_ERR_NOMEM;
+    }
+
+    int num_cand = ftx_find_candidates(wf, max_cand, cands, cfg->min_sync_score);
+    int rc = decode_candidate_set(mon, samples, num_samples, sample_rate, cfg, cands, num_cand,
+                                  seen, num_seen, out, max_out);
+    free(cands);
+    return rc;
 }
 
 /** 判断消息是否已在 seen 中出现（按哈希 + 载荷去重）。 */
