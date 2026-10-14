@@ -106,6 +106,27 @@ class DecodeHighlightTest {
     }
 
     @Test
+    fun classifyWorkedIsBandScoped() {
+        val direct = MessageParser.parse("F4FSY JA1ABC -08")
+        // 本波段已通联 → 「本波段」标记（画删除线）
+        val thisBand = DecodeHighlight.classify(direct, workedThisBand = setOf("JA1ABC"))
+        assertTrue(thisBand.workedThisBand)
+        assertFalse(thisBand.workedOtherBand)
+        // 仅其它波段已通联 → 「其它波段」标记（标蓝字）
+        val otherBand = DecodeHighlight.classify(direct, workedOtherBands = setOf("JA1ABC"))
+        assertFalse(otherBand.workedThisBand)
+        assertTrue(otherBand.workedOtherBand)
+        // 两边都命中时以「本波段」优先（同 FT8CN：本波段画线，其它波段才取蓝字）
+        val both = DecodeHighlight.classify(
+            direct,
+            workedThisBand = setOf("JA1ABC"),
+            workedOtherBands = setOf("JA1ABC"),
+        )
+        assertTrue(both.workedThisBand)
+        assertFalse(both.workedOtherBand)
+    }
+
+    @Test
     fun classifyDuplicateBeatsNewCall() {
         val parsed = MessageParser.parse("CQ W1AW FN42")
         val style = DecodeHighlight.classify(parsed, duplicate = true)

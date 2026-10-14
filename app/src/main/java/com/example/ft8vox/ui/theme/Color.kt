@@ -75,10 +75,11 @@ val HlDxcc = Color(0xFFFF00FF)
 val HlGrid = Color(0xFFFF8000)
 /** 新呼号。 */
 val HlCall = Color(0xFF00FFFF)
+/** 「其它波段已通联」的报文列**蓝字**（照 FT8CN `fromcall_is_qso_text_color` 夜间色）。 */
+val WorkedOtherBandBlue = Color(0xFFA3BCFB)
 
 // ---- 解码卡片左侧色条（docs/Ft8Vox.md） ----
-val BarNewDecode = Color(0xFF4CAF50) // 绿：新解码
-val BarToMe = Color(0xFF89B4FA) // 蓝：与我有关
+val BarNewDecode = Color(0xFF4CAF50) // 绿：新解码val BarToMe = Color(0xFF89B4FA) // 蓝：与我有关
 val BarCq = Color(0xFFFF9800) // 橙：CQ
 val BarDuplicate = Color(0xFF757575) // 灰：重复
 val BarNewCall = Color(0xFFF06292) // 粉：新呼号

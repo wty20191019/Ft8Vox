@@ -214,10 +214,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * **当前波段**已通联呼号（键＝波段名大写），照 FT8CN `checkQSLCallsign`
      * （`DatabaseOpr.GetAllQSLCallsign` 的 `where band=?`）。
      *
-     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选）；界面高亮与
-     * 「已通联」筛选仍用跨波段的 [_worked]。
+     * 自动程序的「已通联」判据、以及界面高亮的「本波段＝删除线 / 其它波段＝蓝字」都由它派生。
      */
     private var workedCallsByBand: Map<String, Set<String>> = emptyMap()
+
+    private val _workedThisBand = MutableStateFlow<Set<String>>(emptySet())
+
+    /** **当前波段**已通联呼号（大写）：解码表「本波段已通联＝删除线」（照 FT8CN `checkQSLCallsign`）。 */
+    val workedThisBand: StateFlow<Set<String>> = _workedThisBand.asStateFlow()
+
+    private val _workedOtherBands = MutableStateFlow<Set<String>>(emptySet())
+
+    /** **仅其它波段**已通联呼号（大写）：解码表「其它波段已通联＝蓝字」（FT8CN `checkQSLCallsign_OtherBand`）。 */
+    val workedOtherBands: StateFlow<Set<String>> = _workedOtherBands.asStateFlow()
 
     private val qsoEngine = QsoEngine()
 
@@ -367,6 +376,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                         rows.mapNotNull { it.theirCall.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
                             .toSet()
                     }
+                refreshWorkedBands()
             }
         }
         // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
@@ -638,6 +648,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (n != _status.value.band) sessionSavedCalls.clear()
         _status.update { it.copy(band = n, dialHz = resolved) }
         persist { it.copy(band = n, dialHz = resolved) }
+        refreshWorkedBands()
     }
 
     /** 仅切波段（沿用该波段默认频率）。 */
@@ -1537,6 +1548,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val bandKey = st.band.trim().uppercase()
             workedCallsByBand = workedCallsByBand +
                 (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
+            refreshWorkedBands()
             // 「跟踪的呼号通联完成后取消跟踪」：本段通联已落库，无需再盯这个台
             // （名单与自动收录顺序一并移除；幂等）
             val wasFollowed = key in latestSettings.followCalls
@@ -1717,6 +1729,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 指定波段的已通联呼号（照 FT8CN `checkQSLCallsign`）；自动程序的 CQ 闸门用。 */
     private fun workedCallsOnBand(band: String): Set<String> =
         workedCallsByBand[band.trim().uppercase()].orEmpty()
+
+    /**
+     * 重算「本波段 / 其它波段」两份已通联呼号（供解码表高亮）。
+     *
+     * 照 FT8CN：`checkQSLCallsign`（`where band=?`）＝本波段 → 删除线；
+     * `checkQSLCallsign_OtherBand`（`where band<>?`）＝其它波段 → 蓝字。
+     * 任何改变 [_status].band 或 [workedCallsByBand] 的地方都要调一次。
+     */
+    private fun refreshWorkedBands() {
+        val band = _status.value.band.trim().uppercase()
+        val thisBand = workedCallsByBand[band].orEmpty()
+        _workedThisBand.value = thisBand
+        _workedOtherBands.value = workedCallsByBand
+            .filterKeys { it != band }
+            .values
+            .flatten()
+            .toSet() - thisBand
+    }
 
     /**
      * 自动程序用的已通联索引：**只含当前波段**。

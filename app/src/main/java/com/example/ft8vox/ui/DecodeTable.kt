@@ -73,6 +73,7 @@ import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.JtdxRow
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
+import com.example.ft8vox.ui.theme.WorkedOtherBandBlue
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -107,16 +108,18 @@ fun highlightRowColor(role: HighlightRole): Color? = when (role) {
 }
 
 /**
- * 「报文」列的文字颜色（docs/Ft8Vox.md）。
+ * 「报文」列的文字颜色（照 FT8CN，docs/Ft8Vox.md §4.3）。
  *
- * - **与我有关**（发给我的报文，含网格应答 / 报告 / R报告 / 73 / RR73）→ **整列文字标红**，
- *   一眼看出哪几条是冲我来的（整行底色仍按「色卡」规则走，不受影响）。
- * - **已通联** → 红字 + 删除线（呈现方式固定，不再有设置开关）。
- * - 其余按行底色的明暗（重复行整体弱化）。
+ * 优先级（高→低）：
+ * 1. **与我有关**（发给我的报文 / 当前对手）→ **红字**；
+ * 2. **其它波段已通联**（本波段没通过）→ **蓝字**；
+ * 3. 其余 → 默认色（重复行整体弱化）。
+ *
+ * 「本波段已通联」不改文字颜色，只画删除线。
  */
 fun decodeMessageColor(style: DecodeStyle, base: Color): Color = when {
     style.toMe -> ToMeRed
-    style.worked -> BarWorked
+    style.workedOtherBand -> WorkedOtherBandBlue
     else -> base
 }
 
@@ -312,7 +315,7 @@ private fun DecodeTableRow(
     val textColor = MaterialTheme.colorScheme.onSurface
     val bg = hl?.copy(alpha = HL_ALPHA) ?: JtdxRow
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
-    // 已通联＝红字 + 删除线（固定，不再有「高亮/下划线/隐藏」三选一，§29）
+    // 本波段已通联＝删除线（固定，不再有「高亮/下划线/隐藏」三选一，§29）
     val workedDecoration = TextDecoration.LineThrough
     val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
     // 报文列颜色（§29）：与我有关＝整体标红；已通联＝红字；其余按「色卡」明暗
@@ -452,11 +455,11 @@ private fun DecodeTableRow(
                         modifier = Modifier.width(COL_DT),
                     )
                     // 报文（一行；放不下则逐级缩小字号）
-                    // 与我有关 → 整列标红（我的呼号同色加粗）；已通联 → 红字 + 删除线（§29）
+                    // 与我有关 → 整列标红；本波段已通联 → 删除线；其它波段已通联 → 蓝字（§4.3）
                     InfoText(
                         text = annotatedMessage(msg.text, myCall, msgCallColor),
                         color = msgColor,
-                        decoration = if (style.worked) workedDecoration else null,
+                        decoration = if (style.workedThisBand) workedDecoration else null,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
                     // 行尾只保留「未通联分区」的红框字母标志（照 FT8CN 手册）：

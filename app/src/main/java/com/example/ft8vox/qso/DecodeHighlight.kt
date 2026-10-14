@@ -153,6 +153,10 @@ data class DecodeStyle(
     /** 新 CQ 区域。 */
     val newCqZone: Boolean = false,
     val worked: Boolean = false,
+    /** **本波段**已通联（报文列画**删除线**）。 */
+    val workedThisBand: Boolean = false,
+    /** **仅其它波段**已通联（本波段没通过）：报文列标**蓝字**。 */
+    val workedOtherBand: Boolean = false,
     val duplicate: Boolean = false,
     val transmitting: Boolean = false,
 ) {
@@ -192,6 +196,14 @@ object DecodeHighlight {
         myCall: String = "",
         duplicate: Boolean = false,
         currentTxText: String? = null,
+        /**
+         * **本波段**已通联呼号（大写）。用于「已通联＝删除线」（照 FT8CN `checkQSLCallsign` 的
+         * `where band=?`）。与 [worked] 的区别：[worked] 是**跨波段**索引，仍决定「新网格 / 新实体 /
+         * 新呼号」等新槽位判定。
+         */
+        workedThisBand: Set<String> = emptySet(),
+        /** **其它波段**已通联呼号（大写）。用于「其它波段已通联＝蓝字」（FT8CN `checkQSLCallsign_OtherBand`）。 */
+        workedOtherBands: Set<String> = emptySet(),
     ): DecodeStyle {
         val from = parsed.from
         val toMe = parsed.addressedTo(myCall)
@@ -210,6 +222,11 @@ object DecodeHighlight {
         // 自己发的报文：解码行的**发方就是我方呼号**（本地回采 / 对端转发时会解码到自己）。
         // 按「正在发射」同一档高亮（黄底黑字，最高优先级）；用 CallMatch 比较以兼容复合呼号（`/P`）。
         val fromMe = CallMatch.isFrom(parsed.from, myCall)
+        // 按波段拆分的「已通联」（照 FT8CN `checkQSLCallsign` / `checkQSLCallsign_OtherBand`）：
+        // 本波段 → 删除线；仅其它波段 → 蓝字。
+        val fromKey = from?.trim()?.uppercase()
+        val workedThisBandCall = fromKey != null && fromKey in workedThisBand
+        val workedOtherBandCall = fromKey != null && !workedThisBandCall && fromKey in workedOtherBands
 
         val newCall = from != null && !workedCall
 
@@ -236,6 +253,8 @@ object DecodeHighlight {
             newItu = newItu,
             newCqZone = newCqZone,
             worked = workedCall,
+            workedThisBand = workedThisBandCall,
+            workedOtherBand = workedOtherBandCall,
             duplicate = duplicate,
             transmitting = transmitting,
         )

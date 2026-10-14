@@ -68,6 +68,7 @@ import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.MapLinkColor
 import com.example.ft8vox.ui.theme.MapLinkMine
 import com.example.ft8vox.ui.theme.VoxRxGreen
+import com.example.ft8vox.ui.theme.WorkedOtherBandBlue
 
 /**
  * 设置页（安卓 Preference 风格，docs/Ft8Vox.md）。
@@ -784,8 +785,9 @@ private fun HighlightLegend() {
 
         LegendSection("解码列表 · 文字与标志")
         LegendRow(ToMeRed, "红字：与我有关（报文里有本台呼号，只标「报文」那一列）")
-        LegendRow(BarWorked, "红字 + 删除线：已通联过的呼号")
+        LegendRow(WorkedOtherBandBlue, "蓝字：其它波段已通联过（本波段还没通过）")
         LegendRow(BarWorked, "红框字母 C / D / I：未通联过的 CQ / DXCC / ITU 分区")
+        LegendRow(MaterialTheme.colorScheme.onSurface, "删除线：本波段已通联过（文字保持默认色）")
         LegendRow(Color(0xFF9AA0B5), "灰字弱化：重复解码（同一条报文又解到一次）")
 
         LegendSection("地图")
