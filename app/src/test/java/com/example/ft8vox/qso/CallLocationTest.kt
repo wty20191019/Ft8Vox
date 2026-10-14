@@ -35,7 +35,7 @@ class CallLocationTest {
 
     @Test
     fun unknownOrNonCallsignReturnsNull() {
-        assertNull(CallLocation.locate("ZZ9ZZZ"))
+        assertNull(CallLocation.locate("QQ9QQQ"))
         assertNull(CallLocation.locate("HELLO"))
         assertNull(CallLocation.locate(""))
         assertNull(CallLocation.locate(null))

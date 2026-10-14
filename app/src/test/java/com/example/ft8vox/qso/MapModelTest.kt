@@ -131,7 +131,7 @@ class MapModelTest {
     @Test
     fun callMarkerSkipsUnknownLocation() {
         val markers = MapModel.callMarkers(
-            messages = listOf(decoded("F4FSY ZZ9ZZZ -08", slotUtcMs = 1000)),
+            messages = listOf(decoded("F4FSY QQ9QQQ -08", slotUtcMs = 1000)),
             myCall = "F4FSY",
         )
         assertEquals(0, markers.size)
