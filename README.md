@@ -50,6 +50,8 @@ Ft8Vox 把 Android 手机变成一台 FT8 终端：采集电台音频实时解�
 - 设备端测试（可选，需连接设备 / 模拟器）：`./gradlew :app:connectedDebugAndroidTest`
 - 单测只覆盖纯逻辑（报文解析 / 组装、QSO 状态机、自动程序、ADIF、网格与地图、筛选与高亮等）；
   **触发音频、VOX 键控、真实通联**必须在真机 + 电台上验证，清单见 [docs/Ft8Vox.md](docs/Ft8Vox.md) 第 10 节。
+- 主机召回率基准（可选，不进 APK）：`app/src/main/cpp/ft8w/tools/ft8_cli.c` 的 `bench <dir>` 在 PC 上跑，
+  与 APK 共用同一份 native 源码；构建方式与基线数值见 [docs/Ft8Vox.md](docs/Ft8Vox.md) 第 10.9 节。
 - **不配 CI**：出包与测试均本地执行。
 
 ## 目录结构
@@ -66,7 +68,7 @@ app/src/main/
 │   ├── grid/                               # Maidenhead 网格、大圆几何、地图投影、昼夜灰线
 │   ├── qso/                                # 报文解析/组装、DXCC、QSO 状态机、自动程序、筛选与高亮
 │   └── ui/                                 # Compose 页面与组件（操作/频谱/地图/日志/设置 + theme/）
-├── cpp/                                    # native：ft8w/（ft8_w 编解码核心 + JNI 桥）
+├── cpp/                                    # native：ft8w/（ft8_w 编解码核心 + JNI 桥 + 主机基准 ft8_cli）
 └── res/                                    # 资源
 docs/Ft8Vox.md                              # 唯一文档：使用与设计
 ```

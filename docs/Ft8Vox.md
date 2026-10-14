@@ -641,6 +641,7 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 - **候选全局择优**（默认，`Ft8DecodeConfig.globalCandidates`）：各段先只搜候选（宽松池 ≥256 个，不在这一步定额度），汇总到全局后**跨段去重** —— 同一信号（绝对频率 ±1 格 ≈6.25 Hz、时间 ±1 符号 ≈0.16 s 内）最多留 **3 个代表**，100 Hz 重叠区被两段各搜一次的重复也在此折掉 —— 再按同步得分全局排序取前 N 个，然后按所属段分发回各自的瀑布做 LDPC 解码；**每个 SIC 趟都重做这一轮**。留 3 个代表而非 1 个，是因为同步得分只是代理指标、得分最高的那个副本不一定能解出。关掉开关则退回「按段均分」（总名额 ÷ 段数，余数给低频段、每段至少 1）：某段配额用尽就不再收，拥挤时容易漏掉别的段分数更高的弱台。
 - **减谱（SIC）在各段解码线程里并行**：解完本段候选就顺手把本段解出的报文从本段残差上减掉（各段只动自己的 `resid` 与自己的消除器，互不干扰），**不汇总到主线程串行减**。时域减谱是重活（单条约 8 ms），串行会成为整个解码的瓶颈：实测同样 4 段的繁忙时隙，串行减谱 149 ms、并行后 ~60 ms；若把减谱挪到独立阶段（多一道栅栏），各段解码耗时的快慢也会被拉平，整轮反而慢 ~20 ms。代价是同一信号被相邻两段都解出时会在两份残差里各减一次（残差本就独立，无副作用），换来的是**每段的残差都被本段解出的信号清干净**，第二趟能多挖出被压制的小信号（实测最多多解 1–3 条）。
 - 实测（4 核模拟器 → 4 段，繁忙录音 `191111_110615.wav`，期望清单 22 条）：名额宽松时两种口径持平（120 名额：21 vs 20），**名额越紧全局择优优势越大**（20 名额：18 vs 15；30 名额：20 vs 18）；代价是解码耗时约翻倍（~300 ms vs ~150 ms）—— 仍只占 15 s 时隙的百分之几。
+- 60 文件 / 1298 条语料实测（App 口径：4 段 × 4 线程、2 遍 SIC、LDPC 20 迭代）：全局择优在 20/40/60/120 名额分别 **73.9% / 80.7% / 81.7% / 81.9%**，按段均分 71.8% / 79.4% / 80.6% / 81.5% —— **各档都不劣**、名额越紧增益越大（20 名额 +2.1pp，默认 120 名额 +0.4pp），代价是耗时约 ×1.8（原因见下条「为什么要分段」）。跑法与完整基线见 [§10.9](#109-召回率基准主机-ft8_cli)。
 - **为什么要分段**：多趟减谱重解里**遍间的时域信号消除**原本串行、且不受候选线程数影响，是耗时主因；分段让它同时落到频率维度的多个核上。代价是每段各做一次完整 STFT，总 FFT 开销随段数线性增长。
 - 对应字段：`Ft8DecodeConfig.numBands`（默认 1＝不分段）与 `numThreads`（线程总预算，由 native 按段数均分）；二者都由引擎按核数自动写入，**不作为用户设置**。界面把它如实显示出来：设置页「解码并行」一行（`4 段 × 2 线程 = 8`）与操作页顶栏读数行（`4段×2`），两者都由 `decodeParallelism(fMin, fMax, 核数)` 按同一规则算出。
 - **各设置项的作用域**（分段后并非所有项都「整个频谱一份」）：`fMin`/`fMax`/`timeOsr`/`freqOsr` 是整个频谱的定义（每段用同一份，不切分）；「候选上限」是**整个频谱的总名额**，默认由 native「全局择优」分配（见上），关掉「候选全局择优」开关才按段均分；「最低得分」（阈值）、「LDPC 迭代」（每条候选的迭代上限）、「减谱重解趟数」（每段各跑 N 趟，与「全局 N 趟」总工作量相同）分段前后结果等价；「单时隙上限」在 Kotlin 侧对合并去重后的**全频谱总条数**截断。
@@ -824,6 +825,54 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 - [ ] 后台 / 息屏期间解码仍在进行，回前台数据连续。
 - [ ] 系统文件选择器打开期间接收不中断。
 - [ ] 长时间运行不 ANR、不崩溃（发射中止 / 关流线程安全）。
+
+### 10.9 召回率基准（主机 `ft8_cli`）
+
+> **非真机项**：这是**主机侧**的召回率 / 耗时回归基线，用来验证解码内核改动（如 §9.4 的「候选全局择优」）的收益与代价，不必占用模拟器或真机。
+
+**工具**：`app/src/main/cpp/ft8w/tools/ft8_cli.c`（`app/src/main/cpp/ft8w/CMakeLists.txt` 里对主机默认构建；Android 侧需显式 `-DFT8_BUILD_CLI=ON`）。它与 APK 共用**同一份 native 源码**，故主机数值可直接代表设备侧（与文档 §9.4 记录的 x86_64 模拟器同语料数值吻合：单段 81.5% vs 81.4%，4 段 81.9% vs 81.7%，差 ≤0.3pp）。
+
+**构建**（Windows + LLVM clang + Ninja）：clang 走 MSVC ABI，需要 Windows SDK / CRT，所以得先导入 MSVC 环境，再让 CMake 用 LLVM 自己的 `llvm-ar` / `llvm-ranlib` / `lld-link`：
+
+```powershell
+# 1) 导入 MSVC 环境（提供 Windows SDK / CRT 的 INCLUDE、LIB）
+$vs = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest `
+        -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1 && set" | ForEach-Object {
+    $i = $_.IndexOf('='); [Environment]::SetEnvironmentVariable($_.Substring(0, $i), $_.Substring($i + 1))
+}
+
+# 2) 配置 + 构建（cmake / ninja 用 Android SDK 自带的那份；LLVM 默认装在 C:\Program Files\LLVM）
+$bin  = "C:\Users\<你>\AppData\Local\Android\Sdk\cmake\3.22.1\bin"
+$llvm = "C:/Program Files/LLVM/bin"
+& "$bin\cmake.exe" -S app\src\main\cpp\ft8w -B "$env:TEMP\ft8vox-host" -G Ninja -DCMAKE_BUILD_TYPE=Release `
+    "-DCMAKE_C_COMPILER=$llvm/clang.exe" "-DCMAKE_CXX_COMPILER=$llvm/clang++.exe" `
+    "-DCMAKE_MAKE_PROGRAM=$bin/ninja.exe" "-DCMAKE_AR=$llvm/llvm-ar.exe" `
+    "-DCMAKE_RANLIB=$llvm/llvm-ranlib.exe" "-DCMAKE_LINKER=$llvm/lld-link.exe"
+& "$bin\cmake.exe" --build "$env:TEMP\ft8vox-host"      # 产物：ft8vox-host\ft8_cli.exe
+```
+
+**跑法**（语料 `D:\Desktop\ft8_w\test`：69 个 WAV，其中 60 个带对照 `.txt`，合计 1298 条期望报文；`bench` 会打印逐文件命中 / 漏解 / 多余与总表）：
+
+```powershell
+# App 口径：4 段 × 4 线程（每段 1 线程）、候选 120、LDPC 20 迭代、2 遍 SIC
+ft8_cli bench D:\Desktop\ft8_w\test --bands 4 --threads 4 --candidates 120 --iters 20 --depth 2 --subtract
+```
+
+> ⚠️ 三个 CLI 默认值与 App **不同**，对比时务必显式给：`--subtract`（CLI 默认关，App 在 `passes > 1` 时开）、`--depth`（CLI 默认 0 → native 按 **3** 遍 SIC，App 默认 2 遍）、`--iters`（CLI 默认 25，App 默认 20）。漏给 `--subtract` 会把召回率从约 82% 掉到约 74%，足以掩盖任何开关差异。
+
+**基线（2026-10，主机 24 核，4 段 × 4 线程，2 遍 SIC，LDPC 20）**：
+
+| 候选上限 | 按段均分（开关关） | 全局择优（开关开，默认） | 差 | 耗时（均分 / 择优） |
+| --- | --- | --- | --- | --- |
+| 20 | 71.8%（932） | 73.9%（959） | **+27 条 / +2.1pp** | 111 / 194 ms |
+| 40 | 79.4%（1030） | 80.7%（1047） | +17 条 / +1.3pp | 133 / 232 ms |
+| 60 | 80.6%（1046） | 81.7%（1060） | +14 条 / +1.1pp | 139 / 246 ms |
+| 120（默认） | 81.5%（1058） | 81.9%（1063） | +5 条 / +0.4pp | 143 / 254 ms |
+
+- **召回**：全局择优各档都不劣于按段均分，且**名额越紧优势越大**（名额宽松时两者趋同）；「多余」（解出但不在对照清单里的报文）反而略降（40 → 36）。
+- **耗时**：约 ×1.8。原因是全局择优把名额集中到拥挤频段，而每段只有 1 线程（`num_threads / num_bands`），最忙的那段成为关键路径 —— 分段越细越均衡（同档 120 名额：1 / 2 / 4 / 6 段实测 214 / 301 / 254 / 225 ms）。峰值仍只占 15 s 时隙的百分之几，且真机 6 核 → 6 段比模拟器 4 段更均衡。
+- **分段本身不减损召回**：4 段（81.9%）≥ 1 段（81.5%）。
 
 ---
 
