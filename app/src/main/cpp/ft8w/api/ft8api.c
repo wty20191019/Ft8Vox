@@ -1129,11 +1129,11 @@ static void band_search_worker(void* arg)
     b->count = collect_band_candidates(b->mon, b->scratch, n, b->band, b->pool);
 }
 
-/** 「解码本段候选」阶段的段参数。 */
+/** 「解码本段候选 + 减谱」阶段的段参数。 */
 typedef struct
 {
     const monitor_t* mon;
-    const float* resid;
+    float* resid;
     int num_samples;
     int sample_rate;
     const ft8_decode_config_t* cfg;
@@ -1143,6 +1143,8 @@ typedef struct
     int num_seen;
     pass_hit_t* out;
     int max_out;
+    ft8_subtract_t* sub; /**< 本段的消除器；NULL 表示单遍（不做减谱） */
+    int* order;          /**< 减谱下标暂存（max_out 个） */
     int count;
 } band_decode_arg_t;
 
@@ -1152,6 +1154,31 @@ static void band_decode_worker(void* arg)
     b->count = decode_candidate_set(b->mon, b->resid, b->num_samples, b->sample_rate, b->cfg,
                                     b->cands, b->num_cand, b->seen, b->num_seen,
                                     b->out, b->max_out);
+    if (b->count <= 0 || !b->sub)
+        return;
+
+    /* 减谱（SIC）：把本段解出的、且不在既有 seen 里的报文按原始 SNR 由强到弱减掉。
+     * 各段只动自己的残差（自己的消除器），所以这一步与其它段的解码/减谱完全并行 ——
+     * 这正是当初分段的初衷：避免遍间的时域减谱串行成为耗时瓶颈（单条约 8 ms）。 */
+    int n = 0;
+    for (int i = 0; i < b->count; ++i)
+        if (!hit_seen_before(&b->out[i].message, b->seen, b->num_seen))
+            b->order[n++] = i;
+    for (int a = 0; a < n; ++a)
+        for (int c = a + 1; c < n; ++c)
+            if (b->out[b->order[c]].snr_order > b->out[b->order[a]].snr_order)
+            {
+                int t = b->order[a];
+                b->order[a] = b->order[c];
+                b->order[c] = t;
+            }
+    uint8_t tones[FT8_NN];
+    for (int i = 0; i < n; ++i)
+    {
+        const pass_hit_t* h = &b->out[b->order[i]];
+        ft8_encode(h->message.payload, tones);
+        ft8_subtract_signal(b->sub, b->resid, b->num_samples, tones, h->freq, h->time);
+    }
 }
 
 /** 分段解码 + 候选全局择优（`cfg->global_candidates`）。
@@ -1192,7 +1219,6 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
     int num_results = 0;
     int num_seen = 0;
     bool subtract_ok = true;
-    uint8_t tones[FT8_NN];
 
     monitor_t* mons = (monitor_t*)calloc((size_t)num_bands, sizeof(monitor_t));
     ft8_decode_config_t* bcfg =
@@ -1209,8 +1235,7 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
     ftx_candidate_t* band_cands =
         (ftx_candidate_t*)malloc((size_t)total_cap * sizeof(ftx_candidate_t));
     pass_hit_t* hits = (pass_hit_t*)malloc((size_t)total_cap * sizeof(pass_hit_t));
-    int* new_idx = (int*)malloc((size_t)total_cap * sizeof(int));
-    int* new_band = (int*)malloc((size_t)total_cap * sizeof(int));
+    int* sub_order = (int*)malloc((size_t)total_cap * sizeof(int));
     ftx_message_t* seen = (ftx_message_t*)malloc(
         (size_t)(total_cap * (passes + 1) + 8) * sizeof(ftx_message_t));
     ft8_thread_t** threads = (ft8_thread_t**)calloc((size_t)num_bands, sizeof(ft8_thread_t*));
@@ -1220,8 +1245,7 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
         (band_decode_arg_t*)calloc((size_t)num_bands, sizeof(band_decode_arg_t));
 
     if (!mons || !bcfg || !resid || !subs || !scratch || !pool || !sel || !band_n ||
-        !band_off || !band_cands || !hits || !new_idx || !new_band || !seen || !threads ||
-        !sargs || !dargs)
+        !band_off || !band_cands || !hits || !sub_order || !seen || !threads || !sargs || !dargs)
     {
         rc = FT8_ERR_NOMEM;
         goto cleanup;
@@ -1330,7 +1354,7 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
             }
         }
 
-        /* 4) 各段并行：用本段自己的瀑布解码本段候选 */
+        /* 4) 各段并行：用本段自己的瀑布解码本段候选，解完顺手减掉本段新增的报文 */
         for (int i = 0; i < num_bands; ++i)
         {
             dargs[i].mon = &mons[i];
@@ -1344,11 +1368,14 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
             dargs[i].num_seen = num_seen; /* 本遍开始前的既有消息（只读快照） */
             dargs[i].out = hits + band_off[i];
             dargs[i].max_out = band_n[i];
+            dargs[i].sub = subs[i];
+            dargs[i].order = sub_order + band_off[i];
             dargs[i].count = 0;
         }
         run_band_workers(band_decode_worker, dargs, sizeof(band_decode_arg_t), threads, num_bands);
 
-        /* 5) 汇总：按 seen 跨段去重，并记下新增命中（供下面的减谱用） */
+        /* 5) 汇总：按 seen 跨段去重后输出。减谱已在本段自己的解码线程里就近做掉
+         *    （见 band_decode_worker），所以这里不再需要记「新增命中」。 */
         for (int i = 0; i < num_bands; ++i)
         {
             if (dargs[i].count < 0)
@@ -1358,8 +1385,7 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
             }
             for (int k = 0; k < dargs[i].count; ++k)
             {
-                const int h_idx = band_off[i] + k;
-                const pass_hit_t* h = &hits[h_idx];
+                const pass_hit_t* h = &hits[band_off[i] + k];
 
                 if (hit_seen_before(&h->message, seen, num_seen))
                 {
@@ -1372,8 +1398,6 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
                 }
 
                 seen[num_seen++] = h->message;
-                new_idx[n_new] = h_idx;
-                new_band[n_new] = i;
                 n_new++;
                 if (out && num_results < max_out)
                     emit_hit(h, pass, &out[num_results]);
@@ -1385,30 +1409,6 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
 
         if (pass + 1 >= passes || n_new == 0)
             break; /* 没有新增可减、或已是最后一趟：残差不变，再搜也是同样结果 */
-
-        /* 6) 减谱（SIC）：新增命中按原始 SNR 由强到弱，减到各自所属段的残差上 */
-        for (int a = 0; a < n_new; ++a)
-        {
-            for (int b = a + 1; b < n_new; ++b)
-            {
-                if (hits[new_idx[b]].snr_order > hits[new_idx[a]].snr_order)
-                {
-                    int t = new_idx[a];
-                    new_idx[a] = new_idx[b];
-                    new_idx[b] = t;
-                    t = new_band[a];
-                    new_band[a] = new_band[b];
-                    new_band[b] = t;
-                }
-            }
-        }
-        for (int a = 0; a < n_new; ++a)
-        {
-            const pass_hit_t* h = &hits[new_idx[a]];
-            const int b = new_band[a];
-            ft8_encode(h->message.payload, tones);
-            ft8_subtract_signal(subs[b], resid[b], num_samples, tones, h->freq, h->time);
-        }
     }
 
 cleanup:
@@ -1439,8 +1439,7 @@ cleanup:
     free(band_off);
     free(band_cands);
     free(hits);
-    free(new_idx);
-    free(new_band);
+    free(sub_order);
     free(seen);
     free(threads);
     free(sargs);
