@@ -59,14 +59,16 @@ val MapLinkColor = Color(0x9989B4FA)
 /** 「与我有关」的连线与连线文字（红）。 */
 val MapLinkMine = Color(0xFFFF5252)
 
-// ---- JTDX/WSJT-X 默认解码高亮底色（docs/Ft8Vox.md） ----
-// 取 WSJT-X `DecodeHighlightingModel::defaults_` 的原值；深色板上按 alpha 铺整行底。
-/** 自己发的（Transmitted）。 */
+// ---- 解码高亮色（docs/Ft8Vox.md §4.2） ----
+// 照 FT8CN 手册：**整行底色只留两档**（CQ＝橙黄、自己发的＝黄）；其余类别不铺底，
+// 「与我有关」靠红字、「已通联」靠删除线、未通联分区靠红框字母标志（C/D/I）。
+/** 自己发的（Transmitted）：黄底。 */
 val HlTx = Color(0xFFFFF200)
+/** CQ in message：**橙黄**整行底（照 FT8CN 手册「黄色背景＝CQ」）。 */
+val HlCq = Color(0xFFFFA000)
+// 以下四色已**不再铺整行底**，仅作频谱页呼号文字色。
 /** 叫我（My Call in message）。 */
 val HlMyCall = Color(0xFFFF6666)
-/** CQ in message。 */
-val HlCq = Color(0xFF66FF66)
 /** 新 DXCC。 */
 val HlDxcc = Color(0xFFFF00FF)
 /** 新网格。 */

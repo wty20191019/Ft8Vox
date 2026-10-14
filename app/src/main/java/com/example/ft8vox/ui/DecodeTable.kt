@@ -3,6 +3,7 @@ package com.example.ft8vox.ui
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,7 +65,6 @@ import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
 import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewEntity
 import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCall
@@ -97,20 +98,15 @@ data class DecodeRow(
 private const val HL_ALPHA = 0.42f
 
 /**
- * 高亮类别 → **整行底色**（JTDX/WSJT-X 默认，docs/Ft8Vox.md）。
+ * 高亮类别 → **整行底色**（照 FT8CN 手册，docs/Ft8Vox.md §4.2）。
  *
- * 已通联 / 重复 / 普通不上底色（返回 null），用文字弱化表达。
+ * 整行底色**只留两档**：CQ＝橙黄、自己发的（TX）＝黄。其余类别一律返回 null（用默认行色）：
+ * 「与我有关」靠**报文列红字**、「已通联」靠**删除线**、未通联分区靠**红框字母标志**（C/D/I）。
  */
 fun highlightRowColor(role: HighlightRole): Color? = when (role) {
     HighlightRole.TX -> HlTx
-    HighlightRole.TO_ME -> HlMyCall
     HighlightRole.CQ -> HlCq
-    HighlightRole.NEW_GRID -> HlGrid
-    HighlightRole.NEW_ENTITY -> HlDxcc
-    HighlightRole.NEW_CALL -> HlCall
-    HighlightRole.WORKED -> null
-    HighlightRole.DUPLICATE -> null
-    HighlightRole.NORMAL -> null
+    else -> null
 }
 
 /**
@@ -469,7 +465,10 @@ private fun DecodeTableRow(
                     if (style.toMe) Marker(VoxError)
                     if (style.current) Marker(MaterialTheme.colorScheme.primary)
                     if (style.newGrid) Marker(BarNewGrid)
-                    if (style.hasNewEntityMark) Marker(BarNewEntity)
+                    // 未通联分区：红框字母标志（照 FT8CN 手册）C＝CQ 分区、D＝DXCC 分区、I＝ITU 分区
+                    if (style.newCqZone) ZoneBadge("C")
+                    if (style.newEntity) ZoneBadge("D")
+                    if (style.newItu) ZoneBadge("I")
                     if (followed) Marker(BarNewCall)
                 }
                 // 声音频率 · 国家 · 距离
@@ -559,6 +558,31 @@ private fun Marker(color: Color) {
             .clip(CircleShape)
             .background(color),
     )
+}
+
+/**
+ * 未通联分区的**红框字母标志**（照 FT8CN 手册，docs/Ft8Vox.md §4.3）：
+ * `C`＝未通联过的 CQ 分区、`D`＝未通联过的 DXCC 分区、`I`＝未通联过的 ITU 分区。
+ *
+ * 紧跟在报文列（呼号）之后，只在对应分区**没通联过**时出现。
+ */
+@Composable
+private fun ZoneBadge(letter: String) {
+    Box(
+        modifier = Modifier
+            .padding(start = 3.dp)
+            .size(14.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .border(1.dp, BarWorked, RoundedCornerShape(2.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            letter,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+            color = BarWorked,
+            maxLines = 1,
+        )
+    }
 }
 
 /**

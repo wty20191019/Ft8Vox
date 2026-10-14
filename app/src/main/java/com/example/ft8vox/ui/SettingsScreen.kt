@@ -63,14 +63,9 @@ import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
 import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewEntity
 import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarWorked
-import com.example.ft8vox.ui.theme.HlCall
 import com.example.ft8vox.ui.theme.HlCq
-import com.example.ft8vox.ui.theme.HlDxcc
-import com.example.ft8vox.ui.theme.HlGrid
-import com.example.ft8vox.ui.theme.HlMyCall
 import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.MapLinkColor
 import com.example.ft8vox.ui.theme.MapLinkMine
@@ -786,24 +781,20 @@ private fun ColorDot(color: Color) {
 @Composable
 private fun HighlightLegend() {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        LegendSection("解码列表 · 整行底色（色卡）")
+        LegendSection("解码列表 · 整行底色（照 FT8CN）")
+        LegendRow(HlCq, "橙底：CQ 呼叫")
         LegendRow(HlTx, "黄底：自己发的报文 / 正在发射的那条")
-        LegendRow(HlMyCall, "红底：发给我的报文（叫我）")
-        LegendRow(HlCq, "绿底：CQ")
-        LegendRow(HlGrid, "橙底：新网格")
-        LegendRow(HlDxcc, "品红底：新 DXCC / 新 ITU / 新 CQ 区域 / 新前缀")
-        LegendRow(HlCall, "青底：新呼号")
 
-        LegendSection("解码列表 · 文字")
-        LegendRow(ToMeRed, "红字：发给我的报文（只标「报文」那一列）")
-        LegendRow(BarWorked, "红字 + 删除线：已通联")
+        LegendSection("解码列表 · 文字与标志")
+        LegendRow(ToMeRed, "红字：与我有关（报文里有本台呼号，只标「报文」那一列）")
+        LegendRow(BarWorked, "红字 + 删除线：已通联过的呼号")
+        LegendRow(BarWorked, "红框字母 C / D / I：未通联过的 CQ / DXCC / ITU 分区")
         LegendRow(Color(0xFF9AA0B5), "灰字弱化：重复解码（同一条报文又解到一次）")
 
         LegendSection("解码列表 · 行尾小圆点（恒开）")
         LegendRow(VoxError, "红：报文里有我的呼号")
         LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
         LegendRow(BarNewGrid, "紫：新网格")
-        LegendRow(BarNewEntity, "棕：新 DXCC / ITU / CQ 区域 / 新前缀")
         LegendRow(BarNewCall, "粉：已跟踪的呼号")
 
         LegendSection("地图")
