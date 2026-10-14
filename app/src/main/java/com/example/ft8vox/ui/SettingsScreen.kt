@@ -62,14 +62,11 @@ import com.example.ft8vox.data.settings.clampWaterfallRangeDb
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.Protocol
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCq
 import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.MapLinkColor
 import com.example.ft8vox.ui.theme.MapLinkMine
-import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
 
 /**
@@ -790,12 +787,6 @@ private fun HighlightLegend() {
         LegendRow(BarWorked, "红字 + 删除线：已通联过的呼号")
         LegendRow(BarWorked, "红框字母 C / D / I：未通联过的 CQ / DXCC / ITU 分区")
         LegendRow(Color(0xFF9AA0B5), "灰字弱化：重复解码（同一条报文又解到一次）")
-
-        LegendSection("解码列表 · 行尾小圆点（恒开）")
-        LegendRow(VoxError, "红：报文里有我的呼号")
-        LegendRow(MaterialTheme.colorScheme.primary, "蓝：正在通联的对手")
-        LegendRow(BarNewGrid, "紫：新网格")
-        LegendRow(BarNewCall, "粉：已跟踪的呼号")
 
         LegendSection("地图")
         LegendRow(MapLinkMine, "红线 / 红字：报文里有我的连线（我发出的 / 发给我的）")

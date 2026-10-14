@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -64,8 +63,6 @@ import com.example.ft8vox.qso.DecodeStyle
 import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
-import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCall
 import com.example.ft8vox.ui.theme.HlCq
@@ -462,14 +459,11 @@ private fun DecodeTableRow(
                         decoration = if (style.worked) workedDecoration else null,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
-                    if (style.toMe) Marker(VoxError)
-                    if (style.current) Marker(MaterialTheme.colorScheme.primary)
-                    if (style.newGrid) Marker(BarNewGrid)
-                    // 未通联分区：红框字母标志（照 FT8CN 手册）C＝CQ 分区、D＝DXCC 分区、I＝ITU 分区
+                    // 行尾只保留「未通联分区」的红框字母标志（照 FT8CN 手册）：
+                    // C＝CQ 分区、D＝DXCC 分区、I＝ITU 分区；不再画其它小圆点。
                     if (style.newCqZone) ZoneBadge("C")
                     if (style.newEntity) ZoneBadge("D")
                     if (style.newItu) ZoneBadge("I")
-                    if (followed) Marker(BarNewCall)
                 }
                 // 声音频率 · 国家 · 距离
                 Text(
@@ -547,18 +541,6 @@ private fun labelSmallAlpha(alpha: Float) =
         fontFamily = FontFamily.Monospace,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
     )
-
-/** 小圆点标记。 */
-@Composable
-private fun Marker(color: Color) {
-    Box(
-        modifier = Modifier
-            .padding(start = 4.dp)
-            .size(6.dp)
-            .clip(CircleShape)
-            .background(color),
-    )
-}
 
 /**
  * 未通联分区的**红框字母标志**（照 FT8CN 手册，docs/Ft8Vox.md §4.3）：
