@@ -734,6 +734,7 @@ object AudioEngine {
                 returnDuplicates = false,
                 osdDepth = 2,
                 numBands = decodeBandsFor(cores),
+                globalCandidates = p.globalCandidates,
             )
         }
 

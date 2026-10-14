@@ -353,10 +353,29 @@ fun SettingsScreen(
                 value = app.decode.maxCandidates,
                 range = DecodeSettings.MAX_CANDIDATES_RANGE,
                 step = 20,
-                subtitle = "「整个频谱」的同步候选名额上限（20–500），按频率分段均分到各段" +
-                    "（当前 ${decodeParallel.bands} 段 → 每段约 ${decodeParallel.candidatesPerBand(app.decode.maxCandidates)} 个）。" +
-                    "调高：给弱信号更多机会，更慢；调低时名额先被强台占满、弱台漏解。",
+                subtitle = "「整个频谱」的同步候选名额上限（20–500）：名额属于整个频谱，不属于任何一段。" +
+                    "调高：给弱信号更多机会，更慢；调低：名额先被强信号占满、弱台漏解。" +
+                    (if (app.decode.globalCandidates)
+                        "当前「全局择优」：各段先各取一个宽松候选池，汇总跨段去重后按同步得分" +
+                            "全局排序取前 ${app.decode.maxCandidates} 个，再分发回各段解码。" +
+                            "某段再拥挤也不会挤掉别的段分数更高的弱台。"
+                    else
+                        "当前「按段均分」：${decodeParallel.bands} 段 → 每段约 " +
+                            "${decodeParallel.candidatesPerBand(app.decode.maxCandidates)} 个，" +
+                            "某段配额用尽就不再收了。") +
+                    "即时生效。",
                 onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
+            )
+            PrefDivider()
+            PrefSwitch(
+                title = "候选全局择优",
+                subtitle = "开（默认）：候选名额按「全频谱全局择优」分配 —— 各段先各取宽松池，" +
+                    "汇总后跨段去重（同一信号最多留 3 个代表，100 Hz 重叠区被两段各搜一次的重复也折掉），" +
+                    "再按同步得分全局排序取前 N 个，每个减谱趟都重做。" +
+                    "关：退回「按段均分」（总名额 ÷ 段数），每段配额用尽就不再收 —— " +
+                    "解码略快，但拥挤时容易漏掉弱台。",
+                checked = app.decode.globalCandidates,
+                onCheckedChange = { v -> settings.updateDecode { it.copy(globalCandidates = v) } },
             )
             PrefDivider()
             PrefStepper(
@@ -405,7 +424,8 @@ fun SettingsScreen(
             PrefInfo(
                 title = "解码并行",
                 subtitle = "按 CPU 核数（$decodeCores）自动分配、没有设置项：频率分段数 × 每段线程数。" +
-                    "「候选上限」等按段计额度的项都由这里的段数均分；频率范围收窄会自动减少段数" +
+                    "段数只决定并行度与各段自己的 STFT/瀑布，候选名额默认由「全局择优」统一分配" +
+                    "（关掉该开关才按段均分）；频率范围收窄会自动减少段数" +
                     "（单段最小 200 Hz，窄到 400 Hz 以内就不分段了）。",
                 badge = decodeParallel.label,
             )

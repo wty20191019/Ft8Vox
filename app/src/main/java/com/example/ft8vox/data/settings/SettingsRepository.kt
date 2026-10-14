@@ -126,6 +126,7 @@ private object Keys {
     val decodePasses = intPreferencesKey("decode_passes")
     val decodeFMin = intPreferencesKey("decode_f_min")
     val decodeFMax = intPreferencesKey("decode_f_max")
+    val decodeGlobalCandidates = booleanPreferencesKey("decode_global_candidates")
 }
 
 private inline fun <reified T : Enum<T>> Preferences.enumOr(key: Preferences.Key<String>, fallback: T): T {
@@ -226,6 +227,7 @@ private fun Preferences.toAppSettings(): AppSettings {
             passes = this[Keys.decodePasses] ?: defaults.decode.passes,
             fMinHz = this[Keys.decodeFMin] ?: defaults.decode.fMinHz,
             fMaxHz = this[Keys.decodeFMax] ?: defaults.decode.fMaxHz,
+            globalCandidates = this[Keys.decodeGlobalCandidates] ?: defaults.decode.globalCandidates,
         ).clamped(),
     )
 }
@@ -274,4 +276,5 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.decodePasses] = decode.passes
     prefs[Keys.decodeFMin] = decode.fMinHz
     prefs[Keys.decodeFMax] = decode.fMaxHz
+    prefs[Keys.decodeGlobalCandidates] = decode.globalCandidates
 }

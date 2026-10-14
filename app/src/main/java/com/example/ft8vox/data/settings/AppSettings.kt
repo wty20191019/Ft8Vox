@@ -90,6 +90,13 @@ data class DecodeSettings(
     val passes: Int = 2,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
+    /**
+     * 候选名额的分配口径：true（默认）＝「全局择优」，false＝「按段均分」。
+     *
+     * 与 [fMinHz]/[fMaxHz] 一样**不随预设变化**（它是策略开关，不是「快」预设的数值项）：
+     * [applyPreset] 原样保留、[samePresetValues] 不比较它，所以拨动开关不会把预设变成「自定义」。
+     */
+    val globalCandidates: Boolean = true,
 ) {
     /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {
@@ -97,7 +104,7 @@ data class DecodeSettings(
         DecodePreset.FAST -> DecodeSettings(
             timeOsr = 2, freqOsr = 2, minScore = 10,
             ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, passes = 2,
-            fMinHz = fMinHz, fMaxHz = fMaxHz,
+            fMinHz = fMinHz, fMaxHz = fMaxHz, globalCandidates = globalCandidates,
         )
         DecodePreset.CUSTOM -> this
     }
@@ -317,5 +324,6 @@ data class AppSettings(
             ldpcIterations = decode.ldpcIterations,
             maxDecoded = decode.maxDecoded,
             passes = decode.passes,
+            globalCandidates = decode.globalCandidates,
         )
 }
