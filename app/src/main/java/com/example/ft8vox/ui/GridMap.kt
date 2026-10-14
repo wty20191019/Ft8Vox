@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ft8vox.grid.GrayLine
 import com.example.ft8vox.grid.MapProjection
 import com.example.ft8vox.grid.Maidenhead
 import com.example.ft8vox.qso.CallMarker
@@ -189,6 +190,10 @@ fun GridMap(
         }
         LaunchedEffect(needed, baseMap) { baseMap?.ensure(needed) }
 
+        // 灰线线段：视口/时间变化时重算一次（逐帧重算会不停分配）；绘制清单见 GrayLine.screenSegments
+        val graySegments = remember(projection, grayLine) { GrayLine.screenSegments(projection, grayLine) }
+        val grayStroke = with(density) { 1.6.dp.toPx() }
+
         Canvas(modifier = Modifier.fillMaxSize()) {
             val p = projection
             drawRect(Ocean, size = size)
@@ -241,32 +246,15 @@ fun GridMap(
             }
 
             // ---- 昼夜灰线（照 FT8CN computeDayNightTerminator，§34） ----
-            // 画在底图之上、所有标记之下；相邻点取「离上一个点最近的世界副本」连接，
-            // 跨 180° 接缝不会横穿整张地图。
-            if (grayLine.size >= 2) {
-                val stroke = 1.6.dp.toPx()
-                var lastUV: Pair<Double, Double>? = null
-                var lastX = 0f
-                var lastY = 0f
-                for (g in grayLine) {
-                    val u = MapProjection.mercX(g.first)
-                    val v = MapProjection.mercY(g.second)
-                    val prevUV = lastUV
-                    val uv = if (prevUV == null) {
-                        p.nearestCopy(u, v)
-                    } else {
-                        p.copyNearestTo(prevUV.first, prevUV.second, u, v)
-                    }
-                    val s = p.toScreenUV(uv)
-                    val x = s.x.toFloat()
-                    val y = s.y.toFloat()
-                    if (prevUV != null) {
-                        drawLine(GrayLineColor, Offset(lastX, lastY), Offset(x, y), stroke)
-                    }
-                    lastUV = uv
-                    lastX = x
-                    lastY = y
-                }
+            // 画在底图之上、所有标记之下；线段已按「视口内每一份世界副本」铺开
+            // （见 GrayLine.screenSegments），因此平移/缩放后不会只剩半条线。
+            for ((a, b) in graySegments) {
+                drawLine(
+                    GrayLineColor,
+                    Offset(a.x.toFloat(), a.y.toFloat()),
+                    Offset(b.x.toFloat(), b.y.toFloat()),
+                    grayStroke,
+                )
             }
 
             // ---- 网格标记（蓝/黄/红，世界视图下保证最小可见尺寸） ----
