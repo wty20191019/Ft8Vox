@@ -6,12 +6,11 @@ import org.junit.Test
 /** 「呼号 → 国家」配对与解码行第二行对齐的 JVM 单测（U8）。 */
 class CallCountryTest {
 
-    private fun tags(text: String) = CallCountry.tags(MessageParser.parse(text))
-    private fun grid(text: String) = CallCountry.grid(MessageParser.parse(text))
+    private fun tags(text: String) = CallCountry.tags(text)
+    private fun grid(text: String) = CallCountry.grid(text)
 
     @Test
     fun tagsEachCallWithItsCountryAndColumn() {
-        // FT8 定向报文＝「收方 发方」；col 是该呼号在报文原文里的起始列
         assertEquals(
             listOf(
                 CallCountry.Tag("VK4BLE", "澳大利亚", 0),
@@ -40,16 +39,32 @@ class CallCountryTest {
     }
 
     @Test
-    fun skipsCallsMissingFromDxccTable() {
-        assertEquals(listOf(CallCountry.Tag("OH8JK", "芬兰", 7)), tags("QQ9QQQ OH8JK -07"))
-        assertEquals("", grid("QQ9QQQ QQ8QQQ -07"))
+    fun tagsSpecialEventCallWithHashedPeer() {
+        // 截图里的那条：发方是未解析的哈希 → 解析器当自由文本（to/from 都空），
+        // 但呼号本身仍能认出实体（LZ365BM 是保加利亚的俱乐部台）
+        assertEquals(listOf(CallCountry.Tag("LZ365BM", "保加利亚", 0)), tags("LZ365BM <...> 73"))
+        assertEquals("保加利亚", grid("LZ365BM <...> 73"))
+        // 长前缀特殊台（标准呼号正则不认，但前缀表认）
+        assertEquals(listOf(CallCountry.Tag("OR18OSB", "比利时", 3)), tags("CQ OR18OSB JO11"))
     }
 
     @Test
-    fun skipsCallNotFoundInMessageText() {
-        // 呼号不在报文原文里（例如只有哈希占位）→ 不占位，也不影响另一个呼号
-        val parsed = ParsedMessage(raw = "CQ JA1ABC PM95", isCq = true, from = "JA1ABC", to = "K1ABC")
-        assertEquals(listOf(CallCountry.Tag("JA1ABC", "日本", 3)), CallCountry.tags(parsed))
+    fun neverTreatsGridOrReportAsStation() {
+        // 网格 JO21 / JN89 会被前缀表当成日本（JO/JN ⊆ JA–JS）、RR73 / R-17 会被当成俄罗斯（R）
+        // → 必须排除，只留真正的呼号词
+        assertEquals(listOf("JO1COV", "PA0CAH"), tags("JO1COV PA0CAH JO21").map { it.call })
+        assertEquals(listOf("7Z1AL", "OK2BV"), tags("7Z1AL OK2BV JN89").map { it.call })
+        assertEquals(listOf("W1ABC", "K5XYZ"), tags("W1ABC K5XYZ RR73").map { it.call })
+        assertEquals(listOf("MM0IMC", "4U1A"), tags("MM0IMC 4U1A -06").map { it.call })
+        assertEquals(emptyList<CallCountry.Tag>(), tags("73 73 RRR -07"))
+    }
+
+    @Test
+    fun skipsCallsMissingFromDxccTableAndKeepsFirstOccurrence() {
+        assertEquals(listOf(CallCountry.Tag("OH8JK", "芬兰", 7)), tags("QQ9QQQ OH8JK -07"))
+        assertEquals("", grid("QQ9QQQ QQ8QQQ -07"))
+        // 同一呼号重复出现只标一次（标在第一次出现的位置）
+        assertEquals(listOf(CallCountry.Tag("JA1ABC", "日本", 0)), tags("JA1ABC JA1ABC 73"))
     }
 
     @Test

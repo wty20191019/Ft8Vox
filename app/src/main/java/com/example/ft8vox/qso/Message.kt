@@ -117,6 +117,26 @@ object MessageParser {
      */
     fun looksLikeCallsign(token: String): Boolean = CALLSIGN_REGEX.matches(token.uppercase())
 
+    /** 判断是否为网格（`JN25` / `PM95ab`）：网格不是台站呼号。 */
+    fun looksLikeGrid(token: String): Boolean = GRID_REGEX.matches(token.uppercase())
+
+    /** 判断是否为信号报告（`-08` / `+05` / `R-08`）。 */
+    fun looksLikeReport(token: String): Boolean {
+        val t = token.uppercase()
+        return REPORT_REGEX.matches(t) || ROGER_REGEX.matches(t)
+    }
+
+    /**
+     * 判断是否为**非呼号**的报文标记：网格 / 信号报告 / `73` / `RR73` / `RRR`。
+     *
+     * 这些词在「呼号 → 国家」判定里必须排除：例如网格 `JO21` 会被 DXCC 前缀表当成日本
+     * （`JO` ⊆ `JA–JS`）、`RR73` / `R-17` 会被当成俄罗斯（`R`）。
+     */
+    fun isNonCallToken(token: String): Boolean {
+        val t = token.uppercase()
+        return looksLikeGrid(t) || looksLikeReport(t) || t == "73" || t == "RR73" || t == "RRR"
+    }
+
     /** 格式化信号报告：带符号两位数字，如 -08、+05、+00。 */
     fun formatReport(db: Int): String {
         val v = db.coerceIn(-24, 30)
@@ -137,7 +157,7 @@ object MessageParser {
             val modifier = if (callIdx > 0) rest.take(callIdx).joinToString(" ") else null
             val from = rest[callIdx]
             val tail = rest.drop(callIdx + 1)
-            val grid = tail.firstOrNull { GRID_REGEX.matches(it.uppercase()) }
+            val grid = tail.firstOrNull { looksLikeGrid(it) }
             return ParsedMessage(
                 raw = raw,
                 isCq = true,

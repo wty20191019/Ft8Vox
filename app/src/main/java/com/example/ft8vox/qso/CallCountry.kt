@@ -6,12 +6,12 @@ package com.example.ft8vox.qso
  * 用途：解码行第二行——左端声音频率、中间把每个国家摆到上一行它自己呼号的**正下方**、
  * 右端距离（贴最右由 UI 负责）。
  *
- * 规则：
- * - 顺序＝**报文原文顺序**：定向报文是 `收方 发方`（FT8 约定，见 [MessageParser]），CQ 只有一个呼叫者；
- *   同一呼号只留一次；
- * - 每个条目带 [Tag.col]＝该呼号在报文里的**起始列**（0 起，按字符计），供 [grid] 对齐；
- * - 未收录进 [Dxcc] 的呼号**不产生条目**（宁缺勿错）：第二行就不给它留位置；
- * - 报文里找不到该呼号（例如只有哈希占位）时同样跳过。
+ * 判据与报文类型无关（定向报文 / CQ / 自由文本一视同仁）：**扫报文里的词**，
+ * 凡「既有字母又有数字」、不是网格 / 报告 / `73`（见 [MessageParser.isNonCallToken]）、
+ * 且 [Dxcc] 前缀表认得出的词，就当台站呼号标上国家。这样：
+ * - 普通报文 `VK4BLE OH8JK R-17` → 两个呼号各标各的（`R-17` 不算）；
+ * - 含未解析哈希的 `LZ365BM <...> 73`（解析器会当自由文本，`to`/`from` 为空）也能标出保加利亚；
+ * - 特殊台呼号 `LZ365BM` / `OR18OSB` / `HF19NY`（前缀段更长，标准呼号正则不认）同样能标。
  *
  * 纯 Kotlin，无 Android 依赖，便于 JVM 单测。
  */
@@ -20,20 +20,16 @@ object CallCountry {
     /** 一个呼号、它所属的 DXCC 实体名，以及它在报文里的起始列（0 起）。 */
     data class Tag(val call: String, val country: String, val col: Int)
 
-    /** 报文里所有能定位到实体的呼号（报文原文顺序，去重）。 */
-    fun tags(parsed: ParsedMessage): List<Tag> {
-        val tokens = tokensWithOffset(parsed.raw)
-        val order = if (parsed.to != null) listOf(parsed.to, parsed.from) else listOf(parsed.from)
+    /** 报文里所有能认出实体的呼号词（报文原文顺序，去重）。 */
+    fun tags(text: String): List<Tag> {
         val out = ArrayList<Tag>(2)
-        var next = 0
-        for (c in order) {
-            val call = c?.trim()?.uppercase() ?: continue
-            if (call.isEmpty() || out.any { it.call == call }) continue
-            val idx = (next until tokens.size)
-                .firstOrNull { tokens[it].first.equals(call, ignoreCase = true) } ?: continue
-            next = idx + 1
+        for ((token, col) in tokensWithOffset(text)) {
+            val call = token.uppercase()
+            if (call.none { it.isLetter() } || call.none { it.isDigit() }) continue
+            if (MessageParser.isNonCallToken(call)) continue
+            if (out.any { it.call == call }) continue
             val country = Dxcc.resolve(call)?.name ?: continue
-            out += Tag(call, country, tokens[idx].second)
+            out += Tag(call, country, col)
         }
         return out
     }
@@ -44,9 +40,9 @@ object CallCountry {
      * 全角字符（CJK 等）按 **2 格宽**折算，与等宽字体下的实际宽度近似吻合；
      * 两个国家之间至少留 1 格，避免挤在一起。没有可标的国家时返回空串。
      */
-    fun grid(parsed: ParsedMessage): String {
+    fun grid(text: String): String {
         val sb = StringBuilder()
-        for ((i, t) in tags(parsed).withIndex()) {
+        for ((i, t) in tags(text).withIndex()) {
             val pad = if (i == 0) t.col else maxOf(1, t.col - cells(sb))
             repeat(pad) { sb.append(' ') }
             sb.append(t.country)

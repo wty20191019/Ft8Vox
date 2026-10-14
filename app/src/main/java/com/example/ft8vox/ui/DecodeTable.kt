@@ -326,7 +326,7 @@ private fun DecodeTableRow(
     val msgColor = decodeMessageColor(style, msgBase)
     val msgCallColor = if (style.toMe) msgColor else VoxError
     // 第二行：声音频率（左）· 国家（各自对齐上一行的呼号）· 距离（贴最右）
-    val countries = remember(row) { CallCountry.grid(row.parsed) }
+    val countries = remember(row) { CallCountry.grid(msg.text) }
     val distKm = remember(row, myGrid) { Geo.betweenGrids(myGrid, row.parsed.grid)?.first }
     // 报文列当前字号（12sp 起、放不下逐级缩到 9sp）：第二行的国家行要与它同字号对齐
     var msgFontSp by remember(row) { mutableStateOf(12) }
