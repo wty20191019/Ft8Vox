@@ -89,6 +89,14 @@ data class ReceiverStatus(
     val decodedTotal: Long = 0,
     /** 最近一次解码耗时（ms，0=还没解码过）；顶栏「解码 nms」，用于调解码深度参数。 */
     val lastDecodeMs: Long = 0,
+    /**
+     * 最近解码的平均 DT（ms，见 [avgDtMs]）；null＝样本不足，顶栏不显示「一键校准」。
+     */
+    val avgDtMs: Int? = null,
+    /** 参与 [avgDtMs] 的样本条数（滚动窗口内）。 */
+    val dtSamples: Int = 0,
+    /** 当前生效的时隙偏移（ms）：顶栏「偏移」读数 + 一键校准的落点。 */
+    val slotOffsetMs: Int = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
     val myCall: String = "",
@@ -326,6 +334,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
     private var lastSlotOffsetMs: Int? = null
 
+    /**
+     * 「一键校准」用的 DT 滚动窗口（最近 [DT_CALIBRATION_WINDOW] 条解码的 DT，秒）。
+     *
+     * 用跨时隙的滑动窗口而不是「本时隙平均」：单时隙条数忽多忽少（拥挤波段 20+、安静时 1~2 条），
+     * 取最近 20 条更稳，也天然满足 [DT_CALIBRATION_MIN_SAMPLES] 的样本要求。
+     */
+    private val dtWindow = ArrayDeque<Float>()
+
     /** 发射频率（红线）拖动期间的落盘防抖任务（见 [setTxFreq]）。 */
     private var txFreqPersistJob: Job? = null
 
@@ -403,6 +419,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else s.protocol.slotMs,
+                slotOffsetMs = s.slotOffsetMs,
             )
         }
         // 运行中改协议 → 重建引擎（接收短暂中断）
@@ -481,6 +498,36 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepo.update(transform) }
+    }
+
+    // ---- 一键校准（B：平均 DT → 时隙偏移）----
+
+    /**
+     * 记录本批解码的 DT，刷新顶栏「平均 DT」读数（见 [avgDtMs]）。
+     *
+     * 只收「有意义」的样本：离线解码（`slotUtcMs == 0`，非实时采集来的）跳过 —— 它没有对齐到
+     * 本机时隙网格，参进平均只会把校准值带偏。
+     */
+    private fun recordDtSamples(decoded: List<DecodeResult>) {
+        val fresh = decoded.filter { it.slotUtcMs > 0L }
+        if (fresh.isEmpty()) return
+        for (m in fresh) dtWindow.addLast(m.dt)
+        while (dtWindow.size > DT_CALIBRATION_WINDOW) dtWindow.removeFirst()
+        val avg = avgDtMs(dtWindow.toList())
+        _status.update { it.copy(avgDtMs = avg, dtSamples = dtWindow.size) }
+    }
+
+    /**
+     * 「一键校准」：把最近解码的平均 DT **原样**写进「时隙偏移」（热生效，最迟一个时隙内生效）。
+     *
+     * 免去「看一眼 DT → 进设置页 → 手填 → 回来再猜」的来回。符号与设置页一致：
+     * `DT = 本机时钟误差 − 偏移`，所以填入平均 DT 后 DT 应趋近 0（推导见 docs/Ft8Vox.md §5.4）。
+     * 样本不足（见 [avgDtMs]）时静默不动 —— 顶栏此时也不会显示按钮。
+     */
+    fun fillSlotOffsetFromAvgDt() {
+        val dtMs = avgDtMs(dtWindow.toList()) ?: return
+        val off = slotOffsetFromDtMs(dtMs)
+        persist { it.copy(slotOffsetMs = off) }
     }
 
     // ---- 配置 ----
@@ -754,6 +801,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun clearMessages() {
         _messages.value = emptyList()
         _txRecords.value = emptyList()
+        // 一键校准的样本也一起清掉：列表都清了，平均 DT 再留着会与眼前看到的对不上
+        dtWindow.clear()
+        _status.update { it.copy(avgDtMs = null, dtSamples = 0) }
     }
 
     // ---- 我方发射记录（接收列表的 TX 行，docs/Ft8Vox.md） ----
@@ -868,12 +918,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        dtWindow.clear()
         _status.update {
             it.copy(
                 running = true,
                 inputRate = rate,
                 status = "接收中（设备采样率 $rate Hz）",
                 decodedTotal = 0,
+                avgDtMs = null,
+                dtSamples = 0,
             )
         }
         startPolling()
@@ -1332,6 +1385,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (decoded.isNotEmpty()) {
             _messages.update { current -> (decoded + current).take(ACTIVITY_LIMIT) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
+            recordDtSamples(decoded)
             pendingDecodes.addAll(decoded)
             // 「自动跟踪 CQ（本波段）」：把本批新解到的本波段未通联 CQ 呼号并入跟踪名单
             autoCollectCqToFollow(decoded)

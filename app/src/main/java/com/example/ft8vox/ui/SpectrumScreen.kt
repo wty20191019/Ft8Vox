@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.WATERFALL_FLOOR_DB_RANGE
 import com.example.ft8vox.data.settings.WATERFALL_RANGE_DB_RANGE
 import com.example.ft8vox.data.settings.clampWaterfallFloorDb
@@ -120,6 +122,18 @@ fun SpectrumScreen(
                 color = JtdxValue,
             )
             Spacer(Modifier.weight(1f))
+            // 当前时隙偏移读数（一键校准的落点，改完立刻在这里看到）
+            Text(
+                "偏移 ${slotOffsetLabel(status.slotOffsetMs)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            dtCalibrationLabel(status.avgDtMs, status.dtSamples)?.let { label ->
+                Spacer(Modifier.width(6.dp))
+                DtCalibrationChip(label) { viewModel.fillSlotOffsetFromAvgDt() }
+            }
+            Spacer(Modifier.width(8.dp))
             Text(
                 "${status.band.ifEmpty { "--" }} · ${status.protocol.name}",
                 style = MaterialTheme.typography.labelSmall,
@@ -206,9 +220,49 @@ fun SpectrumScreen(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
             )
+            // 时隙分界刻度的文字样式（比解码呼号细一号、不加粗，别抢信号）
+            val tickStyle = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Normal,
+            )
             Canvas(Modifier.fillMaxSize().clipToBounds()) {
                 val f = frame
                 if (f == null || span == null || span <= 0f) return@Canvas
+                // ---- 时隙分界（时间轴刻度，C：模仿 FT8CN 在分界处盖 UTC 时间戳）----
+                //
+                // 采集网格与「时隙偏移」同一坐标系：分界时刻 = 墙钟 t ≡ slotOffsetMs (mod slotMs)。
+                // y 用与解码呼号**同一映射**（最新在底、往上越旧），所以两套标记天然对齐。
+                // 线条按该时隙奇偶取色（与顶部奇偶色条同色）：蓝＝偶（TX0），橙＝奇（TX1）。
+                run {
+                    val slotMsL = status.slotMs.toLong().coerceAtLeast(1L)
+                    val offL = status.slotOffsetMs.toLong()
+                    val wMs = windowMs.toLong()
+                    val firstK = Math.floorDiv(nowWallMs - wMs - offL, slotMsL) + 1
+                    val lastK = Math.floorDiv(nowWallMs - offL, slotMsL)
+                    for (k in firstK..lastK) {
+                        val markMs = k * slotMsL + offL
+                        val age = (nowWallMs - markMs).toFloat()
+                        val y = size.height * (1f - age / windowMs)
+                        if (y < 0f || y > size.height) continue
+                        drawLine(
+                            color = if (slotParityOf(markMs - offL, slotMsL) == 0) {
+                                Color(0x992962FF)
+                            } else {
+                                Color(0x99FF6D00)
+                            },
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = 1f,
+                        )
+                        val layout = textMeasurer.measure(QsoTime.isoTime(markMs), style = tickStyle)
+                        drawRect(
+                            color = Color(0x99000000),
+                            topLeft = Offset(2f, y + 1f),
+                            size = Size(layout.size.width + 4f, layout.size.height + 2f),
+                        )
+                        drawText(layout, color = Color(0xCCFFFFFF), topLeft = Offset(4f, y + 2f))
+                    }
+                }
                 labels.forEach { label ->
                     val age = (nowWallMs - label.signalEndMs).toFloat()
                     if (age < 0f || age > windowMs) return@forEach

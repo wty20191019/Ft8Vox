@@ -161,7 +161,11 @@ fun OperateScreen(
                 active = followOpen,
             )
             val warn = timeSyncWarning(messages.firstOrNull()?.dt)
-            if (warn != null) {
+            val calLabel = dtCalibrationLabel(status.avgDtMs, status.dtSamples)
+            if (calLabel != null) {
+                // 有平均样本：直接把「平均 DT」做成可点的一键校准（红字告警仍在信息头行 4）
+                DtCalibrationChip(calLabel) { request { viewModel.fillSlotOffsetFromAvgDt() } }
+            } else if (warn != null) {
                 Text(warn, style = MaterialTheme.typography.labelSmall, color = VoxError)
             } else {
                 JtdxCaption("时间同步")
