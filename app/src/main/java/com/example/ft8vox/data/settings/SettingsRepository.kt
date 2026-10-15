@@ -103,10 +103,9 @@ private object Keys {
     val mapCqShowCall = booleanPreferencesKey("map_cq_show_call")
     val mapCqShowSnr = booleanPreferencesKey("map_cq_show_snr")
     val mapShowLinkText = booleanPreferencesKey("map_show_link_text")
-    val txLeadTone = booleanPreferencesKey("tx_lead_tone")
     val txPreambleMs = intPreferencesKey("tx_preamble_ms")
 
-    /** 改名前的「前导音时长」键：读取 [txPreambleMs] 时作回落，避免老用户丢设置。 */
+    /** 改名前的「前导音时长」键：读取 [txPreambleMs] 时作回落，避免老用户丢设置（前导现为静音）。 */
     val txLeadToneMsLegacy = intPreferencesKey("tx_lead_tone_ms")
     val outputDevice = stringPreferencesKey("output_device")
     val outputGainDb = intPreferencesKey("output_gain_db")
@@ -206,7 +205,6 @@ private fun Preferences.toAppSettings(): AppSettings {
         mapCqFlagShowCall = this[Keys.mapCqShowCall] ?: defaults.mapCqFlagShowCall,
         mapCqFlagShowSnr = this[Keys.mapCqShowSnr] ?: defaults.mapCqFlagShowSnr,
         mapShowLinkText = this[Keys.mapShowLinkText] ?: defaults.mapShowLinkText,
-        txLeadTone = this[Keys.txLeadTone] ?: defaults.txLeadTone,
         txPreambleMs = (
             this[Keys.txPreambleMs] ?: this[Keys.txLeadToneMsLegacy] ?: defaults.txPreambleMs
             ).coerceIn(0, 2000),
@@ -258,7 +256,6 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.mapCqShowCall] = mapCqFlagShowCall
     prefs[Keys.mapCqShowSnr] = mapCqFlagShowSnr
     prefs[Keys.mapShowLinkText] = mapShowLinkText
-    prefs[Keys.txLeadTone] = txLeadTone
     prefs[Keys.txPreambleMs] = txPreambleMs
     prefs[Keys.outputDevice] = outputDevice
     prefs[Keys.outputGainDb] = outputGainDb

@@ -118,15 +118,6 @@ class VoxPlanTest {
     }
 
     @Test
-    fun `前导音频率跟发射频率，关闭时为静音`() {
-        // 开：与本次发射频率一致（不再固定 1 kHz，窄带发射滤波下同样能过）
-        assertEquals(1500, preambleToneHz(leadTone = true, txFreqHz = 1500))
-        assertEquals(300, preambleToneHz(leadTone = true, txFreqHz = 300))
-        // 关：0 ＝ 前导只放静音（纯发射延时，不产生键控）
-        assertEquals(0, preambleToneHz(leadTone = false, txFreqHz = 1500))
-    }
-
-    @Test
     fun `电平文案区分未运行与读数`() {
         assertEquals("电平 --", voxLabel(-100f, running = false))
         assertEquals("电平 --", voxLabel(-100f, running = true))

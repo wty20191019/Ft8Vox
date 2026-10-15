@@ -1165,7 +1165,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // TX 行（§37）：「立即发」不对齐时隙，用当前 UTC 当作时间轴上的位置。
                 val recId = beginTxRecord(trimmed, AudioEngine.utcNowMs())
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
-                val written = AudioEngine.playTx(pcm, preambleMs, preambleToneHz(st.selectedFreqHz))
+                val written = AudioEngine.playTx(pcm, preambleMs)
                 if (abortAtPlan == txAbortGen && written > 0) {
                     finishTxRecord(recId)
                 } else {
@@ -1244,7 +1244,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
         abortTransmit()   // 作废可能正在响的那一段（非阻塞）
         val preambleMs = txPreambleMs()
-        val toneHz = preambleToneHz(st.selectedFreqHz)
         val genAtPlan = engineGen
         val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
@@ -1253,7 +1252,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true) }
-                val written = AudioEngine.playTx(pcm, preambleMs, toneHz)
+                val written = AudioEngine.playTx(pcm, preambleMs)
                 _status.update {
                     it.copy(
                         status = if (written > 0) "已发射测试「$text」（$written 帧）"
@@ -1819,7 +1818,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         val now = AudioEngine.utcNowMs()
 
-        // 前导（PTT 静音 + 发射前导音）：需要提前 preamble 启动播放，数据才落在时隙起点
+        // 前导（等长静音）：需要提前 preamble 启动播放，数据才落在时隙起点
         val preambleMs = txPreambleMs().toLong()
         val plan = planTx(
             now, slotMs, st.txParity, preambleMs,
@@ -1890,12 +1889,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 本次发射的完整前导时长（ms）＝设置里的前导时长（单音或静音共用）。 */
+    /** 本次发射的前导时长（ms）＝设置里的前导时长（等长静音 / 纯发射延时）。 */
     private fun txPreambleMs(): Int = latestSettings.txPreambleMs.coerceAtLeast(0)
-
-    /** 前导音的频率（Hz）：开＝与本次发射频率一致，关＝0（前导只放静音）。 */
-    private fun preambleToneHz(freqHz: Int): Int =
-        preambleToneHz(latestSettings.txLeadTone, freqHz)
 
     /**
      * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
@@ -1915,14 +1910,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         abortAtPlan: Int,
     ) {
         val st = _status.value
-        val toneHz = preambleToneHz(st.selectedFreqHz)
-        // 迟到缩水：整段前导（单音或静音）按迟到量一起缩短，保数据对齐时隙起点
+        // 迟到缩水：整段前导（静音）按迟到量一起缩短，保数据对齐时隙起点
         val eff = preambleMs.coerceAtLeast(0L).toInt()
 
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
-        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs preamble=$eff tone=$toneHz " +
+        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs preamble=$eff " +
             "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
-        Diag.line("transmit：text=$text slotStart=$slotStartMs preamble=$eff tone=$toneHz " +
+        Diag.line("transmit：text=$text slotStart=$slotStartMs preamble=$eff " +
             "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
@@ -1941,7 +1935,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/Ft8Vox.md）。
             val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
-            val written = AudioEngine.playTx(pcm, eff, toneHz)
+            val written = AudioEngine.playTx(pcm, eff)
             Log.i(TAG_QSO, "transmit：playTx 返回 written=$written")
             Diag.line("transmit：playTx 返回 written=$written")
             // 仍是当前有效的那一次、且确实写进了声卡 → 算「已播完」；否则（被作废 / 写入失败）标「未发完」。
@@ -2196,14 +2190,6 @@ internal fun planTx(
 /** 迟到后缩水的前导：至少为 0，用于把数据重新对齐到时隙起点。 */
 internal fun effectivePreambleMs(preambleMs: Long, latenessMs: Long): Long =
     (preambleMs - latenessMs).coerceAtLeast(0L)
-
-/**
- * 前导音的频率（Hz，纯逻辑）：
- * - 前导音开 → 用**本次发射频率**（与 FT8 报文同音调，窄带发射滤波下同样能通过、VOX 响应一致）；
- * - 前导音关 → `0`，表示前导只放等长静音（＝纯发射延时，不产生键控）。
- */
-internal fun preambleToneHz(leadTone: Boolean, txFreqHz: Int): Int =
-    if (leadTone) txFreqHz else 0
 
 /**
  * 一次性发射（自定义报文框的「发送」/ 长按解码行的「逐条发送」）**不能发的原因**（纯逻辑，便于单测）。

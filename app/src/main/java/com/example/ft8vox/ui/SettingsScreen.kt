@@ -143,20 +143,14 @@ fun SettingsScreen(
         item(key = "radio") {
             SettingsGroup("电台（仅 VOX）") {
                 PrefNote(
-                    "无 CAT：App 无法直接控制 PTT，只能靠「前导音」让电台 VOX 抢先键控，" +
-                        "再把 FT8 数据对准时隙起点。"
+                    "无 CAT：App 无法直接控制 PTT —— 键控只能靠 FT8 波形本身（WSJT-X 约定：" +
+                        "波形在时隙起点后 0.5 s 才开始，那之前是静音）。「前导时长」再往前垫一段" +
+                        "等长静音：它不出声、不会提前键控电台，作用是让播放流提前起流，" +
+                        "避免起流延迟削掉报文起点。"
                 )
-                PrefSwitch(
-                    title = "前导音",
-                    subtitle = "开＝前导放一段与发射频率相同的单音，让 VOX 抢先触发；" +
-                        "关＝前导只留同样时长的静音（纯发射延时）",
-                    checked = app.txLeadTone,
-                    onCheckedChange = { v -> settings.update { it.copy(txLeadTone = v) } },
-                )
-                PrefDivider()
                 PrefStepper(
                     title = "前导时长",
-                    subtitle = "单音 / 静音共用；数据仍落在时隙起点，所以它不会推后报文",
+                    subtitle = "发射前垫一段等长静音（不出声）：让播放流提前起流、不削报文起点；不会推后报文",
                     value = app.txPreambleMs,
                     range = 0..2000,
                     step = 50,

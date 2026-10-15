@@ -671,11 +671,7 @@ fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
         Text("VOX", style = MaterialTheme.typography.titleSmall)
         Text("输入电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}", style = MaterialTheme.typography.labelSmall)
         Text(
-            "前导  " + if (appSettings.txLeadTone) {
-                "单音 ${status.selectedFreqHz} Hz ${appSettings.txPreambleMs} ms"
-            } else {
-                "静音 ${appSettings.txPreambleMs} ms"
-            },
+            "前导  静音 ${appSettings.txPreambleMs} ms",
             style = MaterialTheme.typography.labelSmall,
         )
     }

@@ -64,7 +64,7 @@ data class AudioState(
  * 麦克风(48k/float) → 重采样 12k ─┬→ 按时隙累积 → 时隙结束拷一份
  *                                 │      → 后台线程 Ft8Native.decodeSlot → pollDecoded() 拉取
  *                                 └→ STFT（2048 点 Hann，80 ms/行）→ pollWaterfall() 拉取
- * Ft8Native.encode → playTx(前导 + 波形) → AudioTrack
+ * Ft8Native.encode → playTx(静音前导 + 波形) → AudioTrack
  * ```
  *
  * 接口契约尽量与旧 native 版保持一致，便于上层（SessionViewModel）无感替换。
@@ -82,7 +82,7 @@ object AudioEngine {
     /** 单时隙解码采样数。 */
     private const val SLOT_SAMPLES = DECODE_RATE * SLOT_MS / 1000
 
-    /** 前导音 / 测试音的数字幅度（留约 2 dB 余量，避免削顶）。 */
+    /** 测试音的数字幅度（留约 2 dB 余量，避免削顶）。 */
     private const val TONE_AMPLITUDE = 0.8f
 
     @Volatile
@@ -155,14 +155,14 @@ object AudioEngine {
     fun play(pcm: FloatArray): Int = engine?.play(pcm) ?: -1
 
     /**
-     * 播放发射 PCM，数据前插入一段前导；返回写入的 12k 采样数。
+     * 播放发射 PCM，数据前插入一段**等长静音前导**（不出声、不键控电台）；
+     * 返回写入的 12k 采样数。
      *
-     * @param preambleMs 前导时长（ms）
-     * @param toneHz 前导音频率（Hz）：≤0 表示前导只放静音（＝纯发射延时）；
-     *   正常发射传**与波形相同的发射频率**，使前导听感、滤波与 VOX 响应与报文一致
+     * @param preambleMs 前导时长（ms）：让播放流提前起流 / 预填缓冲，避免起流延迟削掉波形起点；
+     *   报文仍落在时隙起点
      */
-    fun playTx(pcm: FloatArray, preambleMs: Int = 0, toneHz: Int = 0): Int =
-        engine?.playTx(pcm, preambleMs, toneHz) ?: -1
+    fun playTx(pcm: FloatArray, preambleMs: Int = 0): Int =
+        engine?.playTx(pcm, preambleMs) ?: -1
 
     /** 播放一段测试单音，返回写入的 12k 采样数。 */
     fun playTone(freqHz: Int = 1000, durationMs: Int = 2000): Int =
@@ -812,20 +812,13 @@ object AudioEngine {
 
         fun play(pcm: FloatArray): Int = writeSamples(pcm, abortAware = false, returned = pcm.size)
 
-        /**
-         * 数据前拼一段前导：`toneHz > 0` 时是**该频率的单音**（键控 VOX），否则是等长静音
-         * （＝纯发射延时）。频率由调用方传「本次发射频率」，与报文同音调。
-         */
-        fun playTx(pcm: FloatArray, preambleMs: Int, toneHz: Int): Int {
+        /** 数据前拼一段等长静音前导（不出声；让播放流提前起流，不削波形起点）。 */
+        fun playTx(pcm: FloatArray, preambleMs: Int): Int {
             // 注意：**不要**在这里清 abortRequested。清标志必须等拿到 writeLock（见 writeSamples），
             // 否则会把对「上一段正在写的音频」的作废提前撤销，导致它继续整条播完。
             val pre = msToSamples(preambleMs)
+            // FloatArray 初值即 0f，前导段天然是静音
             val total = FloatArray(pre + pcm.size)
-            if (toneHz > 0) {
-                for (i in 0 until pre) {
-                    total[i] = sin(2.0 * PI * toneHz * i / DECODE_RATE).toFloat() * TONE_AMPLITUDE
-                }
-            }
             System.arraycopy(pcm, 0, total, pre, pcm.size)
             val written = writeSamples(total, abortAware = true, returned = pcm.size)
             // 播放尾部收尾（写 0 让缓冲播放完）不在阻塞路径里做，调用方只关心数据是否播出

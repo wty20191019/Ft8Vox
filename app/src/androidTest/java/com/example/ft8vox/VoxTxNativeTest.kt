@@ -29,8 +29,8 @@ class VoxTxNativeTest {
             val rate = AudioEngine.startPlayback(48000)
             assertTrue("startPlayback failed: $rate", rate > 0)
 
-            // 1 s 数据 + 100 ms 前导音（频率与发射频率相同）
-            val written = AudioEngine.playTx(tone(1000), preambleMs = 100, toneHz = 1000)
+            // 1 s 数据 + 100 ms 静音前导
+            val written = AudioEngine.playTx(tone(1000), preambleMs = 100)
             assertTrue("playTx wrote $written frames", written > 0)
 
             // 写入帧数应至少覆盖数据本身（约 1.15 s × 48 kHz ≈ 55200）
