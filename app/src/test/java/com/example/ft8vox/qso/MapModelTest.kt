@@ -21,9 +21,14 @@ class MapModelTest {
     // ---- square / decodedSquares ----
 
     @Test
-    fun squareNormalizesToFourChars() {
-        assertEquals("PM95", MapModel.square("pm95ab"))
+    fun squareKeepsUpToSixChars() {
+        // MH6：有 6 位就用 6 位（5′×2.5′ 小格）
+        assertEquals("PM95AB", MapModel.square("pm95ab"))
+        assertEquals("PM95AB", MapModel.square(" PM95AB "))
+        // 只有 4 位的仍画 4 位方格（2°×1°）：FT8 报文里的网格就只有 4 位
         assertEquals("PM95", MapModel.square(" PM95 "))
+        // 更细的 8 位也收敛到 MH6 —— 地图方格的最大精度就是 6 位
+        assertEquals("PM95AB", MapModel.square("PM95AB12"))
         assertNull(MapModel.square("PM"))
         assertNull(MapModel.square("XX99"))
     }
@@ -59,15 +64,35 @@ class MapModelTest {
 
     @Test
     fun gridTierPriorityConfirmedBeatsWorkedBeatsDecoded() {
+        // 同一个小方格同时出现在多档 → 取最高档（确认 > 通联 > 解码）
         val markers = MapModel.gridMarkers(
-            decoded = listOf("PM95", "FN42", "JN25"),
-            worked = listOf("PM95ab", "FN42"),
-            confirmed = listOf("PM95cd"),
+            decoded = listOf("PM95AB", "FN42", "JN25"),
+            worked = listOf("PM95AB", "FN42"),
+            confirmed = listOf("PM95AB"),
         ).associateBy { it.grid }
 
-        assertEquals(MapTier.CONFIRMED, markers.getValue("PM95").tier)
+        assertEquals(MapTier.CONFIRMED, markers.getValue("PM95AB").tier)
         assertEquals(MapTier.WORKED, markers.getValue("FN42").tier)
         assertEquals(MapTier.DECODED, markers.getValue("JN25").tier)
+    }
+
+    @Test
+    fun gridMarkersUseMh6BoundsWhenSourceHasSixChars() {
+        val m = MapModel.gridMarkers(
+            decoded = listOf("PM95"),
+            worked = listOf("PM95AB"),
+            confirmed = emptyList(),
+        ).associateBy { it.grid }
+
+        // 4 位：2° × 1°
+        assertEquals(2.0, m.getValue("PM95").bounds.maxLon - m.getValue("PM95").bounds.minLon, 1e-9)
+        assertEquals(1.0, m.getValue("PM95").bounds.maxLat - m.getValue("PM95").bounds.minLat, 1e-9)
+        // 6 位：5′ × 2.5′ = 1/12° × 1/24°
+        assertEquals(1.0 / 12, m.getValue("PM95AB").bounds.maxLon - m.getValue("PM95AB").bounds.minLon, 1e-9)
+        assertEquals(1.0 / 24, m.getValue("PM95AB").bounds.maxLat - m.getValue("PM95AB").bounds.minLat, 1e-9)
+        // 两者各自成块（大方格＝解码、小方格＝已通联），互不吞并
+        assertEquals(MapTier.DECODED, m.getValue("PM95").tier)
+        assertEquals(MapTier.WORKED, m.getValue("PM95AB").tier)
     }
 
     @Test
