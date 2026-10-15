@@ -31,10 +31,11 @@ class VoxTxNativeTest {
 
             // 1 s 数据 + 100 ms 静音前导
             val written = AudioEngine.playTx(tone(1000), preambleMs = 100)
-            assertTrue("playTx wrote $written frames", written > 0)
+            // 返回值是**写入的 12k 采样数**（与 play()/playTone() 同一口径），不是输出 48k 帧数
+            assertTrue("playTx wrote $written samples", written > 0)
 
-            // 写入帧数应至少覆盖数据本身（约 1.15 s × 48 kHz ≈ 55200）
-            assertTrue("expected >= 48000 frames, got $written", written >= 48_000)
+            // 至少覆盖数据本身（1 s @ 12 kHz = 12000 采样）
+            assertTrue("expected >= 12000 samples, got $written", written >= 12_000)
 
             // 状态可读，VOX 电平为有限值
             val st = AudioEngine.state()
