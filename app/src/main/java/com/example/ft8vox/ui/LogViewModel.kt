@@ -58,8 +58,15 @@ class LogViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    suspend fun importAdif(text: String, myCall: String, myGrid: String?): QsoRepository.ImportResult =
-        repo.importAdif(text, myCall, myGrid)
+    /**
+     * 导入 ADIF（[onProgress] 由后台线程回调「导入中 n/N」，调用方需自行切回主线程更新界面）。
+     */
+    suspend fun importAdif(
+        text: String,
+        myCall: String,
+        myGrid: String?,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): QsoRepository.ImportResult = repo.importAdif(text, myCall, myGrid, onProgress)
 
     suspend fun exportAdif(): String = repo.exportAdif()
 }

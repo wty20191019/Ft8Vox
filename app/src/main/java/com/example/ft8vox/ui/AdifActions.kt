@@ -81,7 +81,10 @@ fun rememberAdifActions(
                         it.readBytes().toString(Charsets.UTF_8)
                     } ?: throw IllegalStateException("无法读取所选文件")
                 }
-                val result = log.importAdif(text, call, grid?.ifEmpty { null })
+                val result = log.importAdif(text, call, grid?.ifEmpty { null }) { done, total ->
+                    // 进度回调来自后台线程（解析/判重跑在 Dispatchers.Default）→ 切回主线程再刷界面
+                    if (total > 0) scope.launch { status("导入中 $done/$total …") }
+                }
                 "导入完成：新增 ${result.added} 条，更新 ${result.updated} 条，跳过 ${result.skipped} 条（共 ${result.total}）"
             } catch (e: Exception) {
                 "导入失败：${e.message}"
