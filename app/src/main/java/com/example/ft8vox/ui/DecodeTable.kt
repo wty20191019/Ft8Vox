@@ -126,6 +126,14 @@ fun decodeMessageColor(style: DecodeStyle, base: Color): Color = when {
 /** 「与我有关」的报文文字红（比行底色更亮，浅底上也读得清）。 */
 val ToMeRed = Color(0xFFFF5252)
 
+/**
+ * 「目标台报文」行的**红框**色（当前 QSO 对手发出的所有报文，docs/Ft8Vox.md §4.3）。
+ *
+ * 与「与我有关」的红字同色。目标身份**在底色之外**另给一圈框：于是 CQ 台被选为目标后
+ * 既是橙底（CQ）又有红框（我的对手），两件事互不遮盖 —— 修掉「点了 CQ 之后整行没标记」。
+ */
+internal val TargetFrameRed = ToMeRed
+
 /** 高亮类别 → 单色（供频谱页叠加的解码呼号文字用）。 */
 fun highlightTextColor(role: HighlightRole): Color = when (role) {
     HighlightRole.TX -> HlTx
@@ -411,6 +419,9 @@ private fun DecodeTableRow(
                     onLongClick = { menuOpen = true },
                 )
                 .background(bg)
+                // 目标台（当前 QSO 对手）发出的每一行都套一圈红框：即使底色被类别改写
+                // （CQ 橙底 / TX 黄底），「这是我在通联的台」也一直看得见。
+                .then(if (style.current) Modifier.border(1.dp, TargetFrameRed) else Modifier)
                 .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

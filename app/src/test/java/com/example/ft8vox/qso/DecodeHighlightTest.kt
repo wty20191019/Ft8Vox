@@ -95,6 +95,28 @@ class DecodeHighlightTest {
     }
 
     @Test
+    fun classifySelectedCqKeepsCqRole() {
+        // 实机反馈：CQ 行被选为目标后，原先会被 current 挤成 TO_ME —— 而 TO_ME 没有整行底色、
+        // 这条 CQ 也不是「发给我」的，于是整行标记全消失。现在 CQ 优先于 current：橙底保留，
+        // 「这是我的对手」由操作页红框（style.current）表达。
+        val parsed = MessageParser.parse("CQ JA1ABC PM95")
+        val style = DecodeHighlight.classify(parsed, currentQsoCall = "JA1ABC", myCall = "F4FSY")
+        assertEquals(HighlightRole.CQ, style.role)
+        assertTrue(style.current)
+        assertFalse(style.toMe)
+    }
+
+    @Test
+    fun classifyTargetNonCqStaysToMe() {
+        // 目标发给别人的报文仍是 TO_ME（与旧行为一致，红框另有 style.current）
+        // 报文体例：`<收方> <发方> <报告>` —— 这里 W1AW 是收方、JA1ABC（目标）是发方
+        val parsed = MessageParser.parse("W1AW JA1ABC -08")
+        val style = DecodeHighlight.classify(parsed, currentQsoCall = "JA1ABC")
+        assertEquals(HighlightRole.TO_ME, style.role)
+        assertTrue(style.current)
+    }
+
+    @Test
     fun classifyWorkedCallIsWorked() {
         val w = WorkedIndex(calls = listOf("JA1ABC"), grids = listOf("PM95"))
         val parsed = MessageParser.parse("F4FSY JA1ABC -08")

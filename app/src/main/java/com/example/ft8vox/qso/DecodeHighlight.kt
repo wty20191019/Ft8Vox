@@ -94,8 +94,8 @@ class WorkedIndex(
 /**
  * 解码行的最高优先级高亮类别（docs/Ft8Vox.md 色条）。
  *
- * 优先级（高→低）：正在发射 / 自己发的报文 > 与我有关 > CQ > 已通联 > 重复 > 新网格 >
- * 新 DXCC/ITU > 新呼号 > 新解码。
+ * 优先级（高→低）：正在发射 / 自己发的报文 > 发给我的报文 > CQ > 当前对手 > 已通联 >
+ * 重复 > 新网格 > 新 DXCC/ITU > 新呼号 > 新解码。
  */
 enum class HighlightRole {
     /**
@@ -106,7 +106,9 @@ enum class HighlightRole {
      */
     TX,
 
-    /** 与我有关 / 当前 QSO 对手（蓝）。 */
+    /**
+     * 与我有关 / **当前 QSO 对手**（蓝字；**没有整行底色**，见 [HighlightRole.CQ] 旁注）。
+     */
     TO_ME,
 
     /** CQ（橙）。 */
@@ -232,8 +234,19 @@ object DecodeHighlight {
 
         val role = when {
             transmitting || fromMe -> HighlightRole.TX
-            current || toMe -> HighlightRole.TO_ME
+            // 发给我的报文：最高优先之外的第一档（报文列红字）。
+            toMe -> HighlightRole.TO_ME
+            /*
+             * CQ 行**即使成了当前对手也保留 CQ**（橙底）。
+             *
+             * 实机反馈的坑：CQ 行被「左滑呼叫」选为当前目标后，若让 current 盖过 isCq，
+             * 它就变成 TO_ME —— 而 TO_ME **没有整行底色**（只有 CQ / TX 铺底），且这条 CQ
+             * 并非「发给我」的（toMe == false）所以报文列也不标红，结果整行标记**全部消失**。
+             * CQ 是「这台在找人」的信号类型，比「它是我的对手」更该留在底色上；目标身份由
+             * 操作页的**红框**（style.current）表达，不抢底色。
+             */
             parsed.isCq -> HighlightRole.CQ
+            current -> HighlightRole.TO_ME
             workedCall -> HighlightRole.WORKED
             duplicate -> HighlightRole.DUPLICATE
             newGrid -> HighlightRole.NEW_GRID
