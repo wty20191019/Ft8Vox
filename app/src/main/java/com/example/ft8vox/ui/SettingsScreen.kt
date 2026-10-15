@@ -2,6 +2,7 @@ package com.example.ft8vox.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -37,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,10 +51,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.DecodePreset
@@ -234,17 +244,17 @@ fun SettingsScreen(
                     label = { it.name },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefOffsetInput(
                     title = "时隙偏移",
                     value = app.slotOffsetMs,
                     range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
                     step = 100,
                     unit = " ms",
-                    signed = true,
                     subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
                         "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
                         "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。" +
-                        "改完最迟一个时隙内生效，无需重开接收。",
+                        "改完最迟一个时隙内生效，无需重开接收。" +
+                        "点中间的数字可直接输入（只收整数毫秒；回车 / ✓ 才生效，± 一键翻正负）。",
                     onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
                 )
                 PrefDivider()
@@ -1072,6 +1082,136 @@ private fun PrefStepper(
                 contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.size(48.dp),
             ) { Text("+") }
+        }
+    })
+}
+
+/**
+ * 「时隙偏移」行：默认是 `−` / 数值 / `+` 步进，**点中间的数字就地输入**（只收整数毫秒）。
+ *
+ * 为什么不直接扩 [PrefStepper]：只有这一项需要输入 —— ±2500 ms 按 100 ms 一步，从 0 到
+ * +1500 要按 15 次；单独实现就不会动到共用组件的另外 14 处调用。
+ *
+ * 输入是**提交式**（回车「完成」/ 点 `✓` / 输入框失焦），**绝不边输边写**：偏移一变就会触发
+ * 采集网格热重排（`AudioEngine.setSlotOffsetMs` → `realignRequested`），输 `1500` 会连重排
+ * 4 次（1 → 15 → 150 → 1500），那一格全废。非法输入（空、字母、`1.5`）提交时**不写盘**、
+ * 直接退回原值（输入过程中 [JtdxTextField] 的 `isError` 会先红框提示）。
+ *
+ * **进编辑态时字段是空的、当前值只作占位符**：预填当前值会把光标停在末尾，接着打字就成了
+ * `+1500` + `2000` = `+15002000` → 被夹到 +2500（一键校准设过值之后就是这条路），
+ * 而 `BasicTextField` 只能收 `String`、没法把预填文本整体选中。
+ *
+ * `±` 按钮＝「用输进来的数（没输就是当前值）取反」并立即提交：数字键盘不一定给 `-` 键，
+ * 这样任何输入法都能填负偏移。
+ */
+@Composable
+private fun PrefOffsetInput(
+    title: String,
+    value: Int,
+    range: IntRange,
+    step: Int,
+    unit: String,
+    subtitle: String?,
+    onChange: (Int) -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    // 进编辑态时 onFocusChanged 会先来一次 isFocused=false，用 focused 兜住，
+    // 否则一进输入框就被"失焦"提交掉。
+    var focused by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+
+    // editing 是闸门：回车 / ✓ / 失焦谁先到谁生效，后面再来直接 return（不会重复写盘）
+    fun commit() {
+        if (!editing) return
+        editing = false
+        parseSlotOffsetInput(text)?.let(onChange)
+    }
+
+    LaunchedEffect(editing) {
+        if (editing) focus.requestFocus()
+    }
+
+    PrefRow(title, subtitle, trailing = {
+        if (editing) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = {
+                        // 没输就用当前值，取反后立即落地
+                        val cur = parseSlotOffsetInput(text) ?: value
+                        editing = false
+                        onChange((-cur).coerceIn(range.first, range.last))
+                    },
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(48.dp),
+                ) { Text("±") }
+                Spacer(Modifier.width(4.dp))
+                JtdxTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = slotOffsetInputText(value),
+                    isError = text.isNotBlank() && parseSlotOffsetInput(text) == null,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { commit() }),
+                    modifier = Modifier
+                        .width(74.dp)
+                        .focusRequester(focus)
+                        .onFocusChanged { st ->
+                            if (st.isFocused) {
+                                focused = true
+                            } else if (focused) {
+                                focused = false
+                                commit()
+                            }
+                        },
+                )
+                Spacer(Modifier.width(4.dp))
+                OutlinedButton(
+                    onClick = { commit() },
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(48.dp),
+                ) { Text("✓") }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = { onChange((value - step).coerceAtLeast(range.first)) },
+                    enabled = value > range.first,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(48.dp),
+                ) { Text("−") }
+                Box(
+                    modifier = Modifier
+                        .widthIn(min = 62.dp)
+                        .height(48.dp)
+                        .clickable {
+                            text = ""
+                            focused = false
+                            editing = true
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // 下划线 + 强调色 = 可点输入（其余数值项仍是纯步进）
+                    Text(
+                        slotOffsetInputText(value) + unit,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { onChange((value + step).coerceAtMost(range.last)) },
+                    enabled = value < range.last,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(48.dp),
+                ) { Text("+") }
+            }
         }
     })
 }

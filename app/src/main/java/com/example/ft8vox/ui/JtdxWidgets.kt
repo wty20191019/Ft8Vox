@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -116,12 +118,17 @@ fun JtdxTextField(
     placeholder: String = "",
     enabled: Boolean = true,
     textStyle: TextStyle = MaterialTheme.typography.labelMedium,
+    /** 非法输入时把描边染红（如「时隙偏移」填了字母）。 */
+    isError: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
+    val borderColor = if (isError) MaterialTheme.colorScheme.error else JtdxBorder
     Box(
         modifier = modifier
             .height(26.dp)
             .background(Color(0xFF0E0E16))
-            .border(1.dp, JtdxBorder)
+            .border(1.dp, borderColor)
             .padding(horizontal = 4.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -139,6 +146,8 @@ fun JtdxTextField(
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = true,
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
             textStyle = textStyle.copy(
                 color = MaterialTheme.colorScheme.onSurface,
                 fontFamily = FontFamily.Monospace,

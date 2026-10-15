@@ -120,4 +120,55 @@ class AppChromeTest {
         assertEquals("校准 +1.5s·12", dtCalibrationLabel(1500, 12))
         assertEquals("校准 -0.4s·3", dtCalibrationLabel(-400, 3))
     }
+
+    @Test
+    fun slotOffsetInputParsesPlainAndSignedMs() {
+        assertEquals(1500, parseSlotOffsetInput("1500"))
+        assertEquals(1500, parseSlotOffsetInput("+1500"))
+        assertEquals(-1500, parseSlotOffsetInput("-1500"))
+        assertEquals(0, parseSlotOffsetInput("0"))
+    }
+
+    @Test
+    fun slotOffsetInputToleratesSpacesAndFullWidthSigns() {
+        assertEquals(1500, parseSlotOffsetInput(" +1500 "))
+        assertEquals(1500, parseSlotOffsetInput("\uFF0B1500")) // 全角 ＋
+        assertEquals(-1500, parseSlotOffsetInput("\uFF0D1500")) // 全角 －
+        assertEquals(-1500, parseSlotOffsetInput("\u22121500")) // 数学减号 −
+        assertEquals(1500, parseSlotOffsetInput("1\u00A0500")) // 不换行空格
+    }
+
+    @Test
+    fun slotOffsetInputRejectsNonMsText() {
+        // 单位固定毫秒：小数 / 带单位后缀 / 字母 / 空 / 只有符号 都算非法（提交时不写盘、退回原值）
+        assertNull(parseSlotOffsetInput(""))
+        assertNull(parseSlotOffsetInput("   "))
+        assertNull(parseSlotOffsetInput("1.5"))
+        assertNull(parseSlotOffsetInput("1.5s"))
+        assertNull(parseSlotOffsetInput("abc"))
+        assertNull(parseSlotOffsetInput("+"))
+        assertNull(parseSlotOffsetInput("-"))
+        assertNull(parseSlotOffsetInput("1 2a"))
+        assertNull(parseSlotOffsetInput("+-1500"))
+    }
+
+    @Test
+    fun slotOffsetInputClampsToLimit() {
+        // 与设置读写层的 coerceIn 同口径：填过大就顶到边界，不算非法
+        assertEquals(SLOT_OFFSET_LIMIT_MS, parseSlotOffsetInput("99999"))
+        assertEquals(-SLOT_OFFSET_LIMIT_MS, parseSlotOffsetInput("-99999"))
+        assertEquals(SLOT_OFFSET_LIMIT_MS, parseSlotOffsetInput("2500"))
+    }
+
+    @Test
+    fun slotOffsetInputTextRoundTrips() {
+        // 零也带正号：与原来步进器的显示（`+0 ms`）一致
+        assertEquals("+1500", slotOffsetInputText(1500))
+        assertEquals("-1500", slotOffsetInputText(-1500))
+        assertEquals("+0", slotOffsetInputText(0))
+        // 回填文本能被自己解析回原值（编辑态的空占位符用的就是它）
+        for (v in listOf(-2500, -100, 0, 100, 2500)) {
+            assertEquals(v, parseSlotOffsetInput(slotOffsetInputText(v)))
+        }
+    }
 }

@@ -133,6 +133,44 @@ fun avgDtMs(samples: List<Float>): Int? {
 fun slotOffsetFromDtMs(dtMs: Int): Int =
     dtMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
 
+/** 「时隙偏移」输入框的初始文本（带号：`+1500` / `-1500` / `0`）。 */
+fun slotOffsetInputText(ms: Int): String = if (ms >= 0) "+$ms" else "$ms"
+
+/**
+ * 把「时隙偏移」输入框里的文本解析成毫秒（**只收整数毫秒**，非法 → null）。
+ *
+ * 放宽输入、收紧语义：
+ * - 去掉所有空白（含全角空格 / 不换行空格）；
+ * - 全角 `＋` `－` 与减号 `−` 归一成半角（中文输入法下很容易打出来）；
+ * - 允许前导 `+` / `-`，其余必须**全是数字**；
+ * - **不接受小数**：`1.5` 是非法输入、不是 1500 ms —— 单位固定毫秒，避免
+ *   「填 1500 到底是秒还是毫秒」的歧义（要 1.5 s 就填 1500）；
+ * - 数字长到 `Long` 装不下（>19 位）当非法（那种输入显然不是想调偏移）。
+ *
+ * 超出 ±[SLOT_OFFSET_LIMIT_MS] 的值**夹到边界**而不是报错：与设置读写层的 `coerceIn` 同口径，
+ * 且 FT8 时隙只有 15 s，填 `99999` 的意图显然是「顶到上限」。
+ */
+fun parseSlotOffsetInput(raw: String): Int? {
+    val t = raw
+        .map {
+            when (it) {
+                '\uFF0B' -> '+'   // 全角 ＋
+                '\uFF0D' -> '-'   // 全角 －
+                '\u2212' -> '-'   // 数学减号 −
+                else -> it
+            }
+        }
+        .filterNot { it.isWhitespace() }
+        .joinToString("")
+    if (t.isEmpty()) return null
+    val neg = t[0] == '-'
+    val digits = if (t[0] == '+' || t[0] == '-') t.substring(1) else t
+    if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return null
+    val v = digits.toLongOrNull() ?: return null
+    val signed = if (neg) -v else v
+    return signed.coerceIn(-SLOT_OFFSET_LIMIT_MS.toLong(), SLOT_OFFSET_LIMIT_MS.toLong()).toInt()
+}
+
 /**
  * 信息头「一键校准」按钮文案（`校准 +1.5s·12`＝平均 +1.5 s、12 条样本）。
  *
