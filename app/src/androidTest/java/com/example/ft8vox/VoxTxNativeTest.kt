@@ -2,7 +2,6 @@ package com.example.ft8vox
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.ft8vox.engine.AudioEngine
-import com.example.ft8vox.engine.VoxConfig
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -10,10 +9,9 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * U7b：VOX/PTT native 路径的设备端回归。
+ * U7b：VOX 发射路径的设备端回归。
  *
- * 验证 `nativeSetVox` / `nativePlayTx`（前导静音 + 前导音）
- * 与 `nativePlayTone` 在真机/模拟器上都能正常打开输出流并写完。
+ * 验证 `playTx`（前导 + 波形）与 `playTone` 在真机/模拟器上都能正常打开输出流并写完。
  */
 @RunWith(AndroidJUnit4::class)
 class VoxTxNativeTest {
@@ -31,15 +29,8 @@ class VoxTxNativeTest {
             val rate = AudioEngine.startPlayback(48000)
             assertTrue("startPlayback failed: $rate", rate > 0)
 
-            AudioEngine.setVox(
-                VoxConfig(
-                    pttDelayMs = 50,
-                    leadToneMs = 100,
-                )
-            )
-
-            // 1 s 数据 + 50 ms 静音 + 100 ms 前导音
-            val written = AudioEngine.playTx(tone(1000), pttSilenceMs = 50, leadToneMs = 100)
+            // 1 s 数据 + 100 ms 前导音（频率与发射频率相同）
+            val written = AudioEngine.playTx(tone(1000), preambleMs = 100, toneHz = 1000)
             assertTrue("playTx wrote $written frames", written > 0)
 
             // 写入帧数应至少覆盖数据本身（约 1.15 s × 48 kHz ≈ 55200）

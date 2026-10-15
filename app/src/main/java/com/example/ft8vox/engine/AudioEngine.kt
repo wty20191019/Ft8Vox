@@ -23,18 +23,6 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * PTT 配置（U7b）。
- *
- * 无 CAT 时 App 无法控制电台 PTT，只能通过发射音频序列间接键控：
- * [pttDelayMs] 前导静音 + [leadToneMs] 前导音先让电台 VOX 动作，
- * 随后 FT8 数据落在时隙起点。
- */
-data class VoxConfig(
-    val pttDelayMs: Int = 0,
-    val leadToneMs: Int = 0,
-)
-
 /** 实时音频引擎的状态快照（字段与旧 native 引擎保持一致）。 */
 data class AudioState(
     /** 采集流是否在运行。 */
@@ -76,7 +64,7 @@ data class AudioState(
  * 麦克风(48k/float) → 重采样 12k ─┬→ 按时隙累积 → 时隙结束拷一份
  *                                 │      → 后台线程 Ft8Native.decodeSlot → pollDecoded() 拉取
  *                                 └→ STFT（2048 点 Hann，80 ms/行）→ pollWaterfall() 拉取
- * Ft8Native.encode → playTx(前导静音 + 前导音 + 波形) → AudioTrack
+ * Ft8Native.encode → playTx(前导 + 波形) → AudioTrack
  * ```
  *
  * 接口契约尽量与旧 native 版保持一致，便于上层（SessionViewModel）无感替换。
@@ -93,6 +81,9 @@ object AudioEngine {
 
     /** 单时隙解码采样数。 */
     private const val SLOT_SAMPLES = DECODE_RATE * SLOT_MS / 1000
+
+    /** 前导音 / 测试音的数字幅度（留约 2 dB 余量，避免削顶）。 */
+    private const val TONE_AMPLITUDE = 0.8f
 
     @Volatile
     private var engine: RealtimeEngine? = null
@@ -163,18 +154,19 @@ object AudioEngine {
     /** 播放一段 12 kHz PCM（内部按输出采样率重采样），返回写入的 12k 采样数。 */
     fun play(pcm: FloatArray): Int = engine?.play(pcm) ?: -1
 
-    /** 播放发射 PCM，带 PTT 前导静音与发射前导音；返回写入的 12k 采样数。 */
-    fun playTx(pcm: FloatArray, pttSilenceMs: Int = 0, leadToneMs: Int = 0): Int =
-        engine?.playTx(pcm, pttSilenceMs, leadToneMs) ?: -1
+    /**
+     * 播放发射 PCM，数据前插入一段前导；返回写入的 12k 采样数。
+     *
+     * @param preambleMs 前导时长（ms）
+     * @param toneHz 前导音频率（Hz）：≤0 表示前导只放静音（＝纯发射延时）；
+     *   正常发射传**与波形相同的发射频率**，使前导听感、滤波与 VOX 响应与报文一致
+     */
+    fun playTx(pcm: FloatArray, preambleMs: Int = 0, toneHz: Int = 0): Int =
+        engine?.playTx(pcm, preambleMs, toneHz) ?: -1
 
     /** 播放一段测试单音，返回写入的 12k 采样数。 */
     fun playTone(freqHz: Int = 1000, durationMs: Int = 2000): Int =
         engine?.playTone(freqHz, durationMs) ?: -1
-
-    /** 下发 PTT 配置（热生效）。 */
-    fun setVox(config: VoxConfig) {
-        engine?.setVox(config)
-    }
 
     /** 下发采集增益（热生效，dB）。 */
     fun setInputGain(gainDb: Int) {
@@ -221,9 +213,6 @@ object AudioEngine {
 
         @Volatile
         private var outputGain: Float = 1f
-
-        @Volatile
-        private var vox: VoxConfig = VoxConfig()
 
         private val decodeConfig = Ft8DecodeConfig(
             fMinHz = config.fMin,
@@ -298,10 +287,6 @@ object AudioEngine {
 
         fun setDecodeParams(p: DecodeParams) {
             decodeParams = p
-        }
-
-        fun setVox(cfg: VoxConfig) {
-            vox = cfg
         }
 
         fun setInputGain(gainDb: Int) {
@@ -827,19 +812,21 @@ object AudioEngine {
 
         fun play(pcm: FloatArray): Int = writeSamples(pcm, abortAware = false, returned = pcm.size)
 
-        fun playTx(pcm: FloatArray, pttSilenceMs: Int, leadToneMs: Int): Int {
+        /**
+         * 数据前拼一段前导：`toneHz > 0` 时是**该频率的单音**（键控 VOX），否则是等长静音
+         * （＝纯发射延时）。频率由调用方传「本次发射频率」，与报文同音调。
+         */
+        fun playTx(pcm: FloatArray, preambleMs: Int, toneHz: Int): Int {
             // 注意：**不要**在这里清 abortRequested。清标志必须等拿到 writeLock（见 writeSamples），
             // 否则会把对「上一段正在写的音频」的作废提前撤销，导致它继续整条播完。
-            val ptt = msToSamples(pttSilenceMs)
-            val lead = msToSamples(leadToneMs)
-            val total = FloatArray(ptt + lead + pcm.size)
-            // 前导音：约 1000 Hz 正弦（键控 VOX）
-            if (lead > 0) {
-                for (i in 0 until lead) {
-                    total[ptt + i] = sin(2.0 * PI * 1000.0 * i / DECODE_RATE).toFloat() * 0.8f
+            val pre = msToSamples(preambleMs)
+            val total = FloatArray(pre + pcm.size)
+            if (toneHz > 0) {
+                for (i in 0 until pre) {
+                    total[i] = sin(2.0 * PI * toneHz * i / DECODE_RATE).toFloat() * TONE_AMPLITUDE
                 }
             }
-            System.arraycopy(pcm, 0, total, ptt + lead, pcm.size)
+            System.arraycopy(pcm, 0, total, pre, pcm.size)
             val written = writeSamples(total, abortAware = true, returned = pcm.size)
             // 播放尾部收尾（写 0 让缓冲播放完）不在阻塞路径里做，调用方只关心数据是否播出
             return written
@@ -850,7 +837,7 @@ object AudioEngine {
             val n = msToSamples(durationMs)
             val tone = FloatArray(n)
             for (i in 0 until n) {
-                tone[i] = sin(2.0 * PI * freqHz * i / DECODE_RATE).toFloat() * 0.8f
+                tone[i] = sin(2.0 * PI * freqHz * i / DECODE_RATE).toFloat() * TONE_AMPLITUDE
             }
             return writeSamples(tone, abortAware = true, returned = n)
         }

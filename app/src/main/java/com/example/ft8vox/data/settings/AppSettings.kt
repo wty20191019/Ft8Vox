@@ -230,11 +230,17 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / PTT（docs/Ft8Vox.md） ----
-    /** 发射前导音开关。 */
+    // ---- 电台（仅 VOX）（docs/Ft8Vox.md） ----
+    /**
+     * 前导音开关：开＝前导放一段**与发射频率相同**的单音（让电台 VOX 抢先键控）；
+     * 关＝前导只留同样时长的静音（＝纯发射延时）。
+     *
+     * 无 CAT 时 App 无法键控，键控只能靠前导音或 FT8 波形本身 —— 静音前导不产生键控动作，
+     * 只是留给声卡 / 电台起控慢的余量。
+     */
     val txLeadTone: Boolean = false,
-    /** 前导音时长（ms，0–2000）。 */
-    val txLeadToneMs: Int = 200,
+    /** 前导时长（ms，0–2000）：[txLeadTone] 只决定这段时长是单音还是静音。 */
+    val txPreambleMs: Int = 200,
     /** 输出声卡（空 = 系统默认；设备枚举依赖 U7）。 */
     val outputDevice: String = "",
     /**
@@ -242,8 +248,6 @@ data class AppSettings(
      * **0 = 数字满幅**（波形本身已是满幅，只能往小调）。对报文与「测试音」都生效，热生效。
      */
     val outputGainDb: Int = 0,
-    /** PTT 延迟（ms，0–500）。 */
-    val pttDelayMs: Int = 50,
 
     // ---- 音频（docs/Ft8Vox.md） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
@@ -303,14 +307,6 @@ data class AppSettings(
         get() = cqPrefixes.getOrElse(cqPrefixIndex) { cqPrefixes.firstOrNull().orEmpty() }
             .trim()
             .uppercase()
-
-    /**
-     * 发射前导总时长（ms）＝ PTT 前导静音 [pttDelayMs] + 发射前导音 [txLeadToneMs]。
-     *
-     * 供「立即发」判定使用：报文波形 + 前导都能在本时隙剩余时间内播完才允许立即发射。
-     */
-    val txPreambleMs: Int
-        get() = pttDelayMs.coerceAtLeast(0) + if (txLeadTone) txLeadToneMs.coerceAtLeast(0) else 0
 
     /** 当前实际使用的刻度频率（Hz）：自定义波段或波段内频率优先，否则取波段默认。 */
     val resolvedDialHz: Long

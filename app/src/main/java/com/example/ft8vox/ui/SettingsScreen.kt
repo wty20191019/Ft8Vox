@@ -176,24 +176,25 @@ fun SettingsScreen(
         // ---------- 6.1 电台（仅 VOX） ----------
         SettingsGroup("电台（仅 VOX）") {
             PrefNote(
-                "无 CAT：App 无法直接控制 PTT，只能靠「前导静音 + 前导音」让电台 VOX 抢先键控，" +
+                "无 CAT：App 无法直接控制 PTT，只能靠「前导音」让电台 VOX 抢先键控，" +
                     "再把 FT8 数据对准时隙起点。"
             )
             PrefSwitch(
-                title = "发射前导音",
-                subtitle = "发射前先放一段单音，让 VOX 抢先触发",
+                title = "前导音",
+                subtitle = "开＝前导放一段与发射频率相同的单音，让 VOX 抢先触发；" +
+                    "关＝前导只留同样时长的静音（纯发射延时）",
                 checked = app.txLeadTone,
                 onCheckedChange = { v -> settings.update { it.copy(txLeadTone = v) } },
             )
             PrefDivider()
             PrefStepper(
-                title = "前导音时长",
-                value = app.txLeadToneMs,
+                title = "前导时长",
+                subtitle = "单音 / 静音共用；数据仍落在时隙起点，所以它不会推后报文",
+                value = app.txPreambleMs,
                 range = 0..2000,
                 step = 50,
                 unit = " ms",
-                onChange = { v -> settings.update { it.copy(txLeadToneMs = v) } },
-                enabled = app.txLeadTone,
+                onChange = { v -> settings.update { it.copy(txPreambleMs = v) } },
             )
             PrefDivider()
             PrefDropdown(
@@ -218,21 +219,11 @@ fun SettingsScreen(
             PrefDivider()
             PrefAction(
                 title = "测试音",
-                subtitle = "发送 1 kHz 单音（2 s），用于 VOX 键控与音量联调",
+                subtitle = "发送 ${sessionStatus.selectedFreqHz} Hz 单音（2 s），用于 VOX 键控与音量联调",
                 buttonLabel = "播放",
                 onClick = { session.playTestTone() },
             )
             VoxLevelRow(sessionStatus)
-            PrefDivider()
-            PrefStepper(
-                title = "PTT 延迟",
-                subtitle = "数据前插入的静音，留给声卡路由/电台起键",
-                value = app.pttDelayMs,
-                range = 0..500,
-                step = 10,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(pttDelayMs = v) } },
-            )
         }
 
         // ---------- 6.2 音频 ----------

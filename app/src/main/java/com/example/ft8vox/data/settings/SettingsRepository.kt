@@ -104,10 +104,12 @@ private object Keys {
     val mapCqShowSnr = booleanPreferencesKey("map_cq_show_snr")
     val mapShowLinkText = booleanPreferencesKey("map_show_link_text")
     val txLeadTone = booleanPreferencesKey("tx_lead_tone")
-    val txLeadToneMs = intPreferencesKey("tx_lead_tone_ms")
+    val txPreambleMs = intPreferencesKey("tx_preamble_ms")
+
+    /** 改名前的「前导音时长」键：读取 [txPreambleMs] 时作回落，避免老用户丢设置。 */
+    val txLeadToneMsLegacy = intPreferencesKey("tx_lead_tone_ms")
     val outputDevice = stringPreferencesKey("output_device")
     val outputGainDb = intPreferencesKey("output_gain_db")
-    val pttDelayMs = intPreferencesKey("ptt_delay_ms")
     val inputDevice = stringPreferencesKey("input_device")
     val inputGainDb = intPreferencesKey("input_gain_db")
     val slotOffsetMs = intPreferencesKey("slot_offset_ms")
@@ -205,10 +207,11 @@ private fun Preferences.toAppSettings(): AppSettings {
         mapCqFlagShowSnr = this[Keys.mapCqShowSnr] ?: defaults.mapCqFlagShowSnr,
         mapShowLinkText = this[Keys.mapShowLinkText] ?: defaults.mapShowLinkText,
         txLeadTone = this[Keys.txLeadTone] ?: defaults.txLeadTone,
-        txLeadToneMs = (this[Keys.txLeadToneMs] ?: defaults.txLeadToneMs).coerceIn(0, 2000),
+        txPreambleMs = (
+            this[Keys.txPreambleMs] ?: this[Keys.txLeadToneMsLegacy] ?: defaults.txPreambleMs
+            ).coerceIn(0, 2000),
         outputDevice = this[Keys.outputDevice] ?: defaults.outputDevice,
         outputGainDb = clampOutputGainDb(this[Keys.outputGainDb] ?: defaults.outputGainDb),
-        pttDelayMs = (this[Keys.pttDelayMs] ?: defaults.pttDelayMs).coerceIn(0, 500),
         inputDevice = this[Keys.inputDevice] ?: defaults.inputDevice,
         inputGainDb = (this[Keys.inputGainDb] ?: defaults.inputGainDb).coerceIn(-12, 30),
         slotOffsetMs = (this[Keys.slotOffsetMs] ?: defaults.slotOffsetMs)
@@ -256,10 +259,9 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.mapCqShowSnr] = mapCqFlagShowSnr
     prefs[Keys.mapShowLinkText] = mapShowLinkText
     prefs[Keys.txLeadTone] = txLeadTone
-    prefs[Keys.txLeadToneMs] = txLeadToneMs
+    prefs[Keys.txPreambleMs] = txPreambleMs
     prefs[Keys.outputDevice] = outputDevice
     prefs[Keys.outputGainDb] = outputGainDb
-    prefs[Keys.pttDelayMs] = pttDelayMs
     prefs[Keys.inputDevice] = inputDevice
     prefs[Keys.inputGainDb] = inputGainDb
     prefs[Keys.slotOffsetMs] = slotOffsetMs
