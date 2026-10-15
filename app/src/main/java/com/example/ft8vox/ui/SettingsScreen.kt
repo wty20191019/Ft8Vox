@@ -158,7 +158,7 @@ fun SettingsScreen(
                         "等长静音：它不出声、不会提前键控电台，作用是让播放流提前起流，" +
                         "避免起流延迟削掉报文起点。"
                 )
-                PrefStepper(
+                PrefNumber(
                     title = "前导时长",
                     subtitle = "发射前垫一段等长静音（不出声）：让播放流提前起流、不削报文起点；不会推后报文",
                     value = app.txPreambleMs,
@@ -177,7 +177,7 @@ fun SettingsScreen(
                     label = { id -> AudioDevices.label(outputDevices, id) },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "输出音量",
                     subtitle = "发射音频的数字衰减：0 dB = 数字满幅，只能往小调" +
                         "（波形本身已是满幅，要更大声请调电台/声卡的音量）。" +
@@ -217,7 +217,7 @@ fun SettingsScreen(
                     label = { it.label },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "输入增益",
                     subtitle = "对采集样本生效（含输入电平读数），热生效",
                     value = app.inputGainDb,
@@ -244,7 +244,7 @@ fun SettingsScreen(
                     label = { it.name },
                 )
                 PrefDivider()
-                PrefOffsetInput(
+                PrefNumberInput(
                     title = "时隙偏移",
                     value = app.slotOffsetMs,
                     range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
@@ -256,6 +256,9 @@ fun SettingsScreen(
                         "改完最迟一个时隙内生效，无需重开接收。" +
                         "点中间的数字可直接输入（只收整数毫秒；回车 / ✓ 才生效，± 一键翻正负）。",
                     onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
+                    // 毫秒整数 + 容错清洗、超范围夹到 ±2500：见 AppChrome.parseSlotOffsetInput
+                    parse = ::parseSlotOffsetInput,
+                    format = ::slotOffsetInputText,
                 )
                 PrefDivider()
                 PrefChoice(
@@ -277,7 +280,7 @@ fun SettingsScreen(
                     label = { it.label },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "时间 OSR",
                     value = app.decode.timeOsr,
                     range = DecodeSettings.TIME_OSR_RANGE,
@@ -286,7 +289,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(timeOsr = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "频率 OSR",
                     value = app.decode.freqOsr,
                     range = DecodeSettings.FREQ_OSR_RANGE,
@@ -295,7 +298,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(freqOsr = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "最低得分",
                     value = app.decode.minScore,
                     range = DecodeSettings.MIN_SCORE_RANGE,
@@ -304,7 +307,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(minScore = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "LDPC 迭代",
                     value = app.decode.ldpcIterations,
                     range = DecodeSettings.LDPC_RANGE,
@@ -314,7 +317,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(ldpcIterations = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "候选上限",
                     value = app.decode.maxCandidates,
                     range = DecodeSettings.MAX_CANDIDATES_RANGE,
@@ -346,7 +349,7 @@ fun SettingsScreen(
                     onCheckedChange = { v -> settings.updateDecode { it.copy(globalCandidates = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "单时隙上限",
                     value = app.decode.maxDecoded,
                     range = DecodeSettings.MAX_DECODED_RANGE,
@@ -356,7 +359,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "减谱重解趟数",
                     value = app.decode.passes,
                     range = DecodeSettings.PASSES_RANGE,
@@ -367,7 +370,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(passes = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "频率下限",
                     value = app.decode.fMinHz,
                     range = DecodeSettings.F_MIN_RANGE,
@@ -378,7 +381,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "频率上限",
                     value = app.decode.fMaxHz,
                     range = DecodeSettings.F_MAX_RANGE,
@@ -439,7 +442,7 @@ fun SettingsScreen(
                         "不再随信号自适应。频谱页顶部同样可以直接调这两项。"
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "噪声底",
                     value = app.waterfallFloorDb,
                     range = WATERFALL_FLOOR_DB_RANGE,
@@ -449,7 +452,7 @@ fun SettingsScreen(
                     onChange = { v -> settings.update { it.copy(waterfallFloorDb = clampWaterfallFloorDb(v)) } },
                 )
                 PrefDivider()
-                PrefStepper(
+                PrefNumber(
                     title = "动态范围",
                     value = app.waterfallRangeDb,
                     range = WATERFALL_RANGE_DB_RANGE,
@@ -718,138 +721,6 @@ private fun ClearLogDialog(
     )
 }
 
-/** 设置分组：标题 + 圆角卡片。 */
-@Composable
-private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-        )
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                content = content,
-            )
-        }
-    }
-}
-
-/** 组内分隔线（`outlineVariant` 淡化）。 */
-@Composable
-private fun PrefDivider() {
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-}
-
-/** 「需要 U7」小徽标。 */
-@Composable
-private fun U7Badge(text: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(4.dp),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-        )
-    }
-}
-
-/** Preference 行：左侧标题/副标题，右侧可选控件。 */
-@Composable
-private fun PrefRow(
-    title: String,
-    subtitle: String? = null,
-    badge: String? = null,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .defaultMinSize(minHeight = 56.dp)
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (badge != null) {
-                    Spacer(Modifier.width(6.dp))
-                    U7Badge(badge)
-                }
-            }
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (trailing != null) {
-            Spacer(Modifier.width(8.dp))
-            trailing()
-        }
-    }
-}
-
-/** 组内纯说明行。 */
-@Composable
-private fun PrefInfo(title: String, subtitle: String? = null, badge: String? = null) {
-    PrefRow(title, subtitle, badge)
-}
-
-/** 组内小字说明。 */
-@Composable
-private fun PrefNote(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(vertical = 6.dp),
-    )
-}
-
-/**
- * 开关行。
- *
- * [dotColor] 非空时在**开关右侧**显示同色小圆点，标注该开关对应的高亮色（docs/Ft8Vox.md）。
- */
-@Composable
-private fun PrefSwitch(
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    badge: String? = null,
-    dotColor: Color? = null,
-) {
-    PrefRow(title, subtitle, badge, trailing = {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
-            if (dotColor != null) {
-                Spacer(Modifier.width(8.dp))
-                ColorDot(dotColor)
-            }
-        }
-    })
-}
-
 /** 手动输入 DX 呼号 / 网格并立即呼叫（docs/Ft8Vox.md：从旧操作页控制行搬来）。 */
 @Composable
 private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
@@ -891,19 +762,6 @@ private fun ManualCallBlock(session: SessionViewModel, myCall: String) {
         )
     }
 }
-
-/** 高亮色小圆点（带一圈淡描边，亮色主题下也看得清）。 */
-@Composable
-private fun ColorDot(color: Color) {
-    Box(
-        Modifier
-            .size(10.dp)
-            .clip(CircleShape)
-            .background(color)
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), CircleShape),
-    )
-}
-
 /**
  * 「颜色说明」图例（docs/Ft8Vox.md）：列出每个颜色的含义。
  *
@@ -928,329 +786,6 @@ private fun HighlightLegend() {
         LegendRow(MapLinkMine, "红线 / 红字：报文里有我的连线（我发出的 / 发给我的）")
         LegendRow(MapLinkColor, "蓝线：其它台站之间的连线")
     }
-}
-
-/** 图例里的小标题。 */
-@Composable
-private fun LegendSection(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
-    )
-}
-
-/** 图例中的一行：色点 + 说明。 */
-@Composable
-private fun LegendRow(color: Color, text: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ColorDot(color)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** 单选（FilterChip）行：标题在上，选项可横向滚动。 */
-@Composable
-private fun <T> PrefChoice(
-    title: String,
-    options: List<T>,
-    selected: T,
-    onSelect: (T) -> Unit,
-    label: (T) -> String,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    badge: String? = null,
-    /** 非空时在标题行右端显示同色小圆点。 */
-    dotColor: Color? = null,
-) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (badge != null) {
-                Spacer(Modifier.width(6.dp))
-                U7Badge(badge)
-            }
-            if (dotColor != null) {
-                Spacer(Modifier.weight(1f))
-                ColorDot(dotColor)
-            }
-        }
-        if (subtitle != null) {
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            for (o in options) {
-                FilterChip(
-                    selected = o == selected,
-                    onClick = { onSelect(o) },
-                    enabled = enabled,
-                    label = { Text(label(o)) },
-                )
-            }
-        }
-    }
-}
-
-/** 下拉选择行。 */
-@Composable
-private fun <T> PrefDropdown(
-    title: String,
-    options: List<T>,
-    selected: T,
-    onSelect: (T) -> Unit,
-    label: (T) -> String,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    badge: String? = null,
-) {
-    var open by remember { mutableStateOf(false) }
-    PrefRow(title, subtitle, badge, trailing = {
-        Box {
-            TextButton(onClick = { open = true }, enabled = enabled) {
-                Text("${label(selected)} ▾")
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                for (o in options) {
-                    DropdownMenuItem(
-                        text = { Text(label(o)) },
-                        onClick = {
-                            open = false
-                            onSelect(o)
-                        },
-                    )
-                }
-            }
-        }
-    })
-}
-
-/** 数值步进行：−/值/+，触摸目标 48dp。 */
-@Composable
-private fun PrefStepper(
-    title: String,
-    value: Int,
-    range: IntRange,
-    onChange: (Int) -> Unit,
-    step: Int = 1,
-    unit: String = "",
-    /** 显示正号（用于可正可负的偏移量，如 `+1500 ms`）。 */
-    signed: Boolean = false,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    badge: String? = null,
-) {
-    PrefRow(title, subtitle, badge, trailing = {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(
-                onClick = { onChange((value - step).coerceAtLeast(range.first)) },
-                enabled = enabled && value > range.first,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.size(48.dp),
-            ) { Text("−") }
-            Text(
-                if (signed && value >= 0) "+$value$unit" else "$value$unit",
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.widthIn(min = 62.dp),
-            )
-            OutlinedButton(
-                onClick = { onChange((value + step).coerceAtMost(range.last)) },
-                enabled = enabled && value < range.last,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.size(48.dp),
-            ) { Text("+") }
-        }
-    })
-}
-
-/**
- * 「时隙偏移」行：默认是 `−` / 数值 / `+` 步进，**点中间的数字就地输入**（只收整数毫秒）。
- *
- * 为什么不直接扩 [PrefStepper]：只有这一项需要输入 —— ±2500 ms 按 100 ms 一步，从 0 到
- * +1500 要按 15 次；单独实现就不会动到共用组件的另外 14 处调用。
- *
- * 输入是**提交式**（回车「完成」/ 点 `✓` / 输入框失焦），**绝不边输边写**：偏移一变就会触发
- * 采集网格热重排（`AudioEngine.setSlotOffsetMs` → `realignRequested`），输 `1500` 会连重排
- * 4 次（1 → 15 → 150 → 1500），那一格全废。非法输入（空、字母、`1.5`）提交时**不写盘**、
- * 直接退回原值（输入过程中 [JtdxTextField] 的 `isError` 会先红框提示）。
- *
- * **进编辑态时字段是空的、当前值只作占位符**：预填当前值会把光标停在末尾，接着打字就成了
- * `+1500` + `2000` = `+15002000` → 被夹到 +2500（一键校准设过值之后就是这条路），
- * 而 `BasicTextField` 只能收 `String`、没法把预填文本整体选中。
- *
- * `±` 按钮＝「用输进来的数（没输就是当前值）取反」并立即提交：数字键盘不一定给 `-` 键，
- * 这样任何输入法都能填负偏移。
- */
-@Composable
-private fun PrefOffsetInput(
-    title: String,
-    value: Int,
-    range: IntRange,
-    step: Int,
-    unit: String,
-    subtitle: String?,
-    onChange: (Int) -> Unit,
-) {
-    var editing by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf("") }
-    // 进编辑态时 onFocusChanged 会先来一次 isFocused=false，用 focused 兜住，
-    // 否则一进输入框就被"失焦"提交掉。
-    var focused by remember { mutableStateOf(false) }
-    val focus = remember { FocusRequester() }
-
-    // editing 是闸门：回车 / ✓ / 失焦谁先到谁生效，后面再来直接 return（不会重复写盘）
-    fun commit() {
-        if (!editing) return
-        editing = false
-        parseSlotOffsetInput(text)?.let(onChange)
-    }
-
-    LaunchedEffect(editing) {
-        if (editing) focus.requestFocus()
-    }
-
-    PrefRow(title, subtitle, trailing = {
-        if (editing) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    onClick = {
-                        // 没输就用当前值，取反后立即落地
-                        val cur = parseSlotOffsetInput(text) ?: value
-                        editing = false
-                        onChange((-cur).coerceIn(range.first, range.last))
-                    },
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(48.dp),
-                ) { Text("±") }
-                Spacer(Modifier.width(4.dp))
-                JtdxTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    placeholder = slotOffsetInputText(value),
-                    isError = text.isNotBlank() && parseSlotOffsetInput(text) == null,
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { commit() }),
-                    modifier = Modifier
-                        .width(74.dp)
-                        .focusRequester(focus)
-                        .onFocusChanged { st ->
-                            if (st.isFocused) {
-                                focused = true
-                            } else if (focused) {
-                                focused = false
-                                commit()
-                            }
-                        },
-                )
-                Spacer(Modifier.width(4.dp))
-                OutlinedButton(
-                    onClick = { commit() },
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(48.dp),
-                ) { Text("✓") }
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    onClick = { onChange((value - step).coerceAtLeast(range.first)) },
-                    enabled = value > range.first,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(48.dp),
-                ) { Text("−") }
-                Box(
-                    modifier = Modifier
-                        .widthIn(min = 62.dp)
-                        .height(48.dp)
-                        .clickable {
-                            text = ""
-                            focused = false
-                            editing = true
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    // 下划线 + 强调色 = 可点输入（其余数值项仍是纯步进）
-                    Text(
-                        slotOffsetInputText(value) + unit,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                    )
-                }
-                OutlinedButton(
-                    onClick = { onChange((value + step).coerceAtMost(range.last)) },
-                    enabled = value < range.last,
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.size(48.dp),
-                ) { Text("+") }
-            }
-        }
-    })
-}
-
-/** 文本输入行。 */
-@Composable
-private fun PrefText(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    supporting: String,
-    isError: Boolean = false,
-) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            label = { Text(label) },
-            singleLine = true,
-            isError = isError,
-            supportingText = { Text(supporting) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-/** 动作行：标题 + 右侧按钮。 */
-@Composable
-private fun PrefAction(
-    title: String,
-    buttonLabel: String,
-    onClick: () -> Unit,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    badge: String? = null,
-) {
-    PrefRow(title, subtitle, badge, trailing = {
-        OutlinedButton(onClick = onClick, enabled = enabled) { Text(buttonLabel) }
-    })
 }
 
 /**
