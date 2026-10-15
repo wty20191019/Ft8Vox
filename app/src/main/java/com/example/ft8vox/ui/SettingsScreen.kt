@@ -18,10 +18,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -36,10 +37,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.ft8vox.data.settings.AppSettings
 import com.example.ft8vox.data.settings.DecodePreset
 import com.example.ft8vox.data.settings.DecodeSettings
 import com.example.ft8vox.data.settings.OUTPUT_GAIN_MAX_DB
@@ -87,499 +91,456 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val app by settings.settings.collectAsState()
-    val entries by log.entries.collectAsState()
-    val sessionStatus by session.status.collectAsState()
 
     // U7c：音频设备枚举（系统默认恒为首项）；设备插拔后需重进本页刷新
     val context = LocalContext.current
     val inputDevices = remember(context) { AudioDevices.inputs(context) }
     val outputDevices = remember(context) { AudioDevices.outputs(context) }
 
-    var statusText by remember { mutableStateOf<String?>(null) }
+    // 这几个状态**只在本层持有、不在本层读**：读数下沉到真正需要它的叶子组合（见文末 `*Row` / `*Block`）。
+    // 接收中状态约 5 次/秒发布一次，导入进度、输入框每敲一个字也都会更新它们 ——
+    // 在本层读就会连着整页 40 行一起重组（Compose 的「跳过未变化子树」对 ViewModel / AppSettings
+    // 这类不稳定参数无效）。
+    val statusText = remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var bandDialog by remember { mutableStateOf(false) }
 
-    // 解码并行度（按 CPU 核数 + 频率范围自适应，无设置项）：与顶栏读数、native 同一规则
+    // 解码并行度的 CPU 核数（与顶栏读数、native 同一规则）；频率范围那一半在内层 FT8 组里算，
+    // 好让「只有 FT8 组」依赖设置里的频率范围。
     val decodeCores = remember { Runtime.getRuntime().availableProcessors() }
-    val decodeParallel = remember(app.decode.fMinHz, app.decode.fMaxHz, decodeCores) {
-        decodeParallelism(app.decode.fMinHz, app.decode.fMaxHz, decodeCores)
-    }
 
-    // 文本框用本地状态：DataStore 是异步往返，直接绑 Flow 值会在回显前把刚输入的字吞掉
-    var call by remember { mutableStateOf(app.myCall) }
-    var grid by remember { mutableStateOf(app.myGrid) }
-    var note by remember { mutableStateOf(app.note) }
-
-    // 错误态：呼号必填；网格允许留空，但填了就必须合法（Maidenhead 2/4/6/8 位）
-    val callError = call.isEmpty()
-    val gridError = grid.isNotEmpty() && !Maidenhead.isValid(grid)
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+    // 一组一个 item：首帧只组合可见的组，之后也只重组「确实读到变化」的那部分。
+    // 滚动位置随 LazyListState 保存，切走再回来由 MainShell 的 SaveableStateHolder 还原。
+    LazyColumn(
+        state = rememberLazyListState(),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
     ) {
         // 页标题已去掉（底部导航「设置」已表明当前页，顶上还有信息头；docs/Ft8Vox.md）
 
         // ---------- 台站（设计外补充：无 CAT，台站信息必填） ----------
-        SettingsGroup("台站") {
-            PrefText(
-                label = "呼号",
-                value = call,
-                onValueChange = { v ->
-                    val u = v.trim().uppercase()
-                    call = u
-                    settings.update { it.copy(myCall = u) }
-                },
-                supporting = if (callError) "发射前必须填写呼号" else "用于生成与识别报文",
-                isError = callError,
-            )
-            PrefDivider()
-            PrefText(
-                label = "网格（Maidenhead，如 JN25）",
-                value = grid,
-                onValueChange = { v ->
-                    val u = v.trim().uppercase()
-                    grid = u
-                    settings.update { it.copy(myGrid = u) }
-                },
-                supporting = if (gridError) {
-                    "格式不正确（2/4/6/8 位，如 JN25、JN25AA）"
-                } else {
-                    "可留空"
-                },
-                isError = gridError,
-            )
-            PrefDivider()
-            PrefAction(
-                title = "波段与频率",
-                subtitle = "无 CAT，需人工指定；当前：${app.band} · " +
-                    String.format(java.util.Locale.US, "%.4f MHz", app.resolvedDialHz / 1_000_000.0),
-                buttonLabel = "选择",
-                onClick = { bandDialog = true },
-            )
-            PrefDivider()
-            PrefText(
-                label = "备注",
-                value = note,
-                onValueChange = { v ->
-                    note = v
-                    settings.update { it.copy(note = v) }
-                },
-                supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
-            )
-            PrefDivider()
-            ManualCallBlock(session = session, myCall = app.myCall)
+        item(key = "station") {
+            SettingsGroup("台站") {
+                MyCallField(settings, app.myCall)
+                PrefDivider()
+                MyGridField(settings, app.myGrid)
+                PrefDivider()
+                PrefAction(
+                    title = "波段与频率",
+                    subtitle = "无 CAT，需人工指定；当前：${app.band} · " +
+                        String.format(java.util.Locale.US, "%.4f MHz", app.resolvedDialHz / 1_000_000.0),
+                    buttonLabel = "选择",
+                    onClick = { bandDialog = true },
+                )
+                PrefDivider()
+                NoteField(settings, app.note)
+                PrefDivider()
+                ManualCallBlock(session = session, myCall = app.myCall)
+            }
         }
 
         // ---------- 6.1 电台（仅 VOX） ----------
-        SettingsGroup("电台（仅 VOX）") {
-            PrefNote(
-                "无 CAT：App 无法直接控制 PTT，只能靠「前导音」让电台 VOX 抢先键控，" +
-                    "再把 FT8 数据对准时隙起点。"
-            )
-            PrefSwitch(
-                title = "前导音",
-                subtitle = "开＝前导放一段与发射频率相同的单音，让 VOX 抢先触发；" +
-                    "关＝前导只留同样时长的静音（纯发射延时）",
-                checked = app.txLeadTone,
-                onCheckedChange = { v -> settings.update { it.copy(txLeadTone = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "前导时长",
-                subtitle = "单音 / 静音共用；数据仍落在时隙起点，所以它不会推后报文",
-                value = app.txPreambleMs,
-                range = 0..2000,
-                step = 50,
-                unit = " ms",
-                onChange = { v -> settings.update { it.copy(txPreambleMs = v) } },
-            )
-            PrefDivider()
-            PrefDropdown(
-                title = "输出声卡",
-                subtitle = "指定发射音频输出；USB 声卡插入后需重进本页刷新。设备 id 可能随插拔变化",
-                options = outputDevices.map { AudioDevices.formatId(it.id) },
-                selected = AudioDevices.formatId(AudioDevices.parseId(app.outputDevice)),
-                onSelect = { v -> settings.update { it.copy(outputDevice = v) } },
-                label = { id -> AudioDevices.label(outputDevices, id) },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "输出音量",
-                subtitle = "发射音频的数字衰减：0 dB = 数字满幅，只能往小调" +
-                    "（波形本身已是满幅，要更大声请调电台/声卡的音量）。" +
-                    "对 FT8/FT4 报文与「测试音」都生效，热生效。",
-                value = app.outputGainDb,
-                range = OUTPUT_GAIN_MIN_DB..OUTPUT_GAIN_MAX_DB,
-                unit = " dB",
-                onChange = { v -> settings.update { it.copy(outputGainDb = v) } },
-            )
-            PrefDivider()
-            PrefAction(
-                title = "测试音",
-                subtitle = "发送 ${sessionStatus.selectedFreqHz} Hz 单音（2 s），用于 VOX 键控与音量联调",
-                buttonLabel = "播放",
-                onClick = { session.playTestTone() },
-            )
-            VoxLevelRow(sessionStatus)
+        item(key = "radio") {
+            SettingsGroup("电台（仅 VOX）") {
+                PrefNote(
+                    "无 CAT：App 无法直接控制 PTT，只能靠「前导音」让电台 VOX 抢先键控，" +
+                        "再把 FT8 数据对准时隙起点。"
+                )
+                PrefSwitch(
+                    title = "前导音",
+                    subtitle = "开＝前导放一段与发射频率相同的单音，让 VOX 抢先触发；" +
+                        "关＝前导只留同样时长的静音（纯发射延时）",
+                    checked = app.txLeadTone,
+                    onCheckedChange = { v -> settings.update { it.copy(txLeadTone = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "前导时长",
+                    subtitle = "单音 / 静音共用；数据仍落在时隙起点，所以它不会推后报文",
+                    value = app.txPreambleMs,
+                    range = 0..2000,
+                    step = 50,
+                    unit = " ms",
+                    onChange = { v -> settings.update { it.copy(txPreambleMs = v) } },
+                )
+                PrefDivider()
+                PrefDropdown(
+                    title = "输出声卡",
+                    subtitle = "指定发射音频输出；USB 声卡插入后需重进本页刷新。设备 id 可能随插拔变化",
+                    options = outputDevices.map { AudioDevices.formatId(it.id) },
+                    selected = AudioDevices.formatId(AudioDevices.parseId(app.outputDevice)),
+                    onSelect = { v -> settings.update { it.copy(outputDevice = v) } },
+                    label = { id -> AudioDevices.label(outputDevices, id) },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "输出音量",
+                    subtitle = "发射音频的数字衰减：0 dB = 数字满幅，只能往小调" +
+                        "（波形本身已是满幅，要更大声请调电台/声卡的音量）。" +
+                        "对 FT8/FT4 报文与「测试音」都生效，热生效。",
+                    value = app.outputGainDb,
+                    range = OUTPUT_GAIN_MIN_DB..OUTPUT_GAIN_MAX_DB,
+                    unit = " dB",
+                    onChange = { v -> settings.update { it.copy(outputGainDb = v) } },
+                )
+                PrefDivider()
+                TestToneRow(session)
+                VoxLevelRow(session)
+            }
         }
 
         // ---------- 6.2 音频 ----------
-        SettingsGroup("音频") {
-            // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/Ft8Vox.md）
-            AudioQuickPanel(sessionStatus, app)
-            PrefDivider()
-            PrefDropdown(
-                title = "输入设备",
-                subtitle = "指定接收音频输入；USB 声卡插入后需重进本页刷新。运行中切换需重新「开始接收」",
-                options = inputDevices.map { AudioDevices.formatId(it.id) },
-                selected = AudioDevices.formatId(AudioDevices.parseId(app.inputDevice)),
-                onSelect = { v -> settings.update { it.copy(inputDevice = v) } },
-                label = { id -> AudioDevices.label(inputDevices, id) },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "采样率偏好",
-                subtitle = "下次「开始接收」生效；设备实际值可能不同（以状态栏为准）",
-                options = SampleRatePref.entries,
-                selected = app.sampleRate,
-                onSelect = { v -> settings.update { it.copy(sampleRate = v) } },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "输入增益",
-                subtitle = "对采集样本生效（含输入电平读数），热生效",
-                value = app.inputGainDb,
-                range = -12..30,
-                unit = " dB",
-                onChange = { v -> settings.update { it.copy(inputGainDb = v) } },
-            )
+        item(key = "audio") {
+            SettingsGroup("音频") {
+                // 音频 / VOX 速览（从信息头收进来：实机太挤；docs/Ft8Vox.md）
+                AudioQuickPanelBlock(session, app)
+                PrefDivider()
+                PrefDropdown(
+                    title = "输入设备",
+                    subtitle = "指定接收音频输入；USB 声卡插入后需重进本页刷新。运行中切换需重新「开始接收」",
+                    options = inputDevices.map { AudioDevices.formatId(it.id) },
+                    selected = AudioDevices.formatId(AudioDevices.parseId(app.inputDevice)),
+                    onSelect = { v -> settings.update { it.copy(inputDevice = v) } },
+                    label = { id -> AudioDevices.label(inputDevices, id) },
+                )
+                PrefDivider()
+                PrefChoice(
+                    title = "采样率偏好",
+                    subtitle = "下次「开始接收」生效；设备实际值可能不同（以状态栏为准）",
+                    options = SampleRatePref.entries,
+                    selected = app.sampleRate,
+                    onSelect = { v -> settings.update { it.copy(sampleRate = v) } },
+                    label = { it.label },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "输入增益",
+                    subtitle = "对采集样本生效（含输入电平读数），热生效",
+                    value = app.inputGainDb,
+                    range = -12..30,
+                    unit = " dB",
+                    onChange = { v -> settings.update { it.copy(inputGainDb = v) } },
+                )
+            }
         }
 
         // ---------- 6.3 FT8 ----------
-        SettingsGroup("FT8") {
-            PrefChoice(
-                title = "模式",
-                subtitle = "当前仅支持 FT8（时隙 15 s）。",
-                options = Protocol.entries,
-                selected = app.protocol,
-                onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
-                label = { it.name },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "时隙偏移",
-                value = app.slotOffsetMs,
-                range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
-                step = 100,
-                unit = " ms",
-                signed = true,
-                subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
-                    "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
-                    "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。",
-                onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
-            )
-            PrefDivider()
-            PrefChoice(
-                title = "解码深度",
-                subtitle = "预设「快」＝下面的默认值。" +
-                    "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
-                    "「快」按钮可一键恢复上面 7 项的默认值（频率范围不随预设变化）。" +
-                    "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
-                options = buildList {
-                    add(DecodePreset.FAST)
-                    if (app.decodePreset == DecodePreset.CUSTOM) add(DecodePreset.CUSTOM)
-                },
-                selected = app.decodePreset,
-                onSelect = { p ->
-                    if (p != DecodePreset.CUSTOM) {
-                        settings.update { s -> s.copy(decode = s.decode.applyPreset(p)) }
-                    }
-                },
-                label = { it.label },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "时间 OSR",
-                value = app.decode.timeOsr,
-                range = DecodeSettings.TIME_OSR_RANGE,
-                subtitle = "每个符号在时间上再细分的份数（1–4）。调大：DT 时间分辨率更细、" +
-                    "弱信号同步更稳，计算量成倍上升。需重开接收生效。",
-                onChange = { v -> settings.updateDecode { it.copy(timeOsr = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "频率 OSR",
-                value = app.decode.freqOsr,
-                range = DecodeSettings.FREQ_OSR_RANGE,
-                subtitle = "每个 6.25 Hz 频率格再细分的份数（1–4）。调大：DF 频率估计更准、" +
-                    "邻近信号更易分开，计算量成倍上升。需重开接收生效。",
-                onChange = { v -> settings.updateDecode { it.copy(freqOsr = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "最低得分",
-                value = app.decode.minScore,
-                range = DecodeSettings.MIN_SCORE_RANGE,
-                subtitle = "Costas 同步候选的最低得分（4–40）。调高：候选更少、解码更快，" +
-                    "但更容易漏掉弱信号；调低则更全更慢。",
-                onChange = { v -> settings.updateDecode { it.copy(minScore = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "LDPC 迭代",
-                value = app.decode.ldpcIterations,
-                range = DecodeSettings.LDPC_RANGE,
-                step = 5,
-                subtitle = "纠错码最大迭代次数（5–60）。调高：误码多的弱信号更可能解出来，" +
-                    "更慢；调低解码更快但弱台可能解不出。",
-                onChange = { v -> settings.updateDecode { it.copy(ldpcIterations = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "候选上限",
-                value = app.decode.maxCandidates,
-                range = DecodeSettings.MAX_CANDIDATES_RANGE,
-                step = 20,
-                subtitle = "「整个频谱」的同步候选名额上限（20–500）：名额属于整个频谱，不属于任何一段。" +
-                    "调高：给弱信号更多机会，更慢；调低：名额先被强信号占满、弱台漏解。" +
-                    (if (app.decode.globalCandidates)
-                        "当前「全局择优」：各段先各取一个宽松候选池，汇总跨段去重后按同步得分" +
-                            "全局排序取前 ${app.decode.maxCandidates} 个，再分发回各段解码。" +
-                            "某段再拥挤也不会挤掉别的段分数更高的弱台。"
-                    else
-                        "当前「按段均分」：${decodeParallel.bands} 段 → 每段约 " +
-                            "${decodeParallel.candidatesPerBand(app.decode.maxCandidates)} 个，" +
-                            "某段配额用尽就不再收了。") +
-                    "即时生效。",
-                onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "候选全局择优",
-                subtitle = "关（默认）：候选名额「按段均分」（总名额 ÷ 段数）—— 各段负载天然均衡、" +
-                    "耗时更稳，这也是加这个开关之前的行为。" +
-                    "开：名额改为按「全频谱全局择优」分配 —— 各段先各取宽松池，" +
-                    "汇总后跨段去重（同一信号最多留 3 个代表，100 Hz 重叠区被两段各搜一次的重复也折掉），" +
-                    "再按同步得分全局排序取前 N 个，每个减谱趟都重做。" +
-                    "名额越小、频段越拥挤，多解出的弱台越多（语料实测 20 名额 +2.1pp，" +
-                    "默认 120 名额仅 +0.4pp），代价是段间负载不均、耗时约 ×1.8。",
-                checked = app.decode.globalCandidates,
-                onCheckedChange = { v -> settings.updateDecode { it.copy(globalCandidates = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "单时隙上限",
-                value = app.decode.maxDecoded,
-                range = DecodeSettings.MAX_DECODED_RANGE,
-                step = 5,
-                subtitle = "一个时隙最多输出的报文条数（5–100）。拥挤波段（如 20m 高峰）" +
-                    "调大可避免已解出的报文被丢弃。",
-                onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "减谱重解趟数",
-                value = app.decode.passes,
-                range = DecodeSettings.PASSES_RANGE,
-                subtitle = "SIC（多趟减谱重解）趟数（1–4）。解完一趟后把已解出的报文从瀑布幅度上" +
-                    "抹掉，在残留谱上再搜一趟，把被强台压住的同频弱信号挖出来。" +
-                    "1＝关（单趟，最快）；2＝默认（离线 60 个官方音频 956→989 条，+3.5%，零回归）；" +
-                    "再往上增益很小、耗时近似成倍。即时生效。",
-                onChange = { v -> settings.updateDecode { it.copy(passes = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "频率下限",
-                value = app.decode.fMinHz,
-                range = DecodeSettings.F_MIN_RANGE,
-                step = 50,
-                unit = " Hz",
-                subtitle = "解码搜索与瀑布显示的下边界（默认 100 Hz，即 SSB 通带低端）。" +
-                    "需重开接收生效。",
-                onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "频率上限",
-                value = app.decode.fMaxHz,
-                range = DecodeSettings.F_MAX_RANGE,
-                step = 50,
-                unit = " Hz",
-                subtitle = "解码搜索与瀑布显示的上边界（默认 3000 Hz）。范围越窄解码越快，" +
-                    "但超出范围的信号不会被解出。需重开接收生效。",
-                onChange = { v -> settings.updateDecode { it.copy(fMaxHz = v) } },
-            )
-            PrefDivider()
-            PrefInfo(
-                title = "解码并行",
-                subtitle = "按 CPU 核数（$decodeCores）自动分配、没有设置项：频率分段数 × 每段线程数。" +
-                    "段数只决定并行度与各段自己的 STFT/瀑布，候选名额默认按段均分" +
-                    "（打开「候选全局择优」才改由全频谱统一分配）；频率范围收窄会自动减少段数" +
-                    "（单段最小 200 Hz，窄到 400 Hz 以内就不分段了）。",
-                badge = decodeParallel.label,
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "同频发射",
-                subtitle = "开：选台时发射频率（瀑布红线）跟到对方频率（「点谁打谁」）。" +
-                    "关：异频发射（split），发射固定在红线位置，选台不改红线。",
-                checked = app.sameFreqTx,
-                onCheckedChange = { v -> settings.update { s -> s.copy(sameFreqTx = v) } },
-            )
-            PrefDivider()
-            Text(
-                "自动程序",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            AutoProgramPanel(
-                program = app.auto,
-                onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
-                // 设置页本身可滚动：面板完全展开、跟随整页滚动，不再套一层内部滚动
-                nestedScroll = false,
-            )
-            PrefNote(
-                "自动程序没有独立开关：打开「发送总开关」即自动发射。" +
-                    "第 1 层（QSO 引擎）跑六步报文序列；第 2 层负责选台、应答与发射监管。",
-            )
-            PrefDivider()
-            PrefAction(
-                title = "恢复默认",
-                subtitle = "重置全部设置，保留呼号 / 网格 / 备注",
-                buttonLabel = "恢复",
-                onClick = { settings.resetToDefaults() },
-            )
+        item(key = "ft8") {
+            // 频率范围那一半在这里算：只有 FT8 组跟着「频率范围」重组
+            val decodeParallel = remember(app.decode.fMinHz, app.decode.fMaxHz, decodeCores) {
+                decodeParallelism(app.decode.fMinHz, app.decode.fMaxHz, decodeCores)
+            }
+            SettingsGroup("FT8") {
+                PrefChoice(
+                    title = "模式",
+                    subtitle = "当前仅支持 FT8（时隙 15 s）。",
+                    options = Protocol.entries,
+                    selected = app.protocol,
+                    onSelect = { p -> settings.update { it.copy(protocolName = p.name) } },
+                    label = { it.name },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "时隙偏移",
+                    value = app.slotOffsetMs,
+                    range = -SLOT_OFFSET_LIMIT_MS..SLOT_OFFSET_LIMIT_MS,
+                    step = 100,
+                    unit = " ms",
+                    signed = true,
+                    subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
+                        "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
+                        "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。",
+                    onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
+                )
+                PrefDivider()
+                PrefChoice(
+                    title = "解码深度",
+                    subtitle = "预设「快」＝下面的默认值。" +
+                        "想解得更全就逐项调大（LDPC 迭代 / 候选上限 / 单时隙上限），改任一项会显示「自定义」；" +
+                        "「快」按钮可一键恢复上面 7 项的默认值（频率范围不随预设变化）。" +
+                        "时间/频率 OSR、频率范围需重开接收生效，其余即时生效。",
+                    options = buildList {
+                        add(DecodePreset.FAST)
+                        if (app.decodePreset == DecodePreset.CUSTOM) add(DecodePreset.CUSTOM)
+                    },
+                    selected = app.decodePreset,
+                    onSelect = { p ->
+                        if (p != DecodePreset.CUSTOM) {
+                            settings.update { s -> s.copy(decode = s.decode.applyPreset(p)) }
+                        }
+                    },
+                    label = { it.label },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "时间 OSR",
+                    value = app.decode.timeOsr,
+                    range = DecodeSettings.TIME_OSR_RANGE,
+                    subtitle = "每个符号在时间上再细分的份数（1–4）。调大：DT 时间分辨率更细、" +
+                        "弱信号同步更稳，计算量成倍上升。需重开接收生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(timeOsr = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "频率 OSR",
+                    value = app.decode.freqOsr,
+                    range = DecodeSettings.FREQ_OSR_RANGE,
+                    subtitle = "每个 6.25 Hz 频率格再细分的份数（1–4）。调大：DF 频率估计更准、" +
+                        "邻近信号更易分开，计算量成倍上升。需重开接收生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(freqOsr = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "最低得分",
+                    value = app.decode.minScore,
+                    range = DecodeSettings.MIN_SCORE_RANGE,
+                    subtitle = "Costas 同步候选的最低得分（4–40）。调高：候选更少、解码更快，" +
+                        "但更容易漏掉弱信号；调低则更全更慢。",
+                    onChange = { v -> settings.updateDecode { it.copy(minScore = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "LDPC 迭代",
+                    value = app.decode.ldpcIterations,
+                    range = DecodeSettings.LDPC_RANGE,
+                    step = 5,
+                    subtitle = "纠错码最大迭代次数（5–60）。调高：误码多的弱信号更可能解出来，" +
+                        "更慢；调低解码更快但弱台可能解不出。",
+                    onChange = { v -> settings.updateDecode { it.copy(ldpcIterations = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "候选上限",
+                    value = app.decode.maxCandidates,
+                    range = DecodeSettings.MAX_CANDIDATES_RANGE,
+                    step = 20,
+                    subtitle = "「整个频谱」的同步候选名额上限（20–500）：名额属于整个频谱，不属于任何一段。" +
+                        "调高：给弱信号更多机会，更慢；调低：名额先被强信号占满、弱台漏解。" +
+                        (if (app.decode.globalCandidates)
+                            "当前「全局择优」：各段先各取一个宽松候选池，汇总跨段去重后按同步得分" +
+                                "全局排序取前 ${app.decode.maxCandidates} 个，再分发回各段解码。" +
+                                "某段再拥挤也不会挤掉别的段分数更高的弱台。"
+                        else
+                            "当前「按段均分」：${decodeParallel.bands} 段 → 每段约 " +
+                                "${decodeParallel.candidatesPerBand(app.decode.maxCandidates)} 个，" +
+                                "某段配额用尽就不再收了。") +
+                        "即时生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(maxCandidates = v) } },
+                )
+                PrefDivider()
+                PrefSwitch(
+                    title = "候选全局择优",
+                    subtitle = "关（默认）：候选名额「按段均分」（总名额 ÷ 段数）—— 各段负载天然均衡、" +
+                        "耗时更稳，这也是加这个开关之前的行为。" +
+                        "开：名额改为按「全频谱全局择优」分配 —— 各段先各取宽松池，" +
+                        "汇总后跨段去重（同一信号最多留 3 个代表，100 Hz 重叠区被两段各搜一次的重复也折掉），" +
+                        "再按同步得分全局排序取前 N 个，每个减谱趟都重做。" +
+                        "名额越小、频段越拥挤，多解出的弱台越多（语料实测 20 名额 +2.1pp，" +
+                        "默认 120 名额仅 +0.4pp），代价是段间负载不均、耗时约 ×1.8。",
+                    checked = app.decode.globalCandidates,
+                    onCheckedChange = { v -> settings.updateDecode { it.copy(globalCandidates = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "单时隙上限",
+                    value = app.decode.maxDecoded,
+                    range = DecodeSettings.MAX_DECODED_RANGE,
+                    step = 5,
+                    subtitle = "一个时隙最多输出的报文条数（5–100）。拥挤波段（如 20m 高峰）" +
+                        "调大可避免已解出的报文被丢弃。",
+                    onChange = { v -> settings.updateDecode { it.copy(maxDecoded = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "减谱重解趟数",
+                    value = app.decode.passes,
+                    range = DecodeSettings.PASSES_RANGE,
+                    subtitle = "SIC（多趟减谱重解）趟数（1–4）。解完一趟后把已解出的报文从瀑布幅度上" +
+                        "抹掉，在残留谱上再搜一趟，把被强台压住的同频弱信号挖出来。" +
+                        "1＝关（单趟，最快）；2＝默认（离线 60 个官方音频 956→989 条，+3.5%，零回归）；" +
+                        "再往上增益很小、耗时近似成倍。即时生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(passes = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "频率下限",
+                    value = app.decode.fMinHz,
+                    range = DecodeSettings.F_MIN_RANGE,
+                    step = 50,
+                    unit = " Hz",
+                    subtitle = "解码搜索与瀑布显示的下边界（默认 100 Hz，即 SSB 通带低端）。" +
+                        "需重开接收生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(fMinHz = v) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "频率上限",
+                    value = app.decode.fMaxHz,
+                    range = DecodeSettings.F_MAX_RANGE,
+                    step = 50,
+                    unit = " Hz",
+                    subtitle = "解码搜索与瀑布显示的上边界（默认 3000 Hz）。范围越窄解码越快，" +
+                        "但超出范围的信号不会被解出。需重开接收生效。",
+                    onChange = { v -> settings.updateDecode { it.copy(fMaxHz = v) } },
+                )
+                PrefDivider()
+                PrefInfo(
+                    title = "解码并行",
+                    subtitle = "按 CPU 核数（$decodeCores）自动分配、没有设置项：频率分段数 × 每段线程数。" +
+                        "段数只决定并行度与各段自己的 STFT/瀑布，候选名额默认按段均分" +
+                        "（打开「候选全局择优」才改由全频谱统一分配）；频率范围收窄会自动减少段数" +
+                        "（单段最小 200 Hz，窄到 400 Hz 以内就不分段了）。",
+                    badge = decodeParallel.label,
+                )
+                PrefDivider()
+                PrefSwitch(
+                    title = "同频发射",
+                    subtitle = "开：选台时发射频率（瀑布红线）跟到对方频率（「点谁打谁」）。" +
+                        "关：异频发射（split），发射固定在红线位置，选台不改红线。",
+                    checked = app.sameFreqTx,
+                    onCheckedChange = { v -> settings.update { s -> s.copy(sameFreqTx = v) } },
+                )
+                PrefDivider()
+                Text(
+                    "自动程序",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                AutoProgramPanel(
+                    program = app.auto,
+                    onOption = { f -> settings.update { s -> s.copy(auto = f(s.auto)) } },
+                    // 设置页本身可滚动：面板完全展开、跟随整页滚动，不再套一层内部滚动
+                    nestedScroll = false,
+                )
+                PrefNote(
+                    "自动程序没有独立开关：打开「发送总开关」即自动发射。" +
+                        "第 1 层（QSO 引擎）跑六步报文序列；第 2 层负责选台、应答与发射监管。",
+                )
+                PrefDivider()
+                PrefAction(
+                    title = "恢复默认",
+                    subtitle = "重置全部设置，保留呼号 / 网格 / 备注",
+                    buttonLabel = "恢复",
+                    onClick = { settings.resetToDefaults() },
+                )
+            }
         }
 
         // ---------- 6.4 瀑布显示（固定阈值，可调；频谱页也可直接调） ----------
-        SettingsGroup("瀑布") {
-            PrefNote(
-                "瀑布强度按固定窗口映射到色带：低于噪声底＝深蓝，达到「底噪 + 动态范围」＝红，" +
-                    "不再随信号自适应。频谱页顶部同样可以直接调这两项。"
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "噪声底",
-                value = app.waterfallFloorDb,
-                range = WATERFALL_FLOOR_DB_RANGE,
-                step = 5,
-                unit = " dBFS",
-                subtitle = "低于此值的 bin 画成最深蓝（默认 -90 dBFS）。调高：噪声被压黑、信号对比更强。",
-                onChange = { v -> settings.update { it.copy(waterfallFloorDb = clampWaterfallFloorDb(v)) } },
-            )
-            PrefDivider()
-            PrefStepper(
-                title = "动态范围",
-                value = app.waterfallRangeDb,
-                range = WATERFALL_RANGE_DB_RANGE,
-                step = 5,
-                unit = " dB",
-                subtitle = "色带跨度（默认 50 dB）：窗口顶端 = 噪声底 + 本值，达到即画成红。" +
-                    "调大：弱信号更可见，但底色纹理更明显。",
-                onChange = { v -> settings.update { it.copy(waterfallRangeDb = clampWaterfallRangeDb(v)) } },
-            )
+        item(key = "waterfall") {
+            SettingsGroup("瀑布") {
+                PrefNote(
+                    "瀑布强度按固定窗口映射到色带：低于噪声底＝深蓝，达到「底噪 + 动态范围」＝红，" +
+                        "不再随信号自适应。频谱页顶部同样可以直接调这两项。"
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "噪声底",
+                    value = app.waterfallFloorDb,
+                    range = WATERFALL_FLOOR_DB_RANGE,
+                    step = 5,
+                    unit = " dBFS",
+                    subtitle = "低于此值的 bin 画成最深蓝（默认 -90 dBFS）。调高：噪声被压黑、信号对比更强。",
+                    onChange = { v -> settings.update { it.copy(waterfallFloorDb = clampWaterfallFloorDb(v)) } },
+                )
+                PrefDivider()
+                PrefStepper(
+                    title = "动态范围",
+                    value = app.waterfallRangeDb,
+                    range = WATERFALL_RANGE_DB_RANGE,
+                    step = 5,
+                    unit = " dB",
+                    subtitle = "色带跨度（默认 50 dB）：窗口顶端 = 噪声底 + 本值，达到即画成红。" +
+                        "调大：弱信号更可见，但底色纹理更明显。",
+                    onChange = { v -> settings.update { it.copy(waterfallRangeDb = clampWaterfallRangeDb(v)) } },
+                )
+            }
         }
 
         // ---------- 6.5 高亮与提醒（docs/Ft8Vox.md：颜色恒启用，开关全部取消） ----------
-        SettingsGroup("高亮与提醒") {
-            PrefNote(
-                "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
-                    "最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > 重复 > 新网格 > " +
-                    "新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码。行尾小圆点同样恒开。下方列出每种颜色的含义。",
-            )
-            HighlightLegend()
-            PrefDivider()
-            PrefSwitch(
-                title = "含我呼号哔声",
-                subtitle = "有报文直接叫我呼号时，用系统提示音提醒",
-                checked = app.beepOnMyCall,
-                onCheckedChange = { v -> settings.update { it.copy(beepOnMyCall = v) } },
-            )
-            PrefDivider()
+        item(key = "highlight") {
+            SettingsGroup("高亮与提醒") {
+                PrefNote(
+                    "所有颜色都已固定启用，不再需要逐个开关。每行只有一条色卡（整行底色），取命中的" +
+                        "最高优先级：正在发射 > 与我有关/当前对手 > CQ > 已通联 > 重复 > 新网格 > " +
+                        "新 DXCC/ITU/CQ 区域/新前缀 > 新呼号 > 其余新解码。行尾小圆点同样恒开。下方列出每种颜色的含义。",
+                )
+                HighlightLegend()
+                PrefDivider()
+                PrefSwitch(
+                    title = "含我呼号哔声",
+                    subtitle = "有报文直接叫我呼号时，用系统提示音提醒",
+                    checked = app.beepOnMyCall,
+                    onCheckedChange = { v -> settings.update { it.copy(beepOnMyCall = v) } },
+                )
+                PrefDivider()
+            }
         }
 
         // ---------- 6.6 外观：已随新竖屏外壳去掉（docs/Ft8Vox.md：无亮/暗主题、无字体档位） ----------
 
         // ---------- 6.7 日志 ----------
-        SettingsGroup("日志") {
-            PrefInfo(
-                title = "ADIF 路径",
-                subtitle = "通过系统文件选择器（SAF）导入 / 导出，不需要存储权限",
-            )
-            PrefDivider()
-            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                AdifActionRow(
-                    log = log,
-                    myCall = app.myCall,
-                    myGrid = app.myGrid.ifEmpty { null },
-                    onStatus = { statusText = it },
+        item(key = "log") {
+            SettingsGroup("日志") {
+                PrefInfo(
+                    title = "ADIF 路径",
+                    subtitle = "通过系统文件选择器（SAF）导入 / 导出，不需要存储权限",
                 )
-                statusText?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
+                PrefDivider()
+                AdifBlock(log, app.myCall, app.myGrid.ifEmpty { null }, statusText)
+                PrefDivider()
+                ClearAllRow(log, onClear = { confirmClear = true })
             }
-            PrefDivider()
-            PrefAction(
-                title = "清空全部记录",
-                subtitle = "共 ${entries.size} 条，删除后不可撤销",
-                buttonLabel = "清空",
-                onClick = { confirmClear = true },
-            )
         }
 
         // ---------- 6.8 地图（原地图页浮层的三个显示开关，收进设置；docs/Ft8Vox.md） ----------
-        SettingsGroup("地图") {
-            PrefSwitch(
-                title = "CQ 旗帜显示呼号",
-                checked = app.mapCqFlagShowCall,
-                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowCall = v) } },
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "CQ 旗帜显示强度",
-                checked = app.mapCqFlagShowSnr,
-                onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowSnr = v) } },
-            )
-            PrefDivider()
-            PrefSwitch(
-                title = "连线显示文字",
-                checked = app.mapShowLinkText,
-                onCheckedChange = { v -> settings.update { it.copy(mapShowLinkText = v) } },
-            )
-        }
-
-        // ---------- 关于 ----------
-        SettingsGroup("关于") {
-            PrefAction(
-                title = "操作与手势",
-                subtitle = "解码行点按 / 长按 / 左右滑；频谱拖红线设发射频率；报文槽点击发射等",
-                buttonLabel = "查看",
-                onClick = onHelp,
-            )
-            PrefDivider()
-            val version = rememberAppVersion()
-            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text("Ft8Vox $version", style = MaterialTheme.typography.bodySmall)
-                Text("许可：GPL-3.0", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "解码内核基于 ft8_lib。发射前请确认符合所在地区的无线电管理法规，并对发射行为负责。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        item(key = "map") {
+            SettingsGroup("地图") {
+                PrefSwitch(
+                    title = "CQ 旗帜显示呼号",
+                    checked = app.mapCqFlagShowCall,
+                    onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowCall = v) } },
+                )
+                PrefDivider()
+                PrefSwitch(
+                    title = "CQ 旗帜显示强度",
+                    checked = app.mapCqFlagShowSnr,
+                    onCheckedChange = { v -> settings.update { it.copy(mapCqFlagShowSnr = v) } },
+                )
+                PrefDivider()
+                PrefSwitch(
+                    title = "连线显示文字",
+                    checked = app.mapShowLinkText,
+                    onCheckedChange = { v -> settings.update { it.copy(mapShowLinkText = v) } },
                 )
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        // ---------- 关于 ----------
+        item(key = "about") {
+            SettingsGroup("关于") {
+                PrefAction(
+                    title = "操作与手势",
+                    subtitle = "解码行点按 / 长按 / 左右滑；频谱拖红线设发射频率；报文槽点击发射等",
+                    buttonLabel = "查看",
+                    onClick = onHelp,
+                )
+                PrefDivider()
+                val version = rememberAppVersion()
+                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text("Ft8Vox $version", style = MaterialTheme.typography.bodySmall)
+                    Text("许可：GPL-3.0", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "解码内核基于 ft8_lib。发射前请确认符合所在地区的无线电管理法规，并对发射行为负责。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        item(key = "tail") { Spacer(Modifier.height(12.dp)) }
     }
 
     if (bandDialog) {
@@ -595,23 +556,161 @@ fun SettingsScreen(
     }
 
     if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("清空全部记录") },
-            text = { Text("将删除全部 ${entries.size} 条通联记录，且不可撤销。建议先导出 ADIF 备份。") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmClear = false
-                        log.clearAll { statusText = "已清空通联记录" }
-                    },
-                ) { Text("确认清空") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("取消") }
-            },
+        ClearLogDialog(
+            log = log,
+            statusText = statusText,
+            onDismiss = { confirmClear = false },
         )
     }
+}
+
+// ---- 设置页里「读运行时状态」的几个小组件 ----
+//
+// 它们各自订阅 SessionViewModel.status / LogViewModel.stats，把重组范围限制在自己这一小块：
+// 接收中状态约 5 次/秒发布一次、导入进度连续刷新，若在 SettingsScreen 那一层读，
+// 整页 40 行会跟着一起重组（Compose 的「跳过未变化子树」对 ViewModel / AppSettings 参数无效）。
+
+/** 呼号输入行：本地文本状态留在**行内**，敲字只重组本行（同时解决 DataStore 异步回显吞字）。 */
+@Composable
+private fun MyCallField(settings: SettingsViewModel, initial: String) {
+    var call by rememberSaveable { mutableStateOf(initial) }
+    val callError = call.isEmpty()
+    PrefText(
+        label = "呼号",
+        value = call,
+        onValueChange = { v ->
+            val u = v.trim().uppercase()
+            call = u
+            settings.update { it.copy(myCall = u) }
+        },
+        supporting = if (callError) "发射前必须填写呼号" else "用于生成与识别报文",
+        isError = callError,
+    )
+}
+
+/** 网格输入行：允许留空，但填了就必须合法（Maidenhead 2/4/6/8 位）。 */
+@Composable
+private fun MyGridField(settings: SettingsViewModel, initial: String) {
+    var grid by rememberSaveable { mutableStateOf(initial) }
+    val gridError = grid.isNotEmpty() && !Maidenhead.isValid(grid)
+    PrefText(
+        label = "网格（Maidenhead，如 JN25）",
+        value = grid,
+        onValueChange = { v ->
+            val u = v.trim().uppercase()
+            grid = u
+            settings.update { it.copy(myGrid = u) }
+        },
+        supporting = if (gridError) {
+            "格式不正确（2/4/6/8 位，如 JN25、JN25AA）"
+        } else {
+            "可留空"
+        },
+        isError = gridError,
+    )
+}
+
+/** 备注输入行（本地文本状态同上）。 */
+@Composable
+private fun NoteField(settings: SettingsViewModel, initial: String) {
+    var note by rememberSaveable { mutableStateOf(initial) }
+    PrefText(
+        label = "备注",
+        value = note,
+        onValueChange = { v ->
+            note = v
+            settings.update { it.copy(note = v) }
+        },
+        supporting = "自动写入新通联记录的 COMMENT 字段（可留空）；命中后还会追加「Distance: xx km, QSO by Ft8Vox」",
+    )
+}
+
+/** 「测试音」行：只有它要显示当前发射频率，所以在这里订阅状态（只重组本行）。 */
+@Composable
+private fun TestToneRow(session: SessionViewModel) {
+    val status by session.status.collectAsState()
+    PrefAction(
+        title = "测试音",
+        subtitle = "发送 ${status.selectedFreqHz} Hz 单音（2 s），用于 VOX 键控与音量联调",
+        buttonLabel = "播放",
+        onClick = { session.playTestTone() },
+    )
+}
+
+/** 「音频 / VOX 速览」：状态订阅收在这一块，别让它牵动整页。 */
+@Composable
+private fun AudioQuickPanelBlock(session: SessionViewModel, appSettings: AppSettings) {
+    val status by session.status.collectAsState()
+    AudioQuickPanel(status, appSettings)
+}
+
+/**
+ * ADIF 导入 / 导出 + 状态文字。
+ *
+ * [statusText] 由设置页持有、**只在这里读**：导入进度「导入中 n/N」会连续刷新，
+ * 读在上层会把整页一起重组。
+ */
+@Composable
+private fun AdifBlock(
+    log: LogViewModel,
+    myCall: String,
+    myGrid: String?,
+    statusText: MutableState<String?>,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        AdifActionRow(
+            log = log,
+            myCall = myCall,
+            myGrid = myGrid,
+            onStatus = { statusText.value = it },
+        )
+        statusText.value?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** 「清空全部记录」行：条数只在本行读（`log.stats` 是按整表算的，别让整表进设置页的组合状态）。 */
+@Composable
+private fun ClearAllRow(log: LogViewModel, onClear: () -> Unit) {
+    val stats by log.stats.collectAsState()
+    PrefAction(
+        title = "清空全部记录",
+        subtitle = "共 ${stats.total} 条，删除后不可撤销",
+        buttonLabel = "清空",
+        onClick = onClear,
+    )
+}
+
+/** 清空确认弹窗；挂在设置页顶层，不跟着列表项被懒加载回收。 */
+@Composable
+private fun ClearLogDialog(
+    log: LogViewModel,
+    statusText: MutableState<String?>,
+    onDismiss: () -> Unit,
+) {
+    val stats by log.stats.collectAsState()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("清空全部记录") },
+        text = { Text("将删除全部 ${stats.total} 条通联记录，且不可撤销。建议先导出 ADIF 备份。") },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onDismiss()
+                    log.clearAll { statusText.value = "已清空通联记录" }
+                },
+            ) { Text("确认清空") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 /** 设置分组：标题 + 圆角卡片。 */
@@ -1025,7 +1124,8 @@ private fun PrefAction(
  * （观察输入、校准 6.2 的「输入增益」）；不做任何触发判定。
  */
 @Composable
-private fun VoxLevelRow(status: ReceiverStatus) {
+private fun VoxLevelRow(session: SessionViewModel) {
+    val status by session.status.collectAsState()
     val run = status.running
     val db = status.voxLevelDb
     val label = when {
