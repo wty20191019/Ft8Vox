@@ -245,7 +245,6 @@ fun GridScreen(
         pendingFocus = null
     }
 
-    val markersState = rememberUpdatedState(callMarkers)
     val flagsState = rememberUpdatedState(cqFlags)
 
     Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -292,7 +291,6 @@ fun GridScreen(
                                     x = offset.x,
                                     y = offset.y,
                                     threshold = tapThreshold,
-                                    markers = markersState.value,
                                     flags = flagsState.value,
                                 )
                             }
@@ -301,7 +299,6 @@ fun GridScreen(
                     GridMap(
                         projection = p,
                         gridMarkers = gridMarkers,
-                        callMarkers = callMarkers,
                         cqFlags = cqFlags,
                         links = links,
                         myGrid = status.myGrid.ifEmpty { null },
@@ -364,25 +361,16 @@ private fun centeredOn(p: MapProjection, lat: Double, lon: Double): MapProjectio
     return MapProjection.at(p.viewWidth, p.viewHeight, scale, lat, lon)
 }
 
-/** 命中最近的呼号标记 / CQ 旗帜；超出阈值返回 null。 */
+/** 命中最近的 CQ 旗帜；超出阈值返回 null。 */
 private fun hitTest(
     proj: MapProjection,
     x: Float,
     y: Float,
     threshold: Float,
-    markers: List<CallMarker>,
     flags: List<CqFlag>,
 ): String? {
     var best: String? = null
     var bestD = Float.MAX_VALUE
-    for (m in markers) {
-        val q = proj.toScreen(m.lat, m.lon)
-        val d = hypot(q.x.toFloat() - x, q.y.toFloat() - y)
-        if (d < bestD) {
-            bestD = d
-            best = m.call
-        }
-    }
     for (f in flags) {
         val q = proj.toScreen(f.lat, f.lon)
         val d = hypot(q.x.toFloat() - x, q.y.toFloat() - y)
@@ -449,21 +437,26 @@ private fun MapOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Text(
+                    "网格",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 LegendDot(LegendDecoded, "解码")
                 LegendDot(LegendWorked, "通联")
                 LegendDot(LegendConfirmed, "确认")
                 Text(
-                    "旗=CQ（红 未通联 / 蓝 他波段 / 灰 本波段）",
+                    "旗=CQ：实心＝还没通过 / 空心＝本波段已通过",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "大小=SNR",
+                    "旗色：红 未通联 / 蓝 他波段 / 黑 本波段",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "网格 $decoded/$worked/$confirmed｜呼号 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
+                    "网格 $decoded/$worked/$confirmed｜台站 ${callMarkers.size}｜CQ ${cqFlags.size}｜连线 ${links.size}",
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

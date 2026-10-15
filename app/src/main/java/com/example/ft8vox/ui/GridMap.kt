@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.grid.GrayLine
 import com.example.ft8vox.grid.MapProjection
 import com.example.ft8vox.grid.Maidenhead
-import com.example.ft8vox.qso.CallMarker
 import com.example.ft8vox.qso.CqFlag
 import com.example.ft8vox.qso.CqWorked
 import com.example.ft8vox.qso.GridMarker
@@ -58,7 +57,10 @@ private val MyColor = Color(0xFF00E5FF)
 // FT8CN 的第三档是「黑」（本波段已通联），在深色底图上不可见 → 本机改**灰**。
 private val CqNewColor = Color(0xFFFF5252) // 红：还没通过
 private val CqOtherBandColor = Color(0xFF64B5F6) // 蓝：只在别的波段通过
-private val CqWorkedColor = Color(0xFF9E9E9E) // 灰：本波段已通过
+private val CqWorkedColor = Color(0xFF1A1A1A) // 近黑：本波段已通过（卫星底图偏暗，纯黑看不见）
+
+/** 旗杆：一直用浅灰 —— 空心近黑旗在暗底图上几乎看不见，靠旗杆定位。 */
+private val FlagPoleColor = Color(0xFFB0BEC5)
 
 /** 昼夜灰线（照 FT8CN `tracker_gray_line_color`；深色底图上略提亮）。 */
 private val GrayLineColor = Color(0x3DFFFFFF)
@@ -70,14 +72,10 @@ private val GrayLineColor = Color(0x3DFFFFFF)
  */
 private const val GRID_DECODED_ZOOM = 1.6
 
-/** 呼号文字只在放大到该倍数（相对「适应窗口」）以上才参与落位（沿用手感，未改）。 */
-private const val CALL_LABEL_ZOOM = 2.2
-
 /** 文字落位优先级（§31）：小的先落位，落不下就不画。 */
 private const val LABEL_MY_GRID = 0
 private const val LABEL_SELECTED = 1
 private const val LABEL_CQ = 2
-private const val LABEL_CALL = 3
 
 /** 底图暗化：卫星影像偏亮，乘 0.7 让它退到 UI 之后（不透明度不变）。 */
 private val BaseMapDarken: ColorFilter = ColorFilter.colorMatrix(
@@ -95,13 +93,20 @@ private fun tierColor(tier: MapTier): Color = when (tier) {
  *
  * 与 [tierColor] 的类别色**不共用**：网格方块的蓝/黄/红描述「这一格是解码/通联/确认」，
  * 旗色描述「这个喊 CQ 的呼号做过没有」—— 红旗=还没通过（优先应答）、蓝旗=别的波段做过、
- * 灰旗=本波段做过（自动程序也不会再呼叫它）。
+ * 近黑旗=本波段做过（自动程序也不会再呼叫它）。
  */
 private fun cqFlagColor(worked: CqWorked): Color = when (worked) {
     CqWorked.NONE -> CqNewColor
     CqWorked.OTHER_BAND -> CqOtherBandColor
     CqWorked.THIS_BAND -> CqWorkedColor
 }
+
+/**
+ * 旗面**形状** = 「本波段通过没有」（docs/Ft8Vox.md）：**空心** = 本波段已通过，**实心** = 还没通过。
+ *
+ * 与旗色是**一致**的两路编码（实心红 / 实心蓝 / 空心近黑），让「值不值得应答」一眼可辨。
+ */
+private fun isHollowFlag(worked: CqWorked): Boolean = worked == CqWorked.THIS_BAND
 
 /**
  * 离线深色地图（docs/Ft8Vox.md）：底层为 **Web Mercator 卫星底图**（`assets/map/world_z5.jpg`，
@@ -113,21 +118,21 @@ private fun cqFlagColor(worked: CqWorked): Color = when (worked) {
  * 使其只在 Canvas 的绘制作用域被读取 —— 相位变化因此只触发重绘、不触发整页重组。
  *
  * 去密设计（docs/Ft8Vox.md，手机屏小、标注一多就糊）：
- * 1. **一个台站只画一处标记**：喊过 CQ 的台站画旗子，其他台站画圆点；两者都与呼号文字一一对应，
- *    不会出现「同一个点又画旗又画点、还出两行文字」；
- * 2. **文字统一最后落位 + 防重叠**（[selectLabels]）：优先级 我的位置 > 选中台 > CQ 台 > 其余呼号，
- *    挤掉只挤文字，点/旗照旧（点一下仍能看详情）；
+ * 1. **台站标记只有 CQ 旗**（2026-10-15 起）：删掉了「呼号点」——没喊 CQ 的台站不画任何标记
+ *    （连线两端仍在；双击定位仍会平移过去并弹出底部详情，只是地图上不再立点）；
+ * 2. **文字统一最后落位 + 防重叠**（[selectLabels]）：优先级 我的位置 > 选中台 > CQ 台，
+ *    挤掉只挤文字，旗子照旧（点一下仍能看详情）；
  * 3. **网格方块分级**：世界视野只画已通联/已确认，放大后才补上本会话解码的蓝格。
  *
  * 另有两项照 FT8CN（docs/Ft8Vox.md）：
  * - **昼夜灰线**（[grayLine]，`GrayLine.terminator` 算出的 `(lon, lat)` 折线）画在底图之上、所有标记之下；
- * - **CQ 旗面颜色 = 通联状态**（红=未通联 / 蓝=他波段 / 灰=本波段），与网格方块的类别色无关。
+ * - **CQ 旗**：形状 = 本波段通过没有（实心 / 空心），颜色 = 通联状态（红 / 蓝 / 近黑），
+ *   与网格方块的类别色无关。
  */
 @Composable
 fun GridMap(
     projection: MapProjection,
     gridMarkers: List<GridMarker>,
-    callMarkers: List<CallMarker>,
     cqFlags: List<CqFlag>,
     links: List<SignalLink>,
     myGrid: String?,
@@ -154,9 +159,6 @@ fun GridMap(
     }
 
     val measurer = rememberTextMeasurer()
-    val callStyle = remember {
-        TextStyle(color = Color(0xFFECEFF1), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-    }
     val cqStyle = remember {
         TextStyle(
             color = Color(0xFFFFD9DB),
@@ -326,90 +328,70 @@ fun GridMap(
                 }
             }
 
-            // ---- 台站标记：**一个台站只画一处**（§31） ----
-            // 喊过 CQ 的台站用「旗子」当标记：不再叠一个圆点、也不再出两行文字；其余台站画圆点。
-            // 圆点颜色 = **类别**（蓝=本会话解码 / 黄=已通联 / 红=已确认）；
-            // 旗面颜色 = **通联状态**（红=未通联 / 蓝=他波段 / 灰=本波段，§34）——「在 CQ」由**形状**（旗）表达，
-            // 这样「红花+红点」那种重合就没了，且不看文字也知道这个 CQ 台值不值得应答。
-            // 遍历以**呼号标记**为准：CQ 台一定也有呼号标记（同一张定位表、且呼号标记的时间窗更宽，
-            // 见 MapModel.gridLookup）；极端情况（标记数超过 maxMarkers 上限被截断）下宁可不画旗，
-            // 也不画一面没有对应台站的旗。
-            val flagByCall = HashMap<String, CqFlag>(cqFlags.size * 2)
-            for (f in cqFlags) flagByCall[f.call.trim().uppercase()] = f
-            val baseR = 3.2.dp.toPx()
-            val spanR = 5.0.dp.toPx()
+            // ---- 台站标记：**只有 CQ 旗**（§31） ----
+            // 设计（2026-10-15）：删掉「呼号点」—— 没喊 CQ 的台站不画任何标记（连线两端仍在；
+            // 双击定位仍会平移过去并弹出底部详情，只是地图上不再立点）。
+            // 旗面**形状 = 本波段通过没有**（实心=没通过过 / 空心=本波段通过过）；
+            // 旗面**颜色 = 通联状态**（红=未通联 / 蓝=他波段 / 近黑=本波段，§34）。
+            // 形状与颜色是一致的两路编码：实心红 / 实心蓝 / 空心近黑。
+            // 直接遍历 [cqFlags] —— 旗子现在就是唯一的台站标记，不必再借呼号标记「背书」。
             val poleH = 12.dp.toPx()
             val flagW = 9.dp.toPx()
             val flagH = 6.dp.toPx()
-            val showCall = p.scale >= p.fitScale * CALL_LABEL_ZOOM
+            val flagStroke = 1.6.dp.toPx()
             // 文字统一最后画：这里只收集，最后一起防重叠落位
-            val pending = ArrayList<PendingLabel>(callMarkers.size + 1)
-            // 注意：用下标倒序，避免每帧 `toList().asReversed()` 的额外分配（旧的先画，新的压在上面）
-            for (ci in callMarkers.indices.reversed()) {
-                val m = callMarkers[ci]
-                val s = p.toScreen(m.lat, m.lon)
+            val pending = ArrayList<PendingLabel>(cqFlags.size + 1)
+            for (f in cqFlags) { // 已按时间「新→旧」排序，同优先级自然「新解码优先」
+                val s = p.toScreen(f.lat, f.lon)
                 val x = s.x.toFloat()
                 val y = s.y.toFloat()
                 if (x < -20f || x > size.width + 20f || y < -20f || y > size.height + 20f) continue
-                val flag = flagByCall[m.call.trim().uppercase()]
-                val snr = flag?.snr ?: m.snr
-                val r = baseR + spanR * ((snr + 24).coerceIn(0, 34) / 34f)
-                val color = tierColor(m.tier)
-                if (flag != null) {
-                    // 旗子（杆 + 三角旗面）
-                    drawLine(
-                        color = Color(0xFFB0BEC5),
-                        start = Offset(x, y),
-                        end = Offset(x, y - poleH),
-                        strokeWidth = 1.2.dp.toPx(),
-                    )
-                    drawPath(
-                        Path().apply {
-                            moveTo(x, y - poleH)
-                            lineTo(x + flagW, y - poleH + flagH / 2f)
-                            lineTo(x, y - poleH + flagH)
-                            close()
-                        },
-                        // 旗面颜色 = **通联状态**（§34），不是网格方块的类别色
-                        color = cqFlagColor(flag.worked),
-                    )
-                } else {
-                    drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = Offset(x, y))
+                // 旗子（杆 + 三角旗面）
+                drawLine(
+                    color = FlagPoleColor,
+                    start = Offset(x, y),
+                    end = Offset(x, y - poleH),
+                    strokeWidth = 1.2.dp.toPx(),
+                )
+                val flagPath = Path().apply {
+                    moveTo(x, y - poleH)
+                    lineTo(x + flagW, y - poleH + flagH / 2f)
+                    lineTo(x, y - poleH + flagH)
+                    close()
                 }
-                if (m.call == selectedCall) {
+                // 旗面：空心（只描边）= 本波段已通过；实心（填充）= 还没通过
+                val flagColor = cqFlagColor(f.worked)
+                if (isHollowFlag(f.worked)) {
+                    drawPath(flagPath, color = flagColor, style = Stroke(flagStroke))
+                } else {
+                    drawPath(flagPath, color = flagColor)
+                }
+                if (f.call == selectedCall) {
                     drawCircle(
                         color = Color.White,
-                        radius = r + 2.5.dp.toPx(),
+                        radius = 4.5.dp.toPx(),
                         center = Offset(x, y),
                         style = Stroke(2.dp.toPx()),
                     )
                 }
-                // 一个台站只出一条文字：CQ 台是「呼号 + 可选强度」，其余只出呼号（放大后）
-                val callTxt = if (m.fromPrefix) "${m.call}~" else m.call
+                // 一个台站只出一条文字：呼号（设置开关，含「前缀近似」的 `~`）+ 可选强度
+                val callTxt = if (f.fromPrefix) "${f.call}~" else f.call
                 val txt = buildString {
-                    if (flag == null) {
-                        if (showCall) append(callTxt)
-                    } else {
-                        if (showCqCall || showCall) append(callTxt)
-                        if (showCqSnr) {
-                            if (isNotEmpty()) append(' ')
-                            append(if (snr >= 0) "+" else "")
-                            append(snr)
-                        }
+                    if (showCqCall) append(callTxt)
+                    if (showCqSnr) {
+                        if (isNotEmpty()) append(' ')
+                        append(if (f.snr >= 0) "+" else "")
+                        append(f.snr)
                     }
                 }
                 if (txt.isEmpty()) continue
-                val laid = measurer.measure(AnnotatedString(txt), if (flag != null) cqStyle else callStyle)
+                val laid = measurer.measure(AnnotatedString(txt), cqStyle)
                 pending.add(
                     PendingLabel(
-                        priority = when {
-                            m.call == selectedCall -> LABEL_SELECTED
-                            flag != null -> LABEL_CQ
-                            else -> LABEL_CALL
-                        },
+                        priority = if (f.call == selectedCall) LABEL_SELECTED else LABEL_CQ,
                         layout = laid,
-                        left = x + (if (flag != null) flagW else r) + 2.dp.toPx(),
-                        top = if (flag != null) y - poleH else y - 6.dp.toPx(),
+                        left = x + flagW + 2.dp.toPx(),
+                        top = y - poleH,
                     ),
                 )
             }
@@ -437,10 +419,9 @@ fun GridMap(
             }
 
             // ---- 文字统一落位（防重叠，§31） ----
-            // 优先级：我的位置 > 选中的台站 > CQ 台 > 其余呼号；同优先级内**新解码的优先**。
-            // 挤掉的只是文字，点/旗仍在，点一下照样看详情。
-            pending.reverse() // 上面是「旧→新」收集的，倒过来变成「新→旧」
-            val ordered = pending.sortedBy { it.priority } // sortedBy 稳定，同优先级保持「新→旧」
+            // 优先级：我的位置 > 选中的台站 > CQ 台；同优先级内**新解码的优先**。
+            // 挤掉的只是文字，旗子仍在，点一下照样看详情。
+            val ordered = pending.sortedBy { it.priority } // sortedBy 稳定；收集时已是「新→旧」
             val boxes = ordered.map {
                 LabelBox(it.left, it.top, it.left + it.layout.size.width, it.top + it.layout.size.height)
             }

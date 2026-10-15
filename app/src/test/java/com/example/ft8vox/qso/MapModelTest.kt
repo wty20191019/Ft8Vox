@@ -243,6 +243,20 @@ class MapModelTest {
     }
 
     @Test
+    fun cqFlagsCarryPrefixFlagForTildeLabel() {
+        // 有网格的 CQ → 不是前缀近似；只有呼号、前缀归属地能认出来的 CQ → fromPrefix = true（地图上标 `~`）
+        val flags = MapModel.cqFlags(
+            listOf(
+                decoded("CQ JA1ABC PM95", slotUtcMs = 2000),
+                decoded("CQ DL1ABC", slotUtcMs = 2000),
+            ),
+            latestSlotOnly = true,
+        ).associateBy { it.call }
+        assertFalse(flags.getValue("JA1ABC").fromPrefix)
+        assertTrue(flags.getValue("DL1ABC").fromPrefix)
+    }
+
+    @Test
     fun latestSlotMsIgnoresZeroTimestamps() {
         assertEquals(
             2000L,

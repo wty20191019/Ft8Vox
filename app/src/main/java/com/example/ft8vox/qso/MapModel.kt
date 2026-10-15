@@ -66,6 +66,8 @@ data class CqFlag(
     val utcMs: Long,
     /** 旗面颜色语义（通联状态）；默认未通联。 */
     val worked: CqWorked = CqWorked.NONE,
+    /** true 表示坐标来自呼号前缀近似（地图上呼号后带 `~`），而非真收到过网格。 */
+    val fromPrefix: Boolean = false,
 )
 
 /** 信号连线（docs/Ft8Vox.md）：方向由 [fromCall] 指向 [toCall]。 */
@@ -236,7 +238,7 @@ object MapModel {
                 from in workedCalls -> CqWorked.OTHER_BAND
                 else -> CqWorked.NONE
             }
-            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs, worked)
+            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs, worked, fromPrefix = r.fromPrefix)
             val prev = byCall[from]
             if (prev == null || flag.utcMs >= prev.utcMs) byCall[from] = flag
         }
