@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.engine.AudioDevices
 import com.example.ft8vox.engine.DecodeParallel
 import com.example.ft8vox.engine.DecodeResult
@@ -106,6 +107,56 @@ fun decodesPerMinute(messages: List<DecodeResult>, nowMs: Long): Int =
 /** 时间偏差告警：最近一条解码的 DT 绝对值超阈值时返回红字文案，否则 null。 */
 fun timeSyncWarning(latestDt: Float?): String? =
     if (latestDt != null && abs(latestDt) >= 1.5f) "时间不同步" else null
+
+// ---- 一键校准（平均 DT → 时隙偏移）----
+
+/** 「一键校准」所需的最少样本数：样本太少时个别偏差会把平均值带偏。 */
+const val DT_CALIBRATION_MIN_SAMPLES = 3
+
+/** 「一键校准」的统计窗口长度：只取最近这么多条解码的 DT。 */
+const val DT_CALIBRATION_WINDOW = 20
+
+/**
+ * 「平均 DT」（ms，四舍五入）：样本少于 [DT_CALIBRATION_MIN_SAMPLES] 时返回 null（不提示）。
+ *
+ * 单位故意用 ms、与「时隙偏移」一致，因为两者可直接互换：设本机时钟误差为 `e`、时隙偏移为
+ * `off`，则 `DT = e − off`（推导见 docs/Ft8Vox.md §5.4），所以**把平均 DT 原样填进偏移**
+ * 就能把 DT 校到 0 —— 也就一并说明了为什么这里的符号与设置页「+1.5s 就填 +1500 ms」一致。
+ */
+fun avgDtMs(samples: List<Float>): Int? {
+    if (samples.size < DT_CALIBRATION_MIN_SAMPLES) return null
+    val mean = samples.sum().toDouble() / samples.size
+    return Math.round(mean * 1000.0).toInt()
+}
+
+/** 把「平均 DT」换算成「时隙偏移」设置值（ms，夹到 ±[SLOT_OFFSET_LIMIT_MS]）。 */
+fun slotOffsetFromDtMs(dtMs: Int): Int =
+    dtMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+
+/**
+ * 信息头「一键校准」按钮文案（`校准 +1.5s·12`＝平均 +1.5 s、12 条样本）。
+ *
+ * [avgMs] 为 null（样本不足）时返回 null，调用方保持原来的「时间同步」/红字告警。
+ */
+fun dtCalibrationLabel(avgMs: Int?, samples: Int): String? =
+    avgMs?.let { String.format(Locale.US, "校准 %+.1fs·%d", it / 1000.0, samples) }
+
+/**
+ * 「一键校准」按钮（操作页 / 频谱页共用）。
+ *
+ * [label] 由 [dtCalibrationLabel] 生成；点击＝把平均 DT 原样填进「时隙偏移」。
+ * 用小号字 + 强调色，避免与旁边的控制按钮（监听 / 清除 / 跟踪）抢注意力。
+ */
+@Composable
+fun DtCalibrationChip(label: String, modifier: Modifier = Modifier, onApply: () -> Unit) {
+    JtdxButton(
+        text = label,
+        onClick = onApply,
+        modifier = modifier,
+        accent = JtdxValue,
+        textStyle = MaterialTheme.typography.labelSmall,
+    )
+}
 
 /**
  * 信息头「解码耗时」文案（`解码 118ms`）。纯显示用：调「解码深度」时看计算量代价。

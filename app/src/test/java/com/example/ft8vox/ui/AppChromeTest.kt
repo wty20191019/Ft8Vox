@@ -1,5 +1,6 @@
 package com.example.ft8vox.ui
 
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.engine.DecodeParallel
 import com.example.ft8vox.engine.DecodeResult
 import org.junit.Assert.assertEquals
@@ -83,5 +84,40 @@ class AppChromeTest {
     @Test
     fun dxLabelFallsBackToNoTargetWhenIdle() {
         assertEquals("DX→ 未设目标", dxTargetLabel(null, null, -8, awaitingResponders = false))
+    }
+
+    // ---- 一键校准：平均 DT → 时隙偏移 ----
+
+    @Test
+    fun avgDtNeedsEnoughSamples() {
+        // 少于 3 条不给建议（不占位）
+        assertNull(avgDtMs(emptyList()))
+        assertNull(avgDtMs(listOf(1.2f)))
+        assertNull(avgDtMs(listOf(1.2f, 1.3f)))
+        assertEquals(1000, avgDtMs(listOf(1.0f, 1.0f, 1.0f)))
+    }
+
+    @Test
+    fun avgDtRoundsToMilliseconds() {
+        // 平均 1.233 s → 1233 ms
+        assertEquals(1233, avgDtMs(listOf(1.2f, 1.3f, 1.2f)))
+        // 负的 DT（本机时钟快了）同样成立
+        assertEquals(-1500, avgDtMs(listOf(-1.5f, -1.5f, -1.5f)))
+    }
+
+    @Test
+    fun slotOffsetFromDtClampsToLimit() {
+        // 平均 DT 原样填进去（符号不变），超出 ±2500 夹住
+        assertEquals(1500, slotOffsetFromDtMs(1500))
+        assertEquals(-1500, slotOffsetFromDtMs(-1500))
+        assertEquals(SLOT_OFFSET_LIMIT_MS, slotOffsetFromDtMs(9000))
+        assertEquals(-SLOT_OFFSET_LIMIT_MS, slotOffsetFromDtMs(-9000))
+    }
+
+    @Test
+    fun calibrationLabelHiddenWithoutSamples() {
+        assertNull(dtCalibrationLabel(null, 0))
+        assertEquals("校准 +1.5s·12", dtCalibrationLabel(1500, 12))
+        assertEquals("校准 -0.4s·3", dtCalibrationLabel(-400, 3))
     }
 }
