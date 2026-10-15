@@ -470,7 +470,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 下发时隙偏移（热生效，U7「发射偏移」）。
      *
      * 影响 native 的采集窗口起点（= 解码 DT 的基准），发射起点由 [planTx] 用同一值平移。
-     * 改在时隙中途时，当前时隙的窗口会错位到下一个网格点生效，属预期。
+     * 改在时隙中途时，采集线程会在下一块样本处重新对齐到**新网格的下一个边界**，
+     * 因此最迟一个时隙内生效，不必停止（见 [AudioEngine.setSlotOffsetMs]）。
      */
     private fun applySlotOffset(s: AppSettings, force: Boolean = false) {
         if (!force && s.slotOffsetMs == lastSlotOffsetMs) return

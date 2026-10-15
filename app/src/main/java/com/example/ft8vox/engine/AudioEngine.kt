@@ -208,6 +208,15 @@ object AudioEngine {
         @Volatile
         private var slotOffsetMs: Int = 0
 
+        /**
+         * 「偏移已变，需重新对齐」请求（见 [setSlotOffsetMs]）。
+         *
+         * 采集窗口网格是按采样计数固定推进的，改 [slotOffsetMs] 只改字段不会挪网格，
+         * 所以由主线程置位、采集线程在下一块样本处重新 [armAlignment]。
+         */
+        @Volatile
+        private var realignRequested = false
+
         @Volatile
         private var inputGain: Float = 1f
 
@@ -297,8 +306,21 @@ object AudioEngine {
             outputGain = dbToLinear(clampOutputGainDb(gainDb))
         }
 
+        /**
+         * 热更新时隙偏移（正 = 推后）。
+         *
+         * 采集窗口的网格是**按 12 kHz 采样计数固定推进**的（见 [onSamples] 里的
+         * `slotStartMs += SLOT_MS`），所以只改字段并不会挪动网格 —— 曾经必须停止 / 重开接收
+         * 才会生效。这里改为置一个「要求重排对齐」标志，由采集线程在下一块样本处
+         * 重新 [armAlignment]（丢弃到**新网格的下一个边界**再开始累积），因此改完偏移
+         * 最迟在一个时隙内生效。
+         */
         fun setSlotOffsetMs(offsetMs: Int) {
-            this.slotOffsetMs = offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+            val next = offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+            if (next == slotOffsetMs) return
+            slotOffsetMs = next
+            // 未在采集时不必请求：startCapture 会按新偏移重新对齐。
+            if (running) realignRequested = true
         }
 
         fun state(): AudioState = AudioState(
@@ -371,6 +393,8 @@ object AudioEngine {
             // 否则 48 kHz 设备会把待丢弃样本数放大 4 倍，导致解码窗口停在随机相位、
             // 且之后一直保持该错位（表现为「有电平、有解码耗时，却一条都解不出」）。
             armAlignment()
+            // 建流时已按当前偏移对齐，清掉停止前可能残留的重排请求。
+            realignRequested = false
             droppedSamples = 0
             voxLevelDb = -100f
             diagBlocks = 0L
@@ -574,6 +598,11 @@ object AudioEngine {
 
         /** 处理一段「设备采样率」的原始样本：增益 → 电平 → 重采样 → 时隙累积。 */
         private fun onSamples(input: FloatArray, n: Int) {
+            // 时隙偏移被改动：立即按新网格重新对齐（丢弃到下一个边界再累积），无需停止采集。
+            if (realignRequested) {
+                realignRequested = false
+                armAlignment()
+            }
             // 输入增益 + 电平
             var sumSq = 0.0
             val g = inputGain

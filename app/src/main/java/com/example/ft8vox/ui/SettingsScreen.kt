@@ -243,7 +243,8 @@ fun SettingsScreen(
                     signed = true,
                     subtitle = "整个时隙一起偏移（解码窗口 + 发射起点），用于校准本机时间/声卡时延：" +
                         "把操作页解码卡片的「时间差」原样填进来（+1.5s 就填 +1500 ms，负值照填），" +
-                        "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。",
+                        "校到时间差约 0 即可。正值 = 推后，负值 = 提前（FT8 可到 ±2.5 s）。" +
+                        "改完最迟一个时隙内生效，无需重开接收。",
                     onChange = { v -> settings.update { it.copy(slotOffsetMs = v) } },
                 )
                 PrefDivider()
