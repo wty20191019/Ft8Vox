@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * 昼夜灰线几何的 JVM 单测（docs/Ft8Vox.md）。
@@ -96,20 +98,45 @@ class GrayLineTest {
     }
 
     @Test
-    fun terminatorIsSortedAndSymmetricAboutSubsolarMeridian() {
-        // 直射点经线处纬度到极值、对面经线处到反号极值；两侧同经度差的两点纬度相等
+    fun terminatorPeaksOnTheAntisolarSideOfTheSubsolarMeridian() {
+        // 直射点经线是**地方时正午**：那一侧的分界线落在**背对太阳**的半球。
+        // 夏至（δ≈+23.44）时正午分界线在南纬 90°−|δ|≈66.6°，对面经线（地方时子夜）才到北纬 66.6°。
         val ms = utc("2026-06-21T12:00:00Z")
         val dec = GrayLine.sunDeclination(ms)
         val sub = GrayLine.subsolarLongitude(ms)
-        // δ 为正时北半球是「夏」，极值在北；δ 为负则反过来
+        // δ 为正时北半球是「夏」，子夜经线到北纬极值；δ 为负则反过来
         val s = if (dec >= 0.0) 1.0 else -1.0
-        val north = GrayLine.latAt(sub, dec, sub)
-        val south = GrayLine.latAt(GrayLine.normalize180(sub + 180.0), dec, sub)
-        assertEquals(s * (90.0 - abs(dec)), north, 1.5)
-        assertEquals(-s * (90.0 - abs(dec)), south, 1.5)
+        val noon = GrayLine.latAt(sub, dec, sub)
+        val midnight = GrayLine.latAt(GrayLine.normalize180(sub + 180.0), dec, sub)
+        assertEquals("正午经线应在背对太阳的半球", -s * (90.0 - abs(dec)), noon, 1.5)
+        assertEquals("子夜经线应在向阳半球的对面", s * (90.0 - abs(dec)), midnight, 1.5)
         val a = GrayLine.latAt(GrayLine.normalize180(sub + 60.0), dec, sub)
         val b = GrayLine.latAt(GrayLine.normalize180(sub - 60.0), dec, sub)
         assertEquals("关于直射点经线应对称", a, b, 1e-9)
+    }
+
+    @Test
+    fun terminatorIsPerpendicularToSunDirection() {
+        // 物理判据（唯一能测出南北镜像的一条）：分界线上任一点，指向太阳的单位矢量与该点
+        // 地平面法线的点积为 0 —— 也就是「太阳正好在地平线上」。
+        val cases = listOf(
+            "2026-01-15T12:00:00Z",
+            "2026-03-20T06:00:00Z",
+            "2026-06-21T12:00:00Z",
+            "2026-10-14T12:00:00Z",
+        )
+        for (iso in cases) {
+            val ms = utc(iso)
+            val dec = GrayLine.sunDeclination(ms)
+            val sub = GrayLine.subsolarLongitude(ms)
+            for ((lon, lat) in GrayLine.terminator(ms)) {
+                val d = Math.toRadians(dec)
+                val phi = Math.toRadians(lat)
+                val dl = Math.toRadians(GrayLine.normalize180(lon - sub))
+                val dot = cos(d) * cos(phi) * cos(dl) + sin(d) * sin(phi)
+                assertTrue("$iso 的 ($lon, $lat) 不在晨昏线上（点积 $dot）", abs(dot) < 1e-6)
+            }
+        }
     }
 
     @Test
@@ -130,5 +157,35 @@ class GrayLineTest {
         assertEquals(73, GrayLine.terminator(utc("2026-06-21T12:00:00Z"), stepDeg = 5.0).size)
         // 非法步长回退到默认
         assertEquals(181, GrayLine.terminator(utc("2026-06-21T12:00:00Z"), stepDeg = 0.0).size)
+    }
+
+    // ---- 屏幕线段（视口内每一份世界副本都要描到） ----
+
+    @Test
+    fun screenSegmentsCoverEveryVisibleWorldCopy() {
+        // 视口中心放在 120°E（u≈0.833，本机用户所在经度一带）→ 横向同时看到两份世界副本。
+        // 旧实现把整条折线只锚在「离视口中心最近的一份副本」上（u∈[1,2] → x∈[83,283]），
+        // 视口左边一半就没有线 —— 地图上看到的就是「晨昏线显示不全」。
+        val line = GrayLine.terminator(utc("2026-10-14T12:00:00Z"))
+        val p = MapProjection(
+            viewWidth = 100.0,
+            viewHeight = 200.0,
+            scale = 200.0,
+            centerU = (120.0 + 180.0) / 360.0,
+            centerV = 0.5,
+        )
+        val segs = GrayLine.screenSegments(p, line)
+        assertTrue("应有线段", segs.size > 60)
+        // 横向每一列都要被某条线段盖住（无缺口）
+        for (x in 0..100) {
+            val hit = segs.any { (a, b) -> minOf(a.x, b.x) <= x.toDouble() && x.toDouble() <= maxOf(a.x, b.x) }
+            assertTrue("x=$x 处没有晨昏线", hit)
+        }
+        // 线段不得整段落在视口外（两端同侧越界的应当被裁掉）
+        val margin = 24.0
+        for ((a, b) in segs) {
+            assertTrue("线段整段在视口外（x）", !(a.x < -margin && b.x < -margin) && !(a.x > 100 + margin && b.x > 100 + margin))
+            assertTrue("线段整段在视口外（y）", !(a.y < -margin && b.y < -margin) && !(a.y > 200 + margin && b.y > 200 + margin))
+        }
     }
 }

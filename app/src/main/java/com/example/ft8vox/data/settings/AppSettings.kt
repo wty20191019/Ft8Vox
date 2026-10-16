@@ -90,6 +90,13 @@ data class DecodeSettings(
     val passes: Int = 2,
     val fMinHz: Int = 100,
     val fMaxHz: Int = 3000,
+    /**
+     * 候选名额的分配口径：false（默认）＝「按段均分」，true＝「全局择优」。
+     *
+     * 与 [fMinHz]/[fMaxHz] 一样**不随预设变化**（它是策略开关，不是「快」预设的数值项）：
+     * [applyPreset] 原样保留、[samePresetValues] 不比较它，所以拨动开关不会把预设变成「自定义」。
+     */
+    val globalCandidates: Boolean = false,
 ) {
     /** 把预设应用到当前高级参数（频率范围不随预设变化）。[DecodePreset.CUSTOM] 不改动。 */
     fun applyPreset(preset: DecodePreset): DecodeSettings = when (preset) {
@@ -97,7 +104,7 @@ data class DecodeSettings(
         DecodePreset.FAST -> DecodeSettings(
             timeOsr = 2, freqOsr = 2, minScore = 10,
             ldpcIterations = 20, maxCandidates = 120, maxDecoded = 100, passes = 2,
-            fMinHz = fMinHz, fMaxHz = fMaxHz,
+            fMinHz = fMinHz, fMaxHz = fMaxHz, globalCandidates = globalCandidates,
         )
         DecodePreset.CUSTOM -> this
     }
@@ -223,11 +230,15 @@ data class AppSettings(
     /** 信号连线是否显示内容文字（关闭则只显示移动方块）。 */
     val mapShowLinkText: Boolean = true,
 
-    // ---- 电台 / PTT（docs/Ft8Vox.md） ----
-    /** 发射前导音开关。 */
-    val txLeadTone: Boolean = false,
-    /** 前导音时长（ms，0–2000）。 */
-    val txLeadToneMs: Int = 200,
+    // ---- 电台（仅 VOX）（docs/Ft8Vox.md） ----
+    /**
+     * 前导时长（ms，0–2000）：发射时在报文前插一段**等长静音**（＝纯发射延时，不出声）。
+     *
+     * 它不出声，所以**不会**提前键控电台；真正的作用是让播放流提前起流 / 预填缓冲，
+     * 避免起流延迟把报文起点削掉。无 CAT，键控只能靠 FT8 波形自身的前导静音
+     * （WSJT-X 约定：波形在时隙起点后 0.5 s 才开始）。
+     */
+    val txPreambleMs: Int = 200,
     /** 输出声卡（空 = 系统默认；设备枚举依赖 U7）。 */
     val outputDevice: String = "",
     /**
@@ -235,8 +246,6 @@ data class AppSettings(
      * **0 = 数字满幅**（波形本身已是满幅，只能往小调）。对报文与「测试音」都生效，热生效。
      */
     val outputGainDb: Int = 0,
-    /** PTT 延迟（ms，0–500）。 */
-    val pttDelayMs: Int = 50,
 
     // ---- 音频（docs/Ft8Vox.md） ----
     /** 输入设备（空 = 系统默认；枚举依赖 U7）。 */
@@ -297,14 +306,6 @@ data class AppSettings(
             .trim()
             .uppercase()
 
-    /**
-     * 发射前导总时长（ms）＝ PTT 前导静音 [pttDelayMs] + 发射前导音 [txLeadToneMs]。
-     *
-     * 供「立即发」判定使用：报文波形 + 前导都能在本时隙剩余时间内播完才允许立即发射。
-     */
-    val txPreambleMs: Int
-        get() = pttDelayMs.coerceAtLeast(0) + if (txLeadTone) txLeadToneMs.coerceAtLeast(0) else 0
-
     /** 当前实际使用的刻度频率（Hz）：自定义波段或波段内频率优先，否则取波段默认。 */
     val resolvedDialHz: Long
         get() = BandPlan.resolveDialHz(band, dialHz)
@@ -317,5 +318,6 @@ data class AppSettings(
             ldpcIterations = decode.ldpcIterations,
             maxDecoded = decode.maxDecoded,
             passes = decode.passes,
+            globalCandidates = decode.globalCandidates,
         )
 }

@@ -1,11 +1,15 @@
 package com.example.ft8vox.data.log
 
+import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import com.example.ft8vox.data.adif.AdifCodec
 import com.example.ft8vox.data.adif.AdifMapper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 /** 通联日志仓库：对 DAO 做一层领域封装（ADIF 导入导出、去重、已通联索引）。 */
-class QsoRepository(private val dao: QsoDao) {
+class QsoRepository(private val dao: QsoDao, private val db: RoomDatabase) {
 
     fun observeAll(): Flow<List<QsoEntity>> = dao.observeAll()
 
@@ -45,57 +49,61 @@ class QsoRepository(private val dao: QsoDao) {
     /**
      * 导入 ADIF 文本。
      *
-     * 判重口径：呼号 + 完成时间 + 波段 + 模式；时间允许 ±[NEAR_TOLERANCE_MS] 的偏差，
-     * 以兼容 LoTW 等只精确到分钟的导出。
+     * 判重口径：呼号（忽略大小写）+ 完成时间 + 波段 + 模式；时间允许 ±60 秒的偏差
+     * （见 [QsoImportLedger]），以兼容 LoTW 等只精确到分钟的导出。
      *
      * 命中同一通联时**合并**而不是丢弃（见 [QsoMerge]）：这样把 LoTW / eQSL 的确认报告
      * 导进来时，已有记录会被点亮为「已确认」，同时保持「同一文件重复导入不产生重复记录」。
+     *
+     * 性能（大文件导入不再逐条查库、不卡界面）：
+     * 1. 解析与判重是纯 CPU 工作，整体跑在 [Dispatchers.Default]，不占主线程；
+     * 2. 判重用 [QsoImportLedger] 的**一次性内存索引**，把原来的 `O(导入条数 × 现有条数)`
+     *    两次全表扫描降到 `O(现有条数 + 导入条数)`；
+     * 3. 新增与更新分别收集，最后在**一个事务**里批量写回 —— 一次提交只触发一轮整表重算；
+     * 4. [onProgress] 回调报告「导入中 n/N」（约 [PROGRESS_STEPS] 次，供界面显示进度）。
+     *
+     * 已知取舍：现有记录是导入开始时**一次性快照**读出的；若导入期间后台仍在写日志
+     * （自动通联），极少数情况下可能插入一条本可合并的记录 —— 下次导入即会合并掉。
      */
-    suspend fun importAdif(text: String, myCall: String, myGrid: String?): ImportResult {
-        var added = 0
-        var updated = 0
-        var skipped = 0
-        for (record in AdifCodec.decode(text)) {
-            val entity = AdifMapper.toEntity(record, myCall, myGrid)
-            if (entity == null) {
-                skipped++
-                continue
-            }
-            val existing = findExisting(entity)
-            if (existing == null) {
-                dao.insert(entity)
-                added++
-                continue
-            }
-            val merged = QsoMerge.merge(existing, entity)
-            if (merged == existing) {
-                skipped++
-                continue
-            }
-            dao.update(merged)
-            updated++
-        }
-        return ImportResult(added = added, updated = updated, skipped = skipped)
-    }
+    suspend fun importAdif(
+        text: String,
+        myCall: String,
+        myGrid: String?,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): ImportResult = withContext(Dispatchers.Default) {
+        val records = AdifCodec.decode(text)
+        val total = records.size
+        onProgress(0, total)
 
-    /** 先精确匹配，再退化为同一分钟内的近似匹配（对方的导出可能只精确到分钟）。 */
-    private suspend fun findExisting(entity: QsoEntity): QsoEntity? =
-        dao.findExact(entity.theirCall, entity.utcMs, entity.band, entity.mode)
-            ?: dao.findNear(
-                call = entity.theirCall,
-                band = entity.band,
-                mode = entity.mode,
-                utcMs = entity.utcMs,
-                fromMs = entity.utcMs - NEAR_TOLERANCE_MS,
-                toMs = entity.utcMs + NEAR_TOLERANCE_MS,
-            )
+        val ledger = QsoImportLedger(dao.all())
+        var invalid = 0
+        val step = maxOf(1, total / PROGRESS_STEPS)
+        records.forEachIndexed { i, record ->
+            val entity = AdifMapper.toEntity(record, myCall, myGrid)
+            if (entity == null) invalid++ else ledger.offer(entity)
+            val done = i + 1
+            if (done % step == 0 || done == total) onProgress(done, total)
+        }
+
+        if (ledger.inserts.isNotEmpty() || ledger.updates.isNotEmpty()) {
+            db.withTransaction {
+                if (ledger.inserts.isNotEmpty()) dao.insertAll(ledger.inserts)
+                if (ledger.updates.isNotEmpty()) dao.updateAll(ledger.updates)
+            }
+        }
+        ImportResult(
+            added = ledger.inserts.size,
+            updated = ledger.updates.size,
+            skipped = invalid + ledger.skipped,
+        )
+    }
 
     /** 导出全部记录为 ADIF 文本。 */
     suspend fun exportAdif(): String =
         AdifCodec.encode(dao.all().map { AdifMapper.toRecord(it) })
 
     private companion object {
-        /** 近似判重的时间容差：LoTW 等导出常把 TIME_ON 截到分钟。 */
-        const val NEAR_TOLERANCE_MS = 60_000L
+        /** 导入进度回调的粒度：约上报这么多档（避免为每条记录都刷一次界面）。 */
+        const val PROGRESS_STEPS = 50
     }
 }

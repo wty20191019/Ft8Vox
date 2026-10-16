@@ -25,12 +25,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.ft8vox.SessionService
+import com.example.ft8vox.engine.decodeParallelism
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,6 +83,15 @@ fun MainShell(
     val nowMs = rememberUtcNowMs()
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+
+    // 解码并行度（顶栏读数行）：按 CPU 核数 + 频率范围自适应；与设置页、native 同一规则
+    val decodeParallel = remember(appSettings.decode.fMinHz, appSettings.decode.fMaxHz) {
+        decodeParallelism(
+            appSettings.decode.fMinHz,
+            appSettings.decode.fMaxHz,
+            Runtime.getRuntime().availableProcessors(),
+        )
+    }
 
     // ---- 录音权限：操作页与频谱页共用 ----
     var permissionGranted by remember {
@@ -161,6 +172,7 @@ fun MainShell(
             onBandFreq = session::setBandFreq,
             onTxEnabledChange = session::setTxEnabled,
             onOpenSettings = { tab = MainTab.SETTINGS },
+            decodeParallel = decodeParallel,
         )
 
         Box(
@@ -171,66 +183,70 @@ fun MainShell(
                 // 内容页自绘（地图平移/缩放、瀑布）不裁剪会画到上方信息头上
                 .clipToBounds(),
         ) {
-            when (tab) {
-                MainTab.OPERATE -> OperateScreen(
-                    viewModel = session,
-                    settings = appSettings,
-                    hasPermission = permissionGranted,
-                    request = request,
-                    onRequestStart = requestStart,
-                    onOpenSettings = { tab = MainTab.SETTINGS },
-                    onOpenMap = { call ->
-                        mapFocusCall = call
-                        mapFocusSeq += 1
-                        tab = MainTab.MAP
-                    },
-                    onOpenLog = { call ->
-                        logFocusCall = call
-                        logFocusSeq += 1
-                        tab = MainTab.LOG
-                    },
-                    onOpenAutoProgram = { autoDialogOpen = true },
-                    followOpen = followOpen,
-                    onFollowOpenChange = { followOpen = it },
-                )
+            // 各页状态（滚动位置、输入框、选台…）按 tab 存回来：切走再回来不从头组合一遍
+            val tabStates = rememberSaveableStateHolder()
+            tabStates.SaveableStateProvider(tab) {
+                when (tab) {
+                    MainTab.OPERATE -> OperateScreen(
+                        viewModel = session,
+                        settings = appSettings,
+                        hasPermission = permissionGranted,
+                        request = request,
+                        onRequestStart = requestStart,
+                        onOpenSettings = { tab = MainTab.SETTINGS },
+                        onOpenMap = { call ->
+                            mapFocusCall = call
+                            mapFocusSeq += 1
+                            tab = MainTab.MAP
+                        },
+                        onOpenLog = { call ->
+                            logFocusCall = call
+                            logFocusSeq += 1
+                            tab = MainTab.LOG
+                        },
+                        onOpenAutoProgram = { autoDialogOpen = true },
+                        followOpen = followOpen,
+                        onFollowOpenChange = { followOpen = it },
+                    )
 
-                MainTab.SPECTRUM -> SpectrumScreen(
-                    viewModel = session,
-                    settings = appSettings,
-                    settingsViewModel = settings,
-                    hasPermission = permissionGranted,
-                    onRequestStart = requestStart,
-                    onOpenLog = { call ->
-                        logFocusCall = call
-                        logFocusSeq += 1
-                        tab = MainTab.LOG
-                    },
-                )
+                    MainTab.SPECTRUM -> SpectrumScreen(
+                        viewModel = session,
+                        settings = appSettings,
+                        settingsViewModel = settings,
+                        hasPermission = permissionGranted,
+                        onRequestStart = requestStart,
+                        onOpenLog = { call ->
+                            logFocusCall = call
+                            logFocusSeq += 1
+                            tab = MainTab.LOG
+                        },
+                    )
 
-                MainTab.MAP -> GridScreen(
-                    log = log,
-                    session = session,
-                    settings = appSettings,
-                    onOpenLog = { tab = MainTab.LOG },
-                    focusCall = mapFocusCall,
-                    focusSeq = mapFocusSeq,
-                )
+                    MainTab.MAP -> GridScreen(
+                        log = log,
+                        session = session,
+                        settings = appSettings,
+                        onOpenLog = { tab = MainTab.LOG },
+                        focusCall = mapFocusCall,
+                        focusSeq = mapFocusSeq,
+                    )
 
-                MainTab.LOG -> LogScreen(
-                    log = log,
-                    myCall = appSettings.myCall,
-                    myGrid = appSettings.myGrid.ifEmpty { null },
-                    onOpenSettings = { tab = MainTab.SETTINGS },
-                    focusCall = logFocusCall,
-                    focusSeq = logFocusSeq,
-                )
+                    MainTab.LOG -> LogScreen(
+                        log = log,
+                        myCall = appSettings.myCall,
+                        myGrid = appSettings.myGrid.ifEmpty { null },
+                        onOpenSettings = { tab = MainTab.SETTINGS },
+                        focusCall = logFocusCall,
+                        focusSeq = logFocusSeq,
+                    )
 
-                MainTab.SETTINGS -> SettingsScreen(
-                    settings = settings,
-                    log = log,
-                    session = session,
-                    onHelp = { helpDialogOpen = true },
-                )
+                    MainTab.SETTINGS -> SettingsScreen(
+                        settings = settings,
+                        log = log,
+                        session = session,
+                        onHelp = { helpDialogOpen = true },
+                    )
+                }
             }
         }
 

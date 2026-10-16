@@ -3,6 +3,7 @@ package com.example.ft8vox.ui
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -58,13 +59,10 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.grid.Geo
+import com.example.ft8vox.qso.CallCountry
 import com.example.ft8vox.qso.DecodeStyle
-import com.example.ft8vox.qso.Dxcc
 import com.example.ft8vox.qso.HighlightRole
 import com.example.ft8vox.qso.ParsedMessage
-import com.example.ft8vox.ui.theme.BarNewCall
-import com.example.ft8vox.ui.theme.BarNewEntity
-import com.example.ft8vox.ui.theme.BarNewGrid
 import com.example.ft8vox.ui.theme.BarWorked
 import com.example.ft8vox.ui.theme.HlCall
 import com.example.ft8vox.ui.theme.HlCq
@@ -75,6 +73,7 @@ import com.example.ft8vox.ui.theme.HlTx
 import com.example.ft8vox.ui.theme.JtdxRow
 import com.example.ft8vox.ui.theme.VoxError
 import com.example.ft8vox.ui.theme.VoxRxGreen
+import com.example.ft8vox.ui.theme.WorkedOtherBandBlue
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -97,38 +96,43 @@ data class DecodeRow(
 private const val HL_ALPHA = 0.42f
 
 /**
- * 高亮类别 → **整行底色**（JTDX/WSJT-X 默认，docs/Ft8Vox.md）。
+ * 高亮类别 → **整行底色**（照 FT8CN 手册，docs/Ft8Vox.md §4.2）。
  *
- * 已通联 / 重复 / 普通不上底色（返回 null），用文字弱化表达。
+ * 整行底色**只留两档**：CQ＝橙黄、自己发的（TX）＝黄。其余类别一律返回 null（用默认行色）：
+ * 「与我有关」靠**报文列红字**、「已通联」靠**删除线**、未通联分区靠**红框字母标志**（C/D/I）。
  */
 fun highlightRowColor(role: HighlightRole): Color? = when (role) {
     HighlightRole.TX -> HlTx
-    HighlightRole.TO_ME -> HlMyCall
     HighlightRole.CQ -> HlCq
-    HighlightRole.NEW_GRID -> HlGrid
-    HighlightRole.NEW_ENTITY -> HlDxcc
-    HighlightRole.NEW_CALL -> HlCall
-    HighlightRole.WORKED -> null
-    HighlightRole.DUPLICATE -> null
-    HighlightRole.NORMAL -> null
+    else -> null
 }
 
 /**
- * 「报文」列的文字颜色（docs/Ft8Vox.md）。
+ * 「报文」列的文字颜色（照 FT8CN，docs/Ft8Vox.md §4.3）。
  *
- * - **与我有关**（发给我的报文，含网格应答 / 报告 / R报告 / 73 / RR73）→ **整列文字标红**，
- *   一眼看出哪几条是冲我来的（整行底色仍按「色卡」规则走，不受影响）。
- * - **已通联** → 红字 + 删除线（呈现方式固定，不再有设置开关）。
- * - 其余按行底色的明暗（重复行整体弱化）。
+ * 优先级（高→低）：
+ * 1. **与我有关**（发给我的报文 / 当前对手）→ **红字**；
+ * 2. **其它波段已通联**（本波段没通过）→ **蓝字**；
+ * 3. 其余 → 默认色（重复行整体弱化）。
+ *
+ * 「本波段已通联」不改文字颜色，只画删除线。
  */
 fun decodeMessageColor(style: DecodeStyle, base: Color): Color = when {
     style.toMe -> ToMeRed
-    style.worked -> BarWorked
+    style.workedOtherBand -> WorkedOtherBandBlue
     else -> base
 }
 
 /** 「与我有关」的报文文字红（比行底色更亮，浅底上也读得清）。 */
 val ToMeRed = Color(0xFFFF5252)
+
+/**
+ * 「目标台报文」行的**红框**色（当前 QSO 对手发出的所有报文，docs/Ft8Vox.md §4.3）。
+ *
+ * 与「与我有关」的红字同色。目标身份**在底色之外**另给一圈框：于是 CQ 台被选为目标后
+ * 既是橙底（CQ）又有红框（我的对手），两件事互不遮盖 —— 修掉「点了 CQ 之后整行没标记」。
+ */
+internal val TargetFrameRed = ToMeRed
 
 /** 高亮类别 → 单色（供频谱页叠加的解码呼号文字用）。 */
 fun highlightTextColor(role: HighlightRole): Color = when (role) {
@@ -157,21 +161,24 @@ private val COL_DT = 38.dp
  *
  * 两行制里报文固定占**第一行**：一行放不下「呼号+网格+报告」时**逐级缩小字号**
  * （12sp → 9sp）塞进去，而不是省略号截断（长报文少见，缩一点比看不清好）。
- * 第二行的「声音频率 · 国家 · 距离」由 [DecodeTableRow] 单独画。
+ *
+ * 字号由调用方持有（[fontSizeSp] / [onFontSize]）而非本函数内部状态：第二行的「国家行」
+ * 要用**同一字号**渲染，才能对齐到报文里各自呼号的列（见 [CallCountry.grid]）。
  */
 @Composable
 private fun InfoText(
     text: AnnotatedString,
     color: Color,
     decoration: TextDecoration?,
+    fontSizeSp: Int,
+    onFontSize: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var fontSize by remember(text) { mutableStateOf(12) }
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium.copy(
             fontFamily = FontFamily.Monospace,
-            fontSize = fontSize.sp,
+            fontSize = fontSizeSp.sp,
         ),
         color = color,
         textDecoration = decoration,
@@ -179,7 +186,7 @@ private fun InfoText(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
         onTextLayout = { layout ->
-            if (layout.hasVisualOverflow && fontSize > 9) fontSize -= 1
+            if (layout.hasVisualOverflow && fontSizeSp > 9) onFontSize(fontSizeSp - 1)
         },
     )
 }
@@ -319,23 +326,18 @@ private fun DecodeTableRow(
     val textColor = MaterialTheme.colorScheme.onSurface
     val bg = hl?.copy(alpha = HL_ALPHA) ?: JtdxRow
     val alpha = if (style.role == HighlightRole.DUPLICATE) 0.6f else 1f
-    // 已通联＝红字 + 删除线（固定，不再有「高亮/下划线/隐藏」三选一，§29）
+    // 本波段已通联＝删除线（固定，不再有「高亮/下划线/隐藏」三选一，§29）
     val workedDecoration = TextDecoration.LineThrough
     val slotLabel = slotParityOf(msg.slotUtcMs, slotMs.toLong())?.toString() ?: "--"
     // 报文列颜色（§29）：与我有关＝整体标红；已通联＝红字；其余按「色卡」明暗
     val msgBase = textColor.copy(alpha = alpha)
     val msgColor = decodeMessageColor(style, msgBase)
     val msgCallColor = if (style.toMe) msgColor else VoxError
-    // 第二行：声音频率 · 国家 · 距离（单项之间只留一个空格，docs/Ft8Vox.md）
-    val metaLine = remember(row, myGrid) {
-        val entity = from?.let { Dxcc.resolve(it)?.name }
-        val distKm = Geo.betweenGrids(myGrid, row.parsed.grid)?.first
-        buildString {
-            append("${msg.df}Hz")
-            entity?.takeIf { it.isNotEmpty() }?.let { append(" $it") }
-            distKm?.let { append(String.format(Locale.US, " %.0fkm", it)) }
-        }
-    }
+    // 第二行：声音频率（左）· 国家（各自对齐上一行的呼号）· 距离（贴最右）
+    val countries = remember(row) { CallCountry.grid(msg.text) }
+    val distKm = remember(row, myGrid) { Geo.betweenGrids(myGrid, row.parsed.grid)?.first }
+    // 报文列当前字号（12sp 起、放不下逐级缩到 9sp）：第二行的国家行要与它同字号对齐
+    var msgFontSp by remember(row) { mutableStateOf(12) }
 
     val density = LocalDensity.current
     val maxSwipe = with(density) { 140.dp.toPx() }
@@ -417,6 +419,9 @@ private fun DecodeTableRow(
                     onLongClick = { menuOpen = true },
                 )
                 .background(bg)
+                // 目标台（当前 QSO 对手）发出的每一行都套一圈红框：即使底色被类别改写
+                // （CQ 橙底 / TX 黄底），「这是我在通联的台」也一直看得见。
+                .then(if (style.current) Modifier.border(1.dp, TargetFrameRed) else Modifier)
                 .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -459,28 +464,52 @@ private fun DecodeTableRow(
                         modifier = Modifier.width(COL_DT),
                     )
                     // 报文（一行；放不下则逐级缩小字号）
-                    // 与我有关 → 整列标红（我的呼号同色加粗）；已通联 → 红字 + 删除线（§29）
+                    // 与我有关 → 整列标红；本波段已通联 → 删除线；其它波段已通联 → 蓝字（§4.3）
                     InfoText(
                         text = annotatedMessage(msg.text, myCall, msgCallColor),
                         color = msgColor,
-                        decoration = if (style.worked) workedDecoration else null,
+                        decoration = if (style.workedThisBand) workedDecoration else null,
+                        fontSizeSp = msgFontSp,
+                        onFontSize = { msgFontSp = it },
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
-                    if (style.toMe) Marker(VoxError)
-                    if (style.current) Marker(MaterialTheme.colorScheme.primary)
-                    if (style.newGrid) Marker(BarNewGrid)
-                    if (style.hasNewEntityMark) Marker(BarNewEntity)
-                    if (followed) Marker(BarNewCall)
+                    // 行尾只保留「未通联分区」的红框字母标志（照 FT8CN 手册）：
+                    // C＝CQ 分区、D＝DXCC 分区、I＝ITU 分区；不再画其它小圆点。
+                    if (style.newCqZone) ZoneBadge("C")
+                    if (style.newEntity) ZoneBadge("D")
+                    if (style.newItu) ZoneBadge("I")
                 }
-                // 声音频率 · 国家 · 距离
-                Text(
-                    metaLine,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = textColor.copy(alpha = 0.6f * alpha),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 2.dp),
-                )
+                // 第二行：声音频率（左）+ 国家（对齐上面各自的呼号）+ 距离（贴最右）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${msg.df}Hz",
+                        style = mono(MaterialTheme.typography.labelSmall),
+                        color = textColor.copy(alpha = 0.6f * alpha),
+                        maxLines = 1,
+                        modifier = Modifier.width(COL_SLOT + COL_UTC + COL_SNR + COL_DT),
+                    )
+                    // 国家行：与报文列同起点、同字号，空格按报文里的列位置补齐（CallCountry.grid）
+                    Text(
+                        countries,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = msgFontSp.sp,
+                        ),
+                        color = textColor.copy(alpha = 0.6f * alpha),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                    distKm?.let { km ->
+                        Text(
+                            String.format(Locale.US, "%.0fkm", km),
+                            style = mono(MaterialTheme.typography.labelSmall),
+                            color = textColor.copy(alpha = 0.6f * alpha),
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                }
             }
         }
 
@@ -549,16 +578,29 @@ private fun labelSmallAlpha(alpha: Float) =
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
     )
 
-/** 小圆点标记。 */
+/**
+ * 未通联分区的**红框字母标志**（照 FT8CN 手册，docs/Ft8Vox.md §4.3）：
+ * `C`＝未通联过的 CQ 分区、`D`＝未通联过的 DXCC 分区、`I`＝未通联过的 ITU 分区。
+ *
+ * 紧跟在报文列（呼号）之后，只在对应分区**没通联过**时出现。
+ */
 @Composable
-private fun Marker(color: Color) {
+private fun ZoneBadge(letter: String) {
     Box(
         modifier = Modifier
-            .padding(start = 4.dp)
-            .size(6.dp)
-            .clip(CircleShape)
-            .background(color),
-    )
+            .padding(start = 3.dp)
+            .size(14.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .border(1.dp, BarWorked, RoundedCornerShape(2.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            letter,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+            color = BarWorked,
+            maxLines = 1,
+        )
+    }
 }
 
 /**

@@ -33,7 +33,7 @@ class QsoRepositoryTest {
             ApplicationProvider.getApplicationContext(),
             AppDatabase::class.java,
         ).build()
-        repo = QsoRepository(db.qsoDao())
+        repo = QsoRepository(db.qsoDao(), db)
     }
 
     @After

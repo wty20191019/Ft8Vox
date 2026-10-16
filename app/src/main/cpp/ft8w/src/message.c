@@ -1101,7 +1101,9 @@ static int unpackgrid(uint16_t igrid4, uint8_t ir, char* extra, ftx_field_t* ext
         if (ir > 0)
         {
             // In case of ir=1 add an "R " before grid
-            dst = stpcpy(dst, "R ");
+            // （不用 POSIX 的 stpcpy：主机端 MSVC 头文件里没有，改成等价的 memcpy + 前进）
+            memcpy(dst, "R ", 3); /* 3 = 'R' + ' ' + NUL */
+            dst += 2;
         }
 
         uint16_t n = igrid4;

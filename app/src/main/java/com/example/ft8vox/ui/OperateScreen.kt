@@ -76,6 +76,8 @@ fun OperateScreen(
     val messages by viewModel.messages.collectAsState()
     val txRecords by viewModel.txRecords.collectAsState()
     val worked by viewModel.workedIndex.collectAsState()
+    val workedThisBand by viewModel.workedThisBand.collectAsState()
+    val workedOtherBands by viewModel.workedOtherBands.collectAsState()
 
     var detailFor by remember { mutableStateOf<DecodeRow?>(null) }
     // 当前发射目标（点选解码行 / 左滑呼叫 / 详情「呼叫」设置）
@@ -96,7 +98,8 @@ fun OperateScreen(
     val duplicateKeys = remember(messages) { DecodeHighlight.duplicateRowKeys(messages) }
     // 接收解码行
     val rxRows = remember(
-        messages, filter, worked, status.myCall, status.qso.theirCall,
+        messages, filter, worked, workedThisBand, workedOtherBands,
+        status.myCall, status.qso.theirCall,
         status.txing, status.lastTxText, duplicateKeys,
     ) {
         val txText = if (status.txing) status.lastTxText else null
@@ -106,6 +109,8 @@ fun OperateScreen(
             val dup = DecodeHighlight.rowKey(m.text, m.slotUtcMs) in duplicateKeys
             val style = DecodeHighlight.classify(
                 p, worked, status.qso.theirCall, status.myCall, dup, txText,
+                workedThisBand = workedThisBand,
+                workedOtherBands = workedOtherBands,
             )
             DecodeRow(m, p, style)
         }
@@ -156,7 +161,11 @@ fun OperateScreen(
                 active = followOpen,
             )
             val warn = timeSyncWarning(messages.firstOrNull()?.dt)
-            if (warn != null) {
+            val calLabel = dtCalibrationLabel(status.avgDtMs, status.dtSamples)
+            if (calLabel != null) {
+                // 有平均样本：直接把「平均 DT」做成可点的一键校准（红字告警仍在信息头行 4）
+                DtCalibrationChip(calLabel) { request { viewModel.fillSlotOffsetFromAvgDt() } }
+            } else if (warn != null) {
                 Text(warn, style = MaterialTheme.typography.labelSmall, color = VoxError)
             } else {
                 JtdxCaption("时间同步")

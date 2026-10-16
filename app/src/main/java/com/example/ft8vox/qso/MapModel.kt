@@ -15,7 +15,7 @@ enum class MapTier(val label: String) {
     CONFIRMED("确认"),
 }
 
-/** 网格标记：4 字符方格 + 归属状态。 */
+/** 网格标记：4 或 6 字符方格（MH6）+ 归属状态。 */
 data class GridMarker(
     val grid: String,
     val bounds: Maidenhead.Bounds,
@@ -66,6 +66,8 @@ data class CqFlag(
     val utcMs: Long,
     /** 旗面颜色语义（通联状态）；默认未通联。 */
     val worked: CqWorked = CqWorked.NONE,
+    /** true 表示坐标来自呼号前缀近似（地图上呼号后带 `~`），而非真收到过网格。 */
+    val fromPrefix: Boolean = false,
 )
 
 /** 信号连线（docs/Ft8Vox.md）：方向由 [fromCall] 指向 [toCall]。 */
@@ -98,11 +100,18 @@ object MapModel {
     /** 呼号标记/CQ 旗帜的默认观察窗口（仅作为可选项，地图页默认用整会话）。 */
     const val DEFAULT_WINDOW_MS = 15 * 60 * 1000L
 
-    /** 归一化为 4 字符方格；不足 4 字符或非法返回 null。 */
+    /**
+     * 归一化为**地图方格**：最多 6 字符（MH6）。
+     *
+     * 精度**取源数据**：有 6 位就画 6 位小格（5′×2.5′），只有 4 位的仍画 4 位方格（2°×1°）——
+     * FT8 报文里的网格只有 4 位，6 位只出现在部分日志 / ADIF 记录里；更细的 8 位也收敛到 MH6
+     * （地图方格的最大精度就是 6 位）。不足 4 字符或非法返回 null。
+     */
     fun square(grid: String?): String? {
         val g = Maidenhead.normalize(grid)
         if (g.length < 4) return null
-        val sq = g.substring(0, 4)
+        val mh6 = g.take(6)
+        val sq = if (mh6.length == 6 && Maidenhead.isValid(mh6)) mh6 else g.take(4)
         return if (Maidenhead.isValid(sq)) sq else null
     }
 
@@ -236,7 +245,7 @@ object MapModel {
                 from in workedCalls -> CqWorked.OTHER_BAND
                 else -> CqWorked.NONE
             }
-            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs, worked)
+            val flag = CqFlag(from, r.lat, r.lon, m.snr, m.slotUtcMs, worked, fromPrefix = r.fromPrefix)
             val prev = byCall[from]
             if (prev == null || flag.utcMs >= prev.utcMs) byCall[from] = flag
         }

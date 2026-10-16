@@ -15,13 +15,14 @@ import kotlin.math.tan
  * 纯 Kotlin（无 Android / Compose 依赖），可 JVM 单测。太阳位置用与 FT8CN 相同的低精度级数
  * （儒略日 → 平黄经 / 平近点角 → 黄道经度 → 赤纬），误差在角分量级 —— 画一条地图灰线足够。
  *
- * 分界线（太阳高度角 = 0）的纬度公式：
+ * 分界线（太阳高度角 = 0）的纬度公式（与 FT8CN `computeDayNightTerminator` 同一级数）：
  *
  * ```
- * lat(lon) = atan(cos(lon − 直射点经度) / tan(δ))
+ * lat(lon) = atan(−cos(lon − 直射点经度) / tan(δ))
  * ```
  *
- * δ 为太阳赤纬：分界线在直射点经度处到达 ±(90° − |δ|)，在对面经度处翻到下半个球。
+ * δ 为太阳赤纬。**负号不能省**：直射点经线（地方时正午）那一侧的分界线落在**背对太阳的半球** ——
+ * δ>0（北半球夏）时正午分界线在南纬 90°−|δ|，对面经线（子夜）才到北纬 90°−|δ|。
  */
 object GrayLine {
 
@@ -72,19 +73,68 @@ object GrayLine {
         return out
     }
 
-    /** 分界线在经度 [lon] 处的纬度（度）；[dec] 为赤纬、[subsolarLon] 为直射点经度。 */
+    /**
+     * 分界线在经度 [lon] 处的纬度（度）；[dec] 为赤纬、[subsolarLon] 为直射点经度。
+     *
+     * 由「太阳方向矢量与该点地平面法线垂直」解出 `tan φ = −cos(lon − subsolarLon) / tan δ`。
+     */
     fun latAt(lon: Double, dec: Double, subsolarLon: Double): Double {
         val c = cos(K * (lon - subsolarLon))
         val denom = tan(K * dec)
-        // 春/秋分前后 δ≈0：分界线退化成两条经线（tan δ → 0），此时 lat → ±90
+        // 春/秋分前后 δ≈0：分界线退化成两条经线（tan δ → 0），此时 lat → ∓90
         if (denom == 0.0) {
             return when {
-                c > 0.0 -> 90.0
-                c < 0.0 -> -90.0
+                c > 0.0 -> -90.0
+                c < 0.0 -> 90.0
                 else -> 0.0
             }
         }
-        return atan(c / denom) / K
+        return atan(-c / denom) / K
+    }
+
+    /**
+     * 把 [terminator] 的 `(lon, lat)` 折线投影成屏幕线段（地图直接 `drawLine` 用）。
+     *
+     * 世界在**横向（经度）与纵向（纬度）都以 1 为周期**循环，视口放大后会同时看到多份副本，
+     * 因此这里按可见范围内的**每一份副本各描一遍**。只把整条折线锚在「离视口中心最近的一份」
+     * 上是不够的：那样视口另一侧的那半条线会整段落在屏幕外 —— 地图上就是「晨昏线显示不全」。
+     *
+     * 同一副本内相邻点相连；副本接缝处两端经纬度相同（−180° 与 +180° 是同一条经线），
+     * 因此副本之间既不需要补线，也不会横穿整张地图。
+     *
+     * [marginPx] 以内仍算「看得见」；两端都在视口外**同一侧**的线段直接跳过（省一半绘制）。
+     */
+    fun screenSegments(
+        p: MapProjection,
+        line: List<Pair<Double, Double>>,
+        marginPx: Double = 24.0,
+    ): List<Pair<PlotPoint, PlotPoint>> {
+        if (line.size < 2) return emptyList()
+        val r = p.visibleWorldRange()
+        val out = ArrayList<Pair<PlotPoint, PlotPoint>>(line.size + 8)
+        for (kv in floor(r.minV).toInt()..floor(r.maxV).toInt()) {
+            for (ku in floor(r.minU).toInt()..floor(r.maxU).toInt()) {
+                var px = 0.0
+                var py = 0.0
+                var has = false
+                for ((lon, lat) in line) {
+                    val s = p.toScreenUV(MapProjection.mercX(lon) + ku, MapProjection.mercY(lat) + kv)
+                    val x = s.x
+                    val y = s.y
+                    if (has) {
+                        val culled = (x < -marginPx && px < -marginPx) ||
+                            (x > p.viewWidth + marginPx && px > p.viewWidth + marginPx) ||
+                            (y < -marginPx && py < -marginPx) ||
+                            (y > p.viewHeight + marginPx && py > p.viewHeight + marginPx)
+                        if (!culled) out.add(PlotPoint(px, py) to PlotPoint(x, y))
+                    }
+                    px = x
+                    py = y
+                    has = true
+                }
+            }
+        }
+        return out
     }
 
     /** 经度归一到 −180…180。 */

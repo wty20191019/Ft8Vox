@@ -204,7 +204,7 @@ object TxScheduler {
     /**
      * **发射途中换目标**：本时隙剩余时间是否还够完整播完新报文（就地重发判据）。
      *
-     * 判据 ＝ 前导（PTT 静音 + 前导音）+ 波形自带保护间隔 [WAVE_LEAD_MS] + 报文时长
+     * 判据 ＝ 前导（等长静音）+ 波形自带保护间隔 [WAVE_LEAD_MS] + 报文时长
      * + 重启余量 [marginMs] ≤ 本时隙剩余时间；且当前必须是**我方发射时隙**
      * （换目标时可能刚按对方时隙重锁了周期，那就只能在下一个我方时隙发）。
      *
@@ -214,7 +214,7 @@ object TxScheduler {
      * @param nowMs 当前 UTC 毫秒
      * @param slotMs 时隙长度（FT8 为 15000）
      * @param txParity 我方发射周期（0=偶，1=奇）
-     * @param preambleMs 本次发射的完整前导（PTT 延迟 + 前导音，见 `AppSettings.txPreambleMs`）
+     * @param preambleMs 本次发射的前导时长（等长静音，见 `AppSettings.txPreambleMs`）
      * @param messageMs 新报文的波形时长（ms，见 `Protocol.messageMs`）；≤0 视为未知 → 不可就地重发
      * @param slotOffsetMs 整个时隙的偏移（ms，与 `planTx` 同一口径）
      */

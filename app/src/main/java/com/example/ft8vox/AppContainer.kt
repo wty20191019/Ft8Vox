@@ -14,7 +14,11 @@ import com.example.ft8vox.data.settings.SettingsRepository
  */
 class AppContainer(context: Context) {
     val settings: SettingsRepository = SettingsRepository(context)
-    val qso: QsoRepository = QsoRepository(AppDatabase.get(context).qsoDao())
+
+    /** Room 数据库单例；仓库需要它来把 ADIF 批量导入包进一个事务。 */
+    private val db: AppDatabase = AppDatabase.get(context)
+
+    val qso: QsoRepository = QsoRepository(db.qsoDao(), db)
 }
 
 /** 应用入口：持有全局依赖容器。 */

@@ -13,7 +13,12 @@ package com.example.ft8vox.engine
 data class DecodeParams(
     /** Costas 同步最低得分，越高候选越少、越快，漏解风险越大。 */
     val minScore: Int = 10,
-    /** 单时隙候选上限。 */
+    /**
+     * **整个频谱**的候选上限（名额不属于任何一段，见 [globalCandidates]）。
+     *
+     * 分段并行时默认按「按段均分」分配：总名额均分到各段；打开「候选全局择优」
+     * 开关后改由全频谱统一排序取前 N。
+     */
     val maxCandidates: Int = 120,
     /** LDPC 最大迭代次数，越高越慢但弱信号解码率更高。 */
     val ldpcIterations: Int = 20,
@@ -26,6 +31,18 @@ data class DecodeParams(
      * 把被强信号压住的弱信号挖出来；趟数每加一趟解码耗时约合再乘一次。
      */
     val passes: Int = 2,
+    /**
+     * 候选名额的分配口径（仅频率分段并行时有意义）：
+     * - `false`（默认）：**按段均分** —— 总名额均分到各段，某段配额用尽就不再收了。
+     *   各段负载天然均衡、耗时更稳，也是加这个开关之前的历史行为。
+     * - `true`：**全局择优** —— 名额不属于任何一段，跨段去重（同一信号最多留 3 个代表）
+     *   后按同步得分全局排序取前 N，再按所属段分发解码；每个 SIC 趟都重做。
+     *   名额越紧、频段越拥挤，多解出的弱台越多（语料实测 20 名额 +2.1pp），
+     *   代价是名额向拥挤段聚集、段内单线程时耗时约 ×1.8（默认名额下则只有 +0.4pp）。
+     *
+     * 属策略开关（设置页「候选全局择优」），不是「快」预设的数值项。
+     */
+    val globalCandidates: Boolean = false,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {
@@ -43,18 +60,20 @@ data class DecodeParams(
             ldpcIterations: Int,
             maxDecoded: Int,
             passes: Int = 2,
+            globalCandidates: Boolean = false,
         ): DecodeParams = DecodeParams(
             minScore = minScore.coerceIn(MIN_SCORE_RANGE),
             maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
             ldpcIterations = ldpcIterations.coerceIn(LDPC_RANGE),
             maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
             passes = passes.coerceIn(PASSES_RANGE),
+            globalCandidates = globalCandidates,
         )
     }
 
-    /** 钳制到安全范围。 */
+    /** 钳制到安全范围（布尔开关无需钳制，原样传递）。 */
     fun clamped(): DecodeParams =
-        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes)
+        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes, globalCandidates)
 }
 
 /**
@@ -67,3 +86,57 @@ data class DecodeParams(
 internal fun decodeBandsFor(cores: Int): Int = cores.coerceIn(1, 4)
 
 internal fun decodeThreadsFor(cores: Int): Int = cores.coerceIn(1, 8)
+
+/** native `ft8api.c` 分段并行用的常量：改 native 必须同步这里（单测会卡住漂移）。 */
+internal const val BAND_MIN_WIDTH_HZ = 200.0
+
+/** native `FT8_MAX_BANDS`。 */
+internal const val MAX_BANDS = 8
+
+/**
+ * 解码并行度：**频率分段数 × 每段线程数**（= 线程总预算）。
+ *
+ * 全部按 CPU 核数自适应、**没有设置项**，这里只是把 native `ft8_decode_slot` 的分支规则
+ * 照抄一遍给界面显示用（顶栏读数 + 设置页「解码并行」一行）。段数还受总带宽限制
+ * （单段最小 [BAND_MIN_WIDTH_HZ]、最多 [MAX_BANDS] 段），所以把频率范围收窄到 400 Hz
+ * 以内时实际会退化成 1 段（不分段）。
+ */
+data class DecodeParallel(
+    /** 频率分段数；1 = 不分段（走 `decode_slot_single`）。 */
+    val bands: Int,
+    /** 每段的解码线程数。 */
+    val threadsPerBand: Int,
+    /** 线程总预算（= [decodeThreadsFor]）。 */
+    val totalThreads: Int,
+) {
+    /** 顶栏读数紧凑文案：`4段×2`；不分段时 `8线程`。 */
+    val shortLabel: String
+        get() = if (bands <= 1) "${totalThreads}线程" else "${bands}段×${threadsPerBand}"
+
+    /** 设置页完整文案：`4 段 × 2 线程 = 8`；不分段时 `1 段 × 8 线程`。 */
+    val label: String
+        get() = if (bands <= 1) "1 段 × $totalThreads 线程"
+        else "$bands 段 × $threadsPerBand 线程 = $totalThreads"
+
+    /** 「候选上限」按段均分后每段拿到的名额（余数给低频段，故各段最多差 1）。 */
+    fun candidatesPerBand(totalCap: Int): Int =
+        if (bands <= 1) totalCap else (totalCap / bands).coerceAtLeast(1)
+}
+
+/**
+ * 由频率范围 + CPU 核数推算解码并行度（分支顺序照 native `ft8_decode_slot`）。
+ *
+ * native 先按带宽钳段数（[BAND_MIN_WIDTH_HZ] / [MAX_BANDS]），再判「不足 2 段」退回单段；
+ * 单段时线程预算整份用在候选并行上。
+ */
+fun decodeParallelism(fMinHz: Int, fMaxHz: Int, cores: Int): DecodeParallel {
+    val totalThreads = decodeThreadsFor(cores)
+    val span = (fMaxHz - fMinHz).toDouble()
+    if (span <= 1.0) return DecodeParallel(1, totalThreads, totalThreads)
+    var bands = decodeBandsFor(cores)
+    val maxBySpan = (span / BAND_MIN_WIDTH_HZ).toInt().coerceAtLeast(1)
+    if (bands > maxBySpan) bands = maxBySpan
+    if (bands > MAX_BANDS) bands = MAX_BANDS
+    if (bands < 2) return DecodeParallel(1, totalThreads, totalThreads)
+    return DecodeParallel(bands, (totalThreads / bands).coerceAtLeast(1), totalThreads)
+}

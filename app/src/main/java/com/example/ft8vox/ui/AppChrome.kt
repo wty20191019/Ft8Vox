@@ -60,7 +60,9 @@ import androidx.compose.ui.unit.sp
 import com.example.ft8vox.data.BandPlan
 import com.example.ft8vox.data.QsoTime
 import com.example.ft8vox.data.settings.AppSettings
+import com.example.ft8vox.data.settings.SLOT_OFFSET_LIMIT_MS
 import com.example.ft8vox.engine.AudioDevices
+import com.example.ft8vox.engine.DecodeParallel
 import com.example.ft8vox.engine.DecodeResult
 import com.example.ft8vox.qso.MessageParser
 import com.example.ft8vox.qso.TxCompose
@@ -106,12 +108,108 @@ fun decodesPerMinute(messages: List<DecodeResult>, nowMs: Long): Int =
 fun timeSyncWarning(latestDt: Float?): String? =
     if (latestDt != null && abs(latestDt) >= 1.5f) "时间不同步" else null
 
+// ---- 一键校准（平均 DT → 时隙偏移）----
+
+/** 「一键校准」所需的最少样本数：样本太少时个别偏差会把平均值带偏。 */
+const val DT_CALIBRATION_MIN_SAMPLES = 3
+
+/** 「一键校准」的统计窗口长度：只取最近这么多条解码的 DT。 */
+const val DT_CALIBRATION_WINDOW = 20
+
+/**
+ * 「平均 DT」（ms，四舍五入）：样本少于 [DT_CALIBRATION_MIN_SAMPLES] 时返回 null（不提示）。
+ *
+ * 单位故意用 ms、与「时隙偏移」一致，因为两者可直接互换：设本机时钟误差为 `e`、时隙偏移为
+ * `off`，则 `DT = e − off`（推导见 docs/Ft8Vox.md §5.4），所以**把平均 DT 原样填进偏移**
+ * 就能把 DT 校到 0 —— 也就一并说明了为什么这里的符号与设置页「+1.5s 就填 +1500 ms」一致。
+ */
+fun avgDtMs(samples: List<Float>): Int? {
+    if (samples.size < DT_CALIBRATION_MIN_SAMPLES) return null
+    val mean = samples.sum().toDouble() / samples.size
+    return Math.round(mean * 1000.0).toInt()
+}
+
+/** 把「平均 DT」换算成「时隙偏移」设置值（ms，夹到 ±[SLOT_OFFSET_LIMIT_MS]）。 */
+fun slotOffsetFromDtMs(dtMs: Int): Int =
+    dtMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+
+/** 「时隙偏移」输入框的初始文本（带号：`+1500` / `-1500` / `0`）。 */
+fun slotOffsetInputText(ms: Int): String = if (ms >= 0) "+$ms" else "$ms"
+
+/**
+ * 把「时隙偏移」输入框里的文本解析成毫秒（**只收整数毫秒**，非法 → null）。
+ *
+ * 放宽输入、收紧语义：
+ * - 去掉所有空白（含全角空格 / 不换行空格）；
+ * - 全角 `＋` `－` 与减号 `−` 归一成半角（中文输入法下很容易打出来）；
+ * - 允许前导 `+` / `-`，其余必须**全是数字**；
+ * - **不接受小数**：`1.5` 是非法输入、不是 1500 ms —— 单位固定毫秒，避免
+ *   「填 1500 到底是秒还是毫秒」的歧义（要 1.5 s 就填 1500）；
+ * - 数字长到 `Long` 装不下（>19 位）当非法（那种输入显然不是想调偏移）。
+ *
+ * 超出 ±[SLOT_OFFSET_LIMIT_MS] 的值**夹到边界**而不是报错：与设置读写层的 `coerceIn` 同口径，
+ * 且 FT8 时隙只有 15 s，填 `99999` 的意图显然是「顶到上限」。
+ */
+fun parseSlotOffsetInput(raw: String): Int? {
+    val t = raw
+        .map {
+            when (it) {
+                '\uFF0B' -> '+'   // 全角 ＋
+                '\uFF0D' -> '-'   // 全角 －
+                '\u2212' -> '-'   // 数学减号 −
+                else -> it
+            }
+        }
+        .filterNot { it.isWhitespace() }
+        .joinToString("")
+    if (t.isEmpty()) return null
+    val neg = t[0] == '-'
+    val digits = if (t[0] == '+' || t[0] == '-') t.substring(1) else t
+    if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return null
+    val v = digits.toLongOrNull() ?: return null
+    val signed = if (neg) -v else v
+    return signed.coerceIn(-SLOT_OFFSET_LIMIT_MS.toLong(), SLOT_OFFSET_LIMIT_MS.toLong()).toInt()
+}
+
+/**
+ * 信息头「一键校准」按钮文案（`校准 +1.5s·12`＝平均 +1.5 s、12 条样本）。
+ *
+ * [avgMs] 为 null（样本不足）时返回 null，调用方保持原来的「时间同步」/红字告警。
+ */
+fun dtCalibrationLabel(avgMs: Int?, samples: Int): String? =
+    avgMs?.let { String.format(Locale.US, "校准 %+.1fs·%d", it / 1000.0, samples) }
+
+/**
+ * 「一键校准」按钮（操作页 / 频谱页共用）。
+ *
+ * [label] 由 [dtCalibrationLabel] 生成；点击＝把平均 DT 原样填进「时隙偏移」。
+ * 用小号字 + 强调色，避免与旁边的控制按钮（监听 / 清除 / 跟踪）抢注意力。
+ */
+@Composable
+fun DtCalibrationChip(label: String, modifier: Modifier = Modifier, onApply: () -> Unit) {
+    JtdxButton(
+        text = label,
+        onClick = onApply,
+        modifier = modifier,
+        accent = JtdxValue,
+        textStyle = MaterialTheme.typography.labelSmall,
+    )
+}
+
 /**
  * 信息头「解码耗时」文案（`解码 118ms`）。纯显示用：调「解码深度」时看计算量代价。
  * 未开始接收或还没解码过（0）时返回 null（不占位）。
  */
 fun decodeTimeLabel(lastDecodeMs: Long, running: Boolean): String? =
     if (running && lastDecodeMs > 0L) "解码 ${lastDecodeMs}ms" else null
+
+/**
+ * 顶栏读数行「解码并行度」文案（`4段×2`＝4 个频率段 × 每段 2 线程；不分段时 `8线程`）。
+ *
+ * 并行度按 CPU 核数与频率范围自动决定、**没有设置项**（见 `decodeParallelism`），所以这里
+ * 只是如实展示；和「解码 118ms」放一起看「并行度 / 耗时」。null 时整项不占位。
+ */
+fun decodeParallelLabel(parallel: DecodeParallel?): String? = parallel?.shortLabel
 
 /** 状态条「电平」文案：输入电平（dBFS）。 */
 internal fun voxLabel(levelDb: Float, running: Boolean): String {
@@ -204,6 +302,8 @@ fun MobileInfoHeader(
     onBandFreq: (String, Long) -> Unit,
     onTxEnabledChange: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
+    /** 解码并行度（按 CPU 核数 + 频率范围自适应）；顶栏读数行展示，见 [decodeParallelLabel]。 */
+    decodeParallel: DecodeParallel? = null,
     modifier: Modifier = Modifier,
 ) {
     val dialHz = status.dialHz.takeIf { it > 0 } ?: BandPlan.resolveDialHz(status.band, 0L)
@@ -334,6 +434,7 @@ fun MobileInfoHeader(
             JtdxCaption("总$decodedTotal")
             JtdxCaption("QSO$qsoCount")
             JtdxCaption("队列$queueCount")
+            decodeParallelLabel(decodeParallel)?.let { JtdxCaption(it) }
             Spacer(Modifier.weight(1f))
             val syncWarning = timeSyncWarning(messages.firstOrNull()?.dt)
             if (syncWarning != null) {
@@ -659,7 +760,7 @@ fun AudioQuickPanel(status: ReceiverStatus, appSettings: AppSettings) {
         Text("VOX", style = MaterialTheme.typography.titleSmall)
         Text("输入电平  ${if (!status.running) "--" else if (status.voxLevelDb <= -99.5f) "--" else "${status.voxLevelDb.toInt()} dB"}", style = MaterialTheme.typography.labelSmall)
         Text(
-            "前导  静音 ${appSettings.pttDelayMs} ms + 单音 ${if (appSettings.txLeadTone) "${appSettings.txLeadToneMs} ms" else "关"}",
+            "前导  静音 ${appSettings.txPreambleMs} ms",
             style = MaterialTheme.typography.labelSmall,
         )
     }

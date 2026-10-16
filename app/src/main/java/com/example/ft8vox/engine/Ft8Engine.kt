@@ -161,6 +161,7 @@ object Ft8Engine {
             numThreads = decodeThreadsFor(cores),
             osdDepth = 2,
             numBands = decodeBandsFor(cores),
+            globalCandidates = p.globalCandidates,
         )
     }
 

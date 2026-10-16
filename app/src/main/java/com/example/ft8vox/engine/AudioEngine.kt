@@ -23,18 +23,6 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * PTT 配置（U7b）。
- *
- * 无 CAT 时 App 无法控制电台 PTT，只能通过发射音频序列间接键控：
- * [pttDelayMs] 前导静音 + [leadToneMs] 前导音先让电台 VOX 动作，
- * 随后 FT8 数据落在时隙起点。
- */
-data class VoxConfig(
-    val pttDelayMs: Int = 0,
-    val leadToneMs: Int = 0,
-)
-
 /** 实时音频引擎的状态快照（字段与旧 native 引擎保持一致）。 */
 data class AudioState(
     /** 采集流是否在运行。 */
@@ -76,7 +64,7 @@ data class AudioState(
  * 麦克风(48k/float) → 重采样 12k ─┬→ 按时隙累积 → 时隙结束拷一份
  *                                 │      → 后台线程 Ft8Native.decodeSlot → pollDecoded() 拉取
  *                                 └→ STFT（2048 点 Hann，80 ms/行）→ pollWaterfall() 拉取
- * Ft8Native.encode → playTx(前导静音 + 前导音 + 波形) → AudioTrack
+ * Ft8Native.encode → playTx(静音前导 + 波形) → AudioTrack
  * ```
  *
  * 接口契约尽量与旧 native 版保持一致，便于上层（SessionViewModel）无感替换。
@@ -93,6 +81,9 @@ object AudioEngine {
 
     /** 单时隙解码采样数。 */
     private const val SLOT_SAMPLES = DECODE_RATE * SLOT_MS / 1000
+
+    /** 测试音的数字幅度（留约 2 dB 余量，避免削顶）。 */
+    private const val TONE_AMPLITUDE = 0.8f
 
     @Volatile
     private var engine: RealtimeEngine? = null
@@ -163,18 +154,19 @@ object AudioEngine {
     /** 播放一段 12 kHz PCM（内部按输出采样率重采样），返回写入的 12k 采样数。 */
     fun play(pcm: FloatArray): Int = engine?.play(pcm) ?: -1
 
-    /** 播放发射 PCM，带 PTT 前导静音与发射前导音；返回写入的 12k 采样数。 */
-    fun playTx(pcm: FloatArray, pttSilenceMs: Int = 0, leadToneMs: Int = 0): Int =
-        engine?.playTx(pcm, pttSilenceMs, leadToneMs) ?: -1
+    /**
+     * 播放发射 PCM，数据前插入一段**等长静音前导**（不出声、不键控电台）；
+     * 返回写入的 12k 采样数。
+     *
+     * @param preambleMs 前导时长（ms）：让播放流提前起流 / 预填缓冲，避免起流延迟削掉波形起点；
+     *   报文仍落在时隙起点
+     */
+    fun playTx(pcm: FloatArray, preambleMs: Int = 0): Int =
+        engine?.playTx(pcm, preambleMs) ?: -1
 
     /** 播放一段测试单音，返回写入的 12k 采样数。 */
     fun playTone(freqHz: Int = 1000, durationMs: Int = 2000): Int =
         engine?.playTone(freqHz, durationMs) ?: -1
-
-    /** 下发 PTT 配置（热生效）。 */
-    fun setVox(config: VoxConfig) {
-        engine?.setVox(config)
-    }
 
     /** 下发采集增益（热生效，dB）。 */
     fun setInputGain(gainDb: Int) {
@@ -216,14 +208,20 @@ object AudioEngine {
         @Volatile
         private var slotOffsetMs: Int = 0
 
+        /**
+         * 「偏移已变，需重新对齐」请求（见 [setSlotOffsetMs]）。
+         *
+         * 采集窗口网格是按采样计数固定推进的，改 [slotOffsetMs] 只改字段不会挪网格，
+         * 所以由主线程置位、采集线程在下一块样本处重新 [armAlignment]。
+         */
+        @Volatile
+        private var realignRequested = false
+
         @Volatile
         private var inputGain: Float = 1f
 
         @Volatile
         private var outputGain: Float = 1f
-
-        @Volatile
-        private var vox: VoxConfig = VoxConfig()
 
         private val decodeConfig = Ft8DecodeConfig(
             fMinHz = config.fMin,
@@ -300,10 +298,6 @@ object AudioEngine {
             decodeParams = p
         }
 
-        fun setVox(cfg: VoxConfig) {
-            vox = cfg
-        }
-
         fun setInputGain(gainDb: Int) {
             inputGain = dbToLinear(gainDb)
         }
@@ -312,8 +306,21 @@ object AudioEngine {
             outputGain = dbToLinear(clampOutputGainDb(gainDb))
         }
 
+        /**
+         * 热更新时隙偏移（正 = 推后）。
+         *
+         * 采集窗口的网格是**按 12 kHz 采样计数固定推进**的（见 [onSamples] 里的
+         * `slotStartMs += SLOT_MS`），所以只改字段并不会挪动网格 —— 曾经必须停止 / 重开接收
+         * 才会生效。这里改为置一个「要求重排对齐」标志，由采集线程在下一块样本处
+         * 重新 [armAlignment]（丢弃到**新网格的下一个边界**再开始累积），因此改完偏移
+         * 最迟在一个时隙内生效。
+         */
         fun setSlotOffsetMs(offsetMs: Int) {
-            this.slotOffsetMs = offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+            val next = offsetMs.coerceIn(-SLOT_OFFSET_LIMIT_MS, SLOT_OFFSET_LIMIT_MS)
+            if (next == slotOffsetMs) return
+            slotOffsetMs = next
+            // 未在采集时不必请求：startCapture 会按新偏移重新对齐。
+            if (running) realignRequested = true
         }
 
         fun state(): AudioState = AudioState(
@@ -386,6 +393,8 @@ object AudioEngine {
             // 否则 48 kHz 设备会把待丢弃样本数放大 4 倍，导致解码窗口停在随机相位、
             // 且之后一直保持该错位（表现为「有电平、有解码耗时，却一条都解不出」）。
             armAlignment()
+            // 建流时已按当前偏移对齐，清掉停止前可能残留的重排请求。
+            realignRequested = false
             droppedSamples = 0
             voxLevelDb = -100f
             diagBlocks = 0L
@@ -589,6 +598,11 @@ object AudioEngine {
 
         /** 处理一段「设备采样率」的原始样本：增益 → 电平 → 重采样 → 时隙累积。 */
         private fun onSamples(input: FloatArray, n: Int) {
+            // 时隙偏移被改动：立即按新网格重新对齐（丢弃到下一个边界再累积），无需停止采集。
+            if (realignRequested) {
+                realignRequested = false
+                armAlignment()
+            }
             // 输入增益 + 电平
             var sumSq = 0.0
             val g = inputGain
@@ -734,6 +748,7 @@ object AudioEngine {
                 returnDuplicates = false,
                 osdDepth = 2,
                 numBands = decodeBandsFor(cores),
+                globalCandidates = p.globalCandidates,
             )
         }
 
@@ -826,19 +841,14 @@ object AudioEngine {
 
         fun play(pcm: FloatArray): Int = writeSamples(pcm, abortAware = false, returned = pcm.size)
 
-        fun playTx(pcm: FloatArray, pttSilenceMs: Int, leadToneMs: Int): Int {
+        /** 数据前拼一段等长静音前导（不出声；让播放流提前起流，不削波形起点）。 */
+        fun playTx(pcm: FloatArray, preambleMs: Int): Int {
             // 注意：**不要**在这里清 abortRequested。清标志必须等拿到 writeLock（见 writeSamples），
             // 否则会把对「上一段正在写的音频」的作废提前撤销，导致它继续整条播完。
-            val ptt = msToSamples(pttSilenceMs)
-            val lead = msToSamples(leadToneMs)
-            val total = FloatArray(ptt + lead + pcm.size)
-            // 前导音：约 1000 Hz 正弦（键控 VOX）
-            if (lead > 0) {
-                for (i in 0 until lead) {
-                    total[ptt + i] = sin(2.0 * PI * 1000.0 * i / DECODE_RATE).toFloat() * 0.8f
-                }
-            }
-            System.arraycopy(pcm, 0, total, ptt + lead, pcm.size)
+            val pre = msToSamples(preambleMs)
+            // FloatArray 初值即 0f，前导段天然是静音
+            val total = FloatArray(pre + pcm.size)
+            System.arraycopy(pcm, 0, total, pre, pcm.size)
             val written = writeSamples(total, abortAware = true, returned = pcm.size)
             // 播放尾部收尾（写 0 让缓冲播放完）不在阻塞路径里做，调用方只关心数据是否播出
             return written
@@ -849,7 +859,7 @@ object AudioEngine {
             val n = msToSamples(durationMs)
             val tone = FloatArray(n)
             for (i in 0 until n) {
-                tone[i] = sin(2.0 * PI * freqHz * i / DECODE_RATE).toFloat() * 0.8f
+                tone[i] = sin(2.0 * PI * freqHz * i / DECODE_RATE).toFloat() * TONE_AMPLITUDE
             }
             return writeSamples(tone, abortAware = true, returned = n)
         }

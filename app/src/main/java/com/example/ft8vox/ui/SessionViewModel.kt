@@ -24,7 +24,6 @@ import com.example.ft8vox.engine.Diag
 import com.example.ft8vox.engine.Ft8Config
 import com.example.ft8vox.engine.Ft8Engine
 import com.example.ft8vox.engine.Protocol
-import com.example.ft8vox.engine.VoxConfig
 import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.AutoAction
 import com.example.ft8vox.qso.AutoProgramSettings
@@ -90,6 +89,14 @@ data class ReceiverStatus(
     val decodedTotal: Long = 0,
     /** 最近一次解码耗时（ms，0=还没解码过）；顶栏「解码 nms」，用于调解码深度参数。 */
     val lastDecodeMs: Long = 0,
+    /**
+     * 最近解码的平均 DT（ms，见 [avgDtMs]）；null＝样本不足，顶栏不显示「一键校准」。
+     */
+    val avgDtMs: Int? = null,
+    /** 参与 [avgDtMs] 的样本条数（滚动窗口内）。 */
+    val dtSamples: Int = 0,
+    /** 当前生效的时隙偏移（ms）：顶栏「偏移」读数 + 一键校准的落点。 */
+    val slotOffsetMs: Int = 0,
     val selectedFreqHz: Int = 1000,
     // ---- 台站（来自设置） ----
     val myCall: String = "",
@@ -214,10 +221,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * **当前波段**已通联呼号（键＝波段名大写），照 FT8CN `checkQSLCallsign`
      * （`DatabaseOpr.GetAllQSLCallsign` 的 `where band=?`）。
      *
-     * 只用于**自动程序**的「已通联」判据（CQ 台是否纳入候选）；界面高亮与
-     * 「已通联」筛选仍用跨波段的 [_worked]。
+     * 自动程序的「已通联」判据、以及界面高亮的「本波段＝删除线 / 其它波段＝蓝字」都由它派生。
      */
     private var workedCallsByBand: Map<String, Set<String>> = emptyMap()
+
+    private val _workedThisBand = MutableStateFlow<Set<String>>(emptySet())
+
+    /** **当前波段**已通联呼号（大写）：解码表「本波段已通联＝删除线」（照 FT8CN `checkQSLCallsign`）。 */
+    val workedThisBand: StateFlow<Set<String>> = _workedThisBand.asStateFlow()
+
+    private val _workedOtherBands = MutableStateFlow<Set<String>>(emptySet())
+
+    /** **仅其它波段**已通联呼号（大写）：解码表「其它波段已通联＝蓝字」（FT8CN `checkQSLCallsign_OtherBand`）。 */
+    val workedOtherBands: StateFlow<Set<String>> = _workedOtherBands.asStateFlow()
 
     private val qsoEngine = QsoEngine()
 
@@ -303,9 +319,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** 最近一次下发给 native 的解码参数，避免设置流每次发射都重复下发。 */
     private var lastDecodeParams = DecodeParams()
 
-    /** 最近一次下发给 native 的 VOX/PTT 配置；引擎重建后置空以强制重下发。 */
-    private var lastVoxConfig: VoxConfig? = null
-
     /** 最近一次下发给 native 的采集增益（dB），U7c。 */
     private var lastInputGainDb: Int? = null
 
@@ -320,6 +333,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 最近一次下发给 native 的时隙偏移（ms，U7「发射偏移」）。 */
     private var lastSlotOffsetMs: Int? = null
+
+    /**
+     * 「一键校准」用的 DT 滚动窗口（最近 [DT_CALIBRATION_WINDOW] 条解码的 DT，秒）。
+     *
+     * 用跨时隙的滑动窗口而不是「本时隙平均」：单时隙条数忽多忽少（拥挤波段 20+、安静时 1~2 条），
+     * 取最近 20 条更稳，也天然满足 [DT_CALIBRATION_MIN_SAMPLES] 的样本要求。
+     */
+    private val dtWindow = ArrayDeque<Float>()
 
     /** 发射频率（红线）拖动期间的落盘防抖任务（见 [setTxFreq]）。 */
     private var txFreqPersistJob: Job? = null
@@ -367,6 +388,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                         rows.mapNotNull { it.theirCall.trim().uppercase().takeIf { c -> c.isNotEmpty() } }
                             .toSet()
                     }
+                refreshWorkedBands()
             }
         }
         // 通知栏「停止接收」（阶段 9）：服务只转发请求，真正停会话/放引擎仍由本类负责
@@ -397,6 +419,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 这里先保留当前值，随后 [restartForProtocol] 会重建引擎切到 s.protocol
                 protocol = if (cur.running) cur.protocol else s.protocol,
                 slotMs = if (cur.running) cur.slotMs else s.protocol.slotMs,
+                slotOffsetMs = s.slotOffsetMs,
             )
         }
         // 运行中改协议 → 重建引擎（接收短暂中断）
@@ -406,7 +429,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit)
         scheduler.configure(s.auto, s.myCall)
         applyDecodeParams(s)
-        applyVox(s)
         applyAudio(s)
         applySlotOffset(s)
     }
@@ -418,23 +440,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         lastDecodeParams = p
         if (_status.value.running) AudioEngine.setDecodeParams(p)
     }
-
-    /**
-     * 把 PTT 配置下发给 native（热生效）。
-     * 引擎未初始化时 [AudioEngine.setVox] 为无操作；[start] 会用 force 重下发一次。
-     */
-    private fun applyVox(s: AppSettings, force: Boolean = false) {
-        val cfg = voxConfigOf(s)
-        if (!force && cfg == lastVoxConfig) return
-        lastVoxConfig = cfg
-        AudioEngine.setVox(cfg)
-    }
-
-    /** 由设置组装 native 的 PTT 配置。 */
-    private fun voxConfigOf(s: AppSettings): VoxConfig = VoxConfig(
-        pttDelayMs = s.pttDelayMs,
-        leadToneMs = if (s.txLeadTone) s.txLeadToneMs else 0,
-    )
 
     /**
      * 下发音频路由/增益（U7c）。
@@ -482,7 +487,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 下发时隙偏移（热生效，U7「发射偏移」）。
      *
      * 影响 native 的采集窗口起点（= 解码 DT 的基准），发射起点由 [planTx] 用同一值平移。
-     * 改在时隙中途时，当前时隙的窗口会错位到下一个网格点生效，属预期。
+     * 改在时隙中途时，采集线程会在下一块样本处重新对齐到**新网格的下一个边界**，
+     * 因此最迟一个时隙内生效，不必停止（见 [AudioEngine.setSlotOffsetMs]）。
      */
     private fun applySlotOffset(s: AppSettings, force: Boolean = false) {
         if (!force && s.slotOffsetMs == lastSlotOffsetMs) return
@@ -492,6 +498,36 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun persist(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepo.update(transform) }
+    }
+
+    // ---- 一键校准（B：平均 DT → 时隙偏移）----
+
+    /**
+     * 记录本批解码的 DT，刷新顶栏「平均 DT」读数（见 [avgDtMs]）。
+     *
+     * 只收「有意义」的样本：离线解码（`slotUtcMs == 0`，非实时采集来的）跳过 —— 它没有对齐到
+     * 本机时隙网格，参进平均只会把校准值带偏。
+     */
+    private fun recordDtSamples(decoded: List<DecodeResult>) {
+        val fresh = decoded.filter { it.slotUtcMs > 0L }
+        if (fresh.isEmpty()) return
+        for (m in fresh) dtWindow.addLast(m.dt)
+        while (dtWindow.size > DT_CALIBRATION_WINDOW) dtWindow.removeFirst()
+        val avg = avgDtMs(dtWindow.toList())
+        _status.update { it.copy(avgDtMs = avg, dtSamples = dtWindow.size) }
+    }
+
+    /**
+     * 「一键校准」：把最近解码的平均 DT **原样**写进「时隙偏移」（热生效，最迟一个时隙内生效）。
+     *
+     * 免去「看一眼 DT → 进设置页 → 手填 → 回来再猜」的来回。符号与设置页一致：
+     * `DT = 本机时钟误差 − 偏移`，所以填入平均 DT 后 DT 应趋近 0（推导见 docs/Ft8Vox.md §5.4）。
+     * 样本不足（见 [avgDtMs]）时静默不动 —— 顶栏此时也不会显示按钮。
+     */
+    fun fillSlotOffsetFromAvgDt() {
+        val dtMs = avgDtMs(dtWindow.toList()) ?: return
+        val off = slotOffsetFromDtMs(dtMs)
+        persist { it.copy(slotOffsetMs = off) }
     }
 
     // ---- 配置 ----
@@ -638,6 +674,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (n != _status.value.band) sessionSavedCalls.clear()
         _status.update { it.copy(band = n, dialHz = resolved) }
         persist { it.copy(band = n, dialHz = resolved) }
+        refreshWorkedBands()
     }
 
     /** 仅切波段（沿用该波段默认频率）。 */
@@ -764,6 +801,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     fun clearMessages() {
         _messages.value = emptyList()
         _txRecords.value = emptyList()
+        // 一键校准的样本也一起清掉：列表都清了，平均 DT 再留着会与眼前看到的对不上
+        dtWindow.clear()
+        _status.update { it.copy(avgDtMs = null, dtSamples = 0) }
     }
 
     // ---- 我方发射记录（接收列表的 TX 行，docs/Ft8Vox.md） ----
@@ -866,8 +906,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         wfPixels = IntArray(0)
         _waterfall.value = null
 
-        // 引擎刚重建：强制把 VOX/PTT 配置下发给新实例
-        applyVox(latestSettings, force = true)
+        // 引擎刚重建：强制把音频配置下发给新实例
         applyAudio(latestSettings, force = true)
         applySlotOffset(latestSettings, force = true)
 
@@ -879,12 +918,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        dtWindow.clear()
         _status.update {
             it.copy(
                 running = true,
                 inputRate = rate,
                 status = "接收中（设备采样率 $rate Hz）",
                 decodedTotal = 0,
+                avgDtMs = null,
+                dtSamples = 0,
             )
         }
         startPolling()
@@ -1167,7 +1209,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (!armPlayback()) return
 
         abortTransmit()   // 作废可能正在响的那一段（非阻塞）
-        val (pttMs, leadMs) = txPreambleParts()
+        val preambleMs = txPreambleMs()
         val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1177,7 +1219,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // TX 行（§37）：「立即发」不对齐时隙，用当前 UTC 当作时间轴上的位置。
                 val recId = beginTxRecord(trimmed, AudioEngine.utcNowMs())
                 _status.update { it.copy(txing = true, lastTxText = trimmed, lastTxSlotMs = 0) }
-                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
+                val written = AudioEngine.playTx(pcm, preambleMs)
                 if (abortAtPlan == txAbortGen && written > 0) {
                     finishTxRecord(recId)
                 } else {
@@ -1255,7 +1297,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             else "CQ TEST"
         if (!armPlayback()) return
         abortTransmit()   // 作废可能正在响的那一段（非阻塞）
-        val (pttMs, leadMs) = txPreambleParts()
+        val preambleMs = txPreambleMs()
         val genAtPlan = engineGen
         val abortAtPlan = txAbortGen
         txJob = viewModelScope.launch(Dispatchers.IO) {
@@ -1264,7 +1306,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val pcm = Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
                 if (abortAtPlan != txAbortGen) return@launch   // 期间被「停止发射」：丢弃
                 _status.update { it.copy(txing = true) }
-                val written = AudioEngine.playTx(pcm, pttMs, leadMs)
+                val written = AudioEngine.playTx(pcm, preambleMs)
                 _status.update {
                     it.copy(
                         status = if (written > 0) "已发射测试「$text」（$written 帧）"
@@ -1343,6 +1385,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (decoded.isNotEmpty()) {
             _messages.update { current -> (decoded + current).take(ACTIVITY_LIMIT) }
             _status.update { it.copy(decodedTotal = it.decodedTotal + decoded.size) }
+            recordDtSamples(decoded)
             pendingDecodes.addAll(decoded)
             // 「自动跟踪 CQ（本波段）」：把本批新解到的本波段未通联 CQ 呼号并入跟踪名单
             autoCollectCqToFollow(decoded)
@@ -1537,6 +1580,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val bandKey = st.band.trim().uppercase()
             workedCallsByBand = workedCallsByBand +
                 (bandKey to (workedCallsByBand[bandKey].orEmpty() + key))
+            refreshWorkedBands()
             // 「跟踪的呼号通联完成后取消跟踪」：本段通联已落库，无需再盯这个台
             // （名单与自动收录顺序一并移除；幂等）
             val wasFollowed = key in latestSettings.followCalls
@@ -1719,6 +1763,24 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         workedCallsByBand[band.trim().uppercase()].orEmpty()
 
     /**
+     * 重算「本波段 / 其它波段」两份已通联呼号（供解码表高亮）。
+     *
+     * 照 FT8CN：`checkQSLCallsign`（`where band=?`）＝本波段 → 删除线；
+     * `checkQSLCallsign_OtherBand`（`where band<>?`）＝其它波段 → 蓝字。
+     * 任何改变 [_status].band 或 [workedCallsByBand] 的地方都要调一次。
+     */
+    private fun refreshWorkedBands() {
+        val band = _status.value.band.trim().uppercase()
+        val thisBand = workedCallsByBand[band].orEmpty()
+        _workedThisBand.value = thisBand
+        _workedOtherBands.value = workedCallsByBand
+            .filterKeys { it != band }
+            .values
+            .flatten()
+            .toSet() - thisBand
+    }
+
+    /**
      * 自动程序用的已通联索引：**只含当前波段**。
      *
      * 照 FT8CN `checkQSLCallsign`（按 band 过滤）——跨波段通联过的 CQ 台在本波段仍会作为候选
@@ -1811,7 +1873,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         val now = AudioEngine.utcNowMs()
 
-        // 前导（PTT 静音 + 发射前导音）：需要提前 preamble 启动播放，数据才落在时隙起点
+        // 前导（等长静音）：需要提前 preamble 启动播放，数据才落在时隙起点
         val preambleMs = txPreambleMs().toLong()
         val plan = planTx(
             now, slotMs, st.txParity, preambleMs,
@@ -1882,16 +1944,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 设置里的完整前导组成：PTT 前导静音与发射前导音（ms）。 */
-    private fun txPreambleParts(): Pair<Int, Int> {
-        val s = latestSettings
-        val ptt = s.pttDelayMs.coerceAtLeast(0)
-        val lead = if (s.txLeadTone) s.txLeadToneMs.coerceAtLeast(0) else 0
-        return ptt to lead
-    }
-
-    /** 本次发射的完整前导时长（ms）。 */
-    private fun txPreambleMs(): Int = latestSettings.txPreambleMs
+    /** 本次发射的前导时长（ms）＝设置里的前导时长（等长静音 / 纯发射延时）。 */
+    private fun txPreambleMs(): Int = latestSettings.txPreambleMs.coerceAtLeast(0)
 
     /**
      * 阻塞式播放一段发射波形（调用线程为 IO，不阻塞 UI 与轮询）。
@@ -1911,16 +1965,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         abortAtPlan: Int,
     ) {
         val st = _status.value
-        val (pttMs, leadMs) = txPreambleParts()
-        // 缩水后的前导：优先保证前导音（键控 VOX），剩余给前导静音
-        val eff = preambleMs.coerceAtLeast(0L)
-        val effLead = minOf(leadMs.toLong(), eff).toInt()
-        val effPtt = minOf(pttMs.toLong(), eff - effLead).toInt()
+        // 迟到缩水：整段前导（静音）按迟到量一起缩短，保数据对齐时隙起点
+        val eff = preambleMs.coerceAtLeast(0L).toInt()
 
         if (genAtPlan != engineGen || abortAtPlan != txAbortGen) return
-        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+        Log.i(TAG_QSO, "transmit：text=$text slotStart=$slotStartMs preamble=$eff " +
             "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
-        Diag.line("transmit：text=$text slotStart=$slotStartMs ptt=$effPtt lead=$effLead " +
+        Diag.line("transmit：text=$text slotStart=$slotStartMs preamble=$eff " +
             "freq=${st.selectedFreqHz} gen=$genAtPlan/$engineGen abort=$abortAtPlan/$txAbortGen")
         val pcm = try {
             Ft8Engine.encode(text, st.selectedFreqHz.toFloat(), st.protocol, 12000)
@@ -1939,7 +1990,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // TX 行「一开播就出现」：先记账，再开始阻塞式播放（docs/Ft8Vox.md）。
             val recId = beginTxRecord(text, slotStartMs)
             _status.update { it.copy(txing = true, lastTxText = text, lastTxSlotMs = slotStartMs) }
-            val written = AudioEngine.playTx(pcm, effPtt, effLead)
+            val written = AudioEngine.playTx(pcm, eff)
             Log.i(TAG_QSO, "transmit：playTx 返回 written=$written")
             Diag.line("transmit：playTx 返回 written=$written")
             // 仍是当前有效的那一次、且确实写进了声卡 → 算「已播完」；否则（被作废 / 写入失败）标「未发完」。
@@ -2015,17 +2066,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 播放测试单音（设置页「测试音」）。采集未启动时会先自动启动以获得输出流。
      * 独立于 QSO 发射，不武装 TX。
+     *
+     * @param freqHz 单音频率；≤0 表示用当前发射频率（与真正发出去的那个音一致）
      */
-    fun playTestTone(freqHz: Int = 1000, durationMs: Int = 2000) {
+    fun playTestTone(freqHz: Int = 0, durationMs: Int = 2000) {
         if (!_status.value.running) start()
         if (!_status.value.running) {
             _status.update { it.copy(status = "测试音失败：音频未启动") }
             return
         }
         if (!armPlayback()) return
+        val hz = if (freqHz > 0) freqHz else _status.value.selectedFreqHz
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val written = AudioEngine.playTone(freqHz, durationMs)
+                val written = AudioEngine.playTone(hz, durationMs)
                 _status.update {
                     it.copy(
                         status = if (written > 0) "已播放测试音（$written 帧）"

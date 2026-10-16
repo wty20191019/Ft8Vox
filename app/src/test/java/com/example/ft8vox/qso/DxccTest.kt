@@ -63,11 +63,29 @@ class DxccTest {
 
     @Test
     fun returnsNullForUnrecognized() {
-        assertNull(Dxcc.resolve("ZZ9ZZZ"))
+        // QQ 未被分配给任何实体（ITU 把 Q 段留给 Q 简码），故仍应返回 null
+        assertNull(Dxcc.resolve("QQ9QQQ"))
         assertNull(Dxcc.resolve("HELLO"))
         assertNull(Dxcc.resolve(""))
         assertNull(Dxcc.resolve(null))
         assertNull(Dxcc.resolve("123"))
+    }
+
+    @Test
+    fun resolvesCorpusDerivedCallAreas() {
+        // 语料回测（ft8_w/test 的 1298 条期望报文）暴露出来的缺失呼号区
+        assertEquals("沙特", Dxcc.resolve("7Z1AL")?.name)
+        assertEquals("德国", Dxcc.resolve("DM2DLG")?.name)
+        assertEquals("比利时", Dxcc.resolve("OR7EG")?.name)
+        assertEquals("瑞典", Dxcc.resolve("SA0BYP")?.name)
+        assertEquals("瑞典", Dxcc.resolve("SB7W")?.name)
+        assertEquals("苏格兰", Dxcc.resolve("2M0OGG")?.name)
+        assertEquals("圣多美和普林西比", Dxcc.resolve("S9CT")?.name)
+        assertEquals("巴西", Dxcc.resolve("ZY50Y")?.name)
+        assertEquals("菲律宾", Dxcc.resolve("4F3OM")?.name)
+        assertEquals("波兰", Dxcc.resolve("HF19NY")?.name)
+        assertEquals("纳米比亚", Dxcc.resolve("V51MA")?.name)
+        assertEquals("联合国", Dxcc.resolve("4U1A")?.name)
     }
 
     @Test

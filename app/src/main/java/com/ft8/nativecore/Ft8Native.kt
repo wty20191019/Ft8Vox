@@ -51,6 +51,8 @@ data class Ft8DecodeConfig(
     var osdDepth: Int = 2,
     var enableLlrRefine: Boolean = false,
     var numBands: Int = 1,
+    /** 候选上限按「按段均分」分配（false，默认）还是按「全频谱全局择优」分配（true）。 */
+    var globalCandidates: Boolean = false,
 ) {
     fun toFloatArray(): FloatArray = floatArrayOf(
         fMinHz, fMaxHz, sampleRate.toFloat(), timeOsr.toFloat(), freqOsr.toFloat(),
@@ -58,7 +60,7 @@ data class Ft8DecodeConfig(
         decodeDepth.toFloat(), apMode.toFloat(), if (enableSubtract) 1f else 0f,
         numThreads.toFloat(), if (returnDuplicates) 1f else 0f,
         osdDepth.toFloat(), if (enableLlrRefine) 1f else 0f,
-        numBands.toFloat()
+        numBands.toFloat(), if (globalCandidates) 1f else 0f
     )
 }
 
