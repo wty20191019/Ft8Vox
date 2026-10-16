@@ -46,6 +46,45 @@ enum class QsoState {
  */
 enum class QsoPhase { IDLE, CQ, QSO, FINISHING }
 
+/**
+ * **我方下一条要发的报文序号**（FT8CN `functionOrder`）的显式枚举。
+ *
+ * 取代原先的 `order: Int` 魔法值：报文渲染（[QsoEngine] 的 `render`）、对外状态同步
+ * （`syncState`）、角色推断（`roleOf`）现在**全部按它分支**，新增一步不会再「漏改一处 `when`」。
+ * 序号数值仍由 [QsoProgress.order] 对外暴露（兼容 UI 与单测）。
+ */
+enum class QsoStep(val order: Int) {
+    /** 无（空闲 / 已结束）。 */
+    NONE(0),
+
+    /** 1 网格：应答对方的 CQ。 */
+    GRID(1),
+
+    /** 2 报告：`<对方> <我> <±dd>`。 */
+    REPORT(2),
+
+    /** 3 R 报告：`<对方> <我> R<±dd>`。 */
+    ROGER(3),
+
+    /** 4 RR73：收尾（落库）。 */
+    RR73(4),
+
+    /** 5 73：收尾（落库）。 */
+    FINAL_73(5),
+
+    /** 6 CQ：主叫。 */
+    CQ(6),
+    ;
+
+    companion object {
+        /** 按 FT8CN 的序号数值取枚举；未知值回退 [NONE]。 */
+        fun of(order: Int): QsoStep = entries.firstOrNull { it.order == order } ?: NONE
+
+        /** 「我的序号 ＝ 对方序号 + 1」（唯一一条转移规则）。 */
+        fun replyTo(theirOrder: Int): QsoStep = of(theirOrder + 1)
+    }
+}
+
 /** 一次完成的通联记录（由 `SessionViewModel` 持久化到 ADIF / Room）。 */
 data class QsoLogEntry(
     val theirCall: String,
@@ -233,8 +272,8 @@ class QsoEngine {
 
     private var role = QsoRole.NONE
     private var state = QsoState.IDLE
-    /** FT8CN `functionOrder`：**我下一条要发的报文序号**（0＝无）。 */
-    private var order = 0
+    /** 我方下一条要发的报文序号（显式状态，见 [QsoStep]）。 */
+    private var step: QsoStep = QsoStep.NONE
     private var theirCall: String? = null
     private var theirGrid: String? = null
     /** 我发给对方的报告（FT8CN `toCallsign.snr`）：进入序号 2 / 3 时算一次，之后不刷新。 */
@@ -314,7 +353,7 @@ class QsoEngine {
         reportSent = reportSent,
         reportReceived = reportReceived,
         txText = txText,
-        order = order,
+        order = step.order,
         noReplyCount = noReplyCount,
         awaitingResponders = awaitingResponders,
         advanced = lastAdvanced,
@@ -351,7 +390,7 @@ class QsoEngine {
             if (sentText == null || txText == null || sentText == txText) txText = null
         }
         // 收尾报文真正发出即落库（发的是旧报文时不算：那条还没轮到我方的收尾序号）
-        if (order == 4 || order == 5) {
+        if (step == QsoStep.RR73 || step == QsoStep.FINAL_73) {
             finish(utcMs, 0L)
         }
     }
@@ -370,7 +409,7 @@ class QsoEngine {
         role = QsoRole.CALLER
         awaitingResponders = true
         cqModifier = cqPrefix.trim().uppercase()
-        setOrder(FunctionOrder.CQ)
+        setOrder(QsoStep.CQ)
         return progress()
     }
 
@@ -538,12 +577,12 @@ class QsoEngine {
         // 「对方开始呼别人」是独立信号，仍只在序号 4（发出 RR73 后）判定：
         // 序号 1~3 时对方重发 CQ 只是没抄到我，属正常重试，靠上面的无回应计数兜底。
         val giveUpByNoReply =
-            (order in 1 until FunctionOrder.CQ && noReplyExceeded) ||
-                (order == 4 && targetCallingOthers(messages, them))
+            (step != QsoStep.NONE && step != QsoStep.CQ && noReplyExceeded) ||
+                (step == QsoStep.RR73 && targetCallingOthers(messages, them))
         if (newOrder == 5 || giveUpByNoReply) {
             finish(utcMs, hit?.slotUtcMs ?: 0L)
             gaveUp = giveUpByNoReply
-            order = 0
+            step = QsoStep.NONE
             txText = null
             state = QsoState.DONE
             lastAdvanced = newOrder != FunctionOrder.NONE
@@ -554,13 +593,12 @@ class QsoEngine {
             // 照 FT8CN `:857-860`：对方第一次回复（序号 1 / 2）时复位目标报告、重建报文表。
             // 本机没有报文表；报告值本身**不刷新**（照 FT8CN 取的是首次测到的强度）。
             if (newOrder == 1 || newOrder == 2) reportReceived = reportReceived ?: hitParsed?.report
-            val next = newOrder + 1
             // 报告值：只在**第一次推进**时按触发报文的 SNR 取一次（照 FT8CN `toCallsign.snr`：
             // 定下这台时测到的强度，QSO 内不再刷新）。正常流程里 `start*` 已带 SNR，
             // 这里只兜住「开始时不带 SNR」的路径（如人工从半路接手）。
             if (reportSent == null) reportSent = reportFromSnr(hit?.snr ?: 0)
             lastAdvanced = true
-            setOrder(next, utcMs, hit?.slotUtcMs ?: 0L)
+            setOrder(QsoStep.replyTo(newOrder), utcMs, hit?.slotUtcMs ?: 0L)
             return progress()
         }
 
@@ -765,7 +803,7 @@ class QsoEngine {
         theirGrid = grid?.trim()?.uppercase()?.ifEmpty { null }
         reportSent = sentReport
         reportReceived = receivedReport
-        setOrder(newOrder, utcMs)
+        setOrder(QsoStep.of(newOrder), utcMs)
         return progress()
     }
 
@@ -773,53 +811,52 @@ class QsoEngine {
      * 设定**我方要发的报文序号**（照 FT8CN `setCurrentFunctionOrder` `:542`）：
      * 渲染报文、同步对外状态；序号 4 / 5（发出 RR73 / 73）即落库。
      */
-    private fun setOrder(newOrder: Int, utcMs: Long = 0L, slotUtcMs: Long = 0L) {
-        order = newOrder
-        role = roleOfOrder(newOrder) ?: role
+    private fun setOrder(newStep: QsoStep, utcMs: Long = 0L, slotUtcMs: Long = 0L) {
+        step = newStep
+        role = roleOf(newStep) ?: role
         render()
         syncState()
-        if (order == 4 || order == 5) finish(utcMs, slotUtcMs)
+        if (step == QsoStep.RR73 || step == QsoStep.FINAL_73) finish(utcMs, slotUtcMs)
     }
 
     /** 序号隐含的角色（只供 UI；4 / 5 沿用进入时的角色）。 */
-    private fun roleOfOrder(o: Int): QsoRole? = when (o) {
-        1, 3 -> QsoRole.RESPONDER
-        2, 6 -> QsoRole.CALLER
+    private fun roleOf(s: QsoStep): QsoRole? = when (s) {
+        QsoStep.GRID, QsoStep.ROGER -> QsoRole.RESPONDER
+        QsoStep.REPORT, QsoStep.CQ -> QsoRole.CALLER
         else -> null
     }
 
-    /** 依据 [order] 渲染当前应发报文到 [txText]（照 FT8CN `getFunctionCommand`）。 */
+    /** 依据 [step] 渲染当前应发报文到 [txText]（照 FT8CN `getFunctionCommand`）。 */
     private fun render() {
         val them = theirCall
-        txText = when (order) {
-            0 -> null
-            1 -> if (them == null) null
+        txText = when (step) {
+            QsoStep.NONE -> null
+            QsoStep.GRID -> if (them == null) null
             else listOf(them, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
-            2 -> if (them == null || reportSent == null) null
+            QsoStep.REPORT -> if (them == null || reportSent == null) null
             else "$them $myCall ${MessageParser.formatReport(reportSent!!)}"
-            3 -> if (them == null || reportSent == null) null
+            QsoStep.ROGER -> if (them == null || reportSent == null) null
             else "$them $myCall R${MessageParser.formatReport(reportSent!!)}"
-            4 -> if (them == null) null else "$them $myCall RR73"
-            5 -> if (them == null) null else "$them $myCall 73"
-            6 -> listOf("CQ", cqModifier, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
-            else -> null
+            QsoStep.RR73 -> if (them == null) null else "$them $myCall RR73"
+            QsoStep.FINAL_73 -> if (them == null) null else "$them $myCall 73"
+            QsoStep.CQ -> listOf("CQ", cqModifier, myCall, myGrid).filter { it.isNotEmpty() }.joinToString(" ")
         }
     }
 
     /**
-     * 依 [order] 同步对外状态。
+     * 依 [step] 同步对外状态。
      *
      * 注意：[QsoState.FAILED] 已无来源（旧的 `retryLimit` 重试体系已退役）；保留该枚举值仅
      * 为兼容 UI，异常 / 中止一律走 [stop]（回到 IDLE）。
      */
     private fun syncState() {
-        state = when (order) {
-            4 -> QsoState.WAIT_FINAL
-            5 -> QsoState.DONE
-            2 -> QsoState.WAIT_REPORT
-            3 -> QsoState.WAIT_RR73
-            1, 6 -> QsoState.WAIT_REPLY
-            else -> if (role != QsoRole.NONE) QsoState.WAIT_REPLY else QsoState.IDLE
+        state = when (step) {
+            QsoStep.RR73 -> QsoState.WAIT_FINAL
+            QsoStep.FINAL_73 -> QsoState.DONE
+            QsoStep.REPORT -> QsoState.WAIT_REPORT
+            QsoStep.ROGER -> QsoState.WAIT_RR73
+            QsoStep.GRID, QsoStep.CQ -> QsoState.WAIT_REPLY
+            QsoStep.NONE -> if (role != QsoRole.NONE) QsoState.WAIT_REPLY else QsoState.IDLE
         }
     }
 
@@ -853,7 +890,7 @@ class QsoEngine {
     private fun reset() {
         role = QsoRole.NONE
         state = QsoState.IDLE
-        order = 0
+        step = QsoStep.NONE
         theirCall = null
         theirGrid = null
         reportSent = null
