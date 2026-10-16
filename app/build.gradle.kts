@@ -29,6 +29,10 @@ android {
 
     buildTypes {
         release {
+            // 自己真机试 release 表现：直接复用 debug 密钥签名 —— 零配置、能覆盖安装。
+            // 代价：换电脑或清过 ~/.android 后密钥就变了，那时要先卸载再装（不能覆盖）。
+            // 将来要分发时换成专用 release 密钥库（keystore.properties + 加进 .gitignore）。
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
                 enable = false
             }
