@@ -410,6 +410,9 @@ QSO 自动系统只有**一个**状态机（`qso/QsoEngine.kt`），会话此刻
 选台分类是**无状态纯函数** `AutoProgramSelector`（`qso/AutoProgram.kt`），由状态机调用；
 发射时隙对齐 / 音频播放属于**执行层**，留在 `ui/SessionViewModel.kt`。
 
+「我下一条要发的报文序号」在代码里也是**显式枚举** `QsoStep`（不再是 `order: Int` 魔法值）；
+报文渲染、状态同步、角色推断都按它分支，对外的 `QsoProgress.order` 由它派生。
+
 > 改造前，状态被拆成三份（`QsoEngine` 的序号 / `AutoScheduler` 的队列与监管 /
 > `SessionViewModel` 的 `pendingAutoFinish` 等标志），靠跨层时序约定同步、易出 bug；
 > 现已合一，背景与不变式见 `docs/QsoStateMachine.md`。

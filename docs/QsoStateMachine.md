@@ -60,22 +60,30 @@ when (qsoEngine.phase) {
 ### 2.1 转移图（会话级）
 
 ```
-IDLE ──总开关开──────────────► CQ（发 CQ）
-IDLE ──解码有定向候选─────────► QSO（应答）      ← 「一定应答」最高优先
+IDLE ──总开关开───────────────► CQ（发 CQ）
+IDLE ──解码有定向候选──────────► QSO（应答）      ← 「一定应答」最高优先
 IDLE ──解码有 CQ 候选 && 允许──► QSO
-IDLE ──解码无候选─────────────► CQ
-CQ   ──解码有回应者───────────► QSO
-CQ   ──(每周期)───────────────► CQ               ← 重发 CQ，永不放弃主叫
-QSO  ──对手推进───────────────► QSO(序号+1)
+IDLE ──解码无候选──────────────► CQ
+CQ   ──解码有回应者────────────► QSO
+CQ   ──(每周期)────────────────► CQ              ← 重发 CQ，永不放弃主叫
+QSO  ──对手推进───────────────► QSO(序号 +1)     ← 收到对方 n → 我方 n+1
 QSO  ──对手沉默 && 有别的定向──► QSO(换台)
-QSO  ──收到 73 / 兜底判据─────► FINISHING
-QSO  ──收到对方 R 报告─────────► FINISHING(落库，等 73)
-FINISHING ──收尾报文发出─────► IDLE / CQ          ← 队列空则回 CQ
-任意 ──监管超时───────────────► IDLE(总开关关)
+QSO  ──收到对方 RR73(4)────────► FINISHING(我方序号 5：回 73，待发)
+QSO  ──收到对方 73(5)──────────► IDLE(完成，无待发)
+QSO  ──兜底判据(无回应/转呼别人)─► IDLE(gaveUp，无待发)
+FINISHING ──收尾报文发出──────► IDLE / CQ         ← 队列空则回 CQ
+任意 ──监管超时────────────────► IDLE(总开关关)
 ```
 
 **核心收益**：`pendingAutoFinish` 这条跨层补丁消失 —— 「收尾报文还没发」就是显式阶段 `FINISHING`，
 `onTransmitted(收尾)` 之后才离开它。VM 不再需要「什么时候通知第 2 层」的时序约定。
+
+### 2.2 内部序号也是显式的（`QsoStep`）
+
+「我下一条要发的报文序号」不再是 `order: Int`，而是 `enum class QsoStep`
+（`NONE` / `GRID` / `REPORT` / `ROGER` / `RR73` / `FINAL_73` / `CQ`）。报文渲染、对外状态同步、
+角色推断三处 `when` 现在都收敛到同一个枚举上——新增一步不会再漏改一处。唯一转移规则仍是
+`QsoStep.replyTo(对方序号) = of(对方序号 + 1)`；对外的 `QsoProgress.order` 由它派生，数值不变。
 
 ---
 
@@ -94,11 +102,18 @@ FINISHING ──收尾报文发出─────► IDLE / CQ          ← 队�
 
 - 回归安全网：`QsoEngineTest`（681 行）原样通过；`AutoProgramTest` 的调度器断言语义等价
   （仅把 `AutoScheduler().onDecoded` 改为 `QsoEngine().onIdleBatch`）。
-- `./gradlew :app:testDebugUnitTest` 全绿。
+- 新增 `QsoPhaseTest`：显式钉住会话阶段转移（空闲 / 主叫 / 跑 QSO / 收尾待发 / 收尾完成）。
+- `./gradlew :app:testDebugUnitTest` 全绿（478 个用例）。
 
 ---
 
-## 5. 后续（可选）
+## 5. 改造清单（4 个阶段，均已落地）
 
-- 把 `order:Int` 进一步换成 `enum class QsoStep`（纯内部整理，收益有限）；
-- 给 `QsoPhase` 补一组显式阶段转移单测（当前由 `QsoEngineTest` 间接覆盖）。
+| 阶段 | 内容 | 说明 |
+| --- | --- | --- |
+| 1 | `QsoEngine` 内部 `order:Int` → 显式 `QsoStep` 枚举 | 新增一步不再漏改 `when` |
+| 2 | `AutoScheduler` 并入 `QsoEngine`，新增显式阶段 `QsoPhase` | 三层合一 |
+| 3 | `SessionViewModel` 按 `phase` 分支，`pendingAutoFinish` 移除 | 跨层补丁消失 |
+| 4 | 删除旧门面（`AutoScheduler`）、补 `QsoPhaseTest`、文档同步 | 收尾 |
+
+剩余可做（收益有限）：把 `QsoPhase` / `QsoStep` 抽到独立子包，用更强约束（如密封接口 + 转移表）进一步固化。
