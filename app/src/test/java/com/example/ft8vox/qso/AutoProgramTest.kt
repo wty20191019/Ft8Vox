@@ -26,8 +26,9 @@ class AutoProgramTest {
         settings: AutoProgramSettings = program,
         myCall: String = "F4FSY",
         nowMs: Long = 1_000L,
-    ): AutoScheduler = AutoScheduler().apply {
-        configure(settings, myCall)
+    ): QsoEngine = QsoEngine().apply {
+        // 会话级状态机已并入 QsoEngine（见 docs/QsoStateMachine.md）
+        configure(myCall, "", 0, settings)
         enable(nowMs)
     }
 
@@ -201,18 +202,18 @@ class AutoProgramTest {
         assertEquals(listOf("JA1ABC", "W1AW", "K1XYZ"), ranked.map { it.call })
     }
 
-    // ---- 调度：onDecoded ----
+    // ---- 调度：onIdleBatch ----
 
     @Test
     fun noCandidatesFallsBackToSendCq() {
         val s = scheduler()
-        assertEquals(AutoAction.SendCq, s.onDecoded(emptyList(), utcNowMs = 1_000L))
+        assertEquals(AutoAction.SendCq, s.onIdleBatch(emptyList(), utcNowMs = 1_000L))
     }
 
     @Test
     fun answersBestCqWhenBothSwitchesOn() {
         val s = scheduler()
-        val action = s.onDecoded(
+        val action = s.onIdleBatch(
             listOf(decoded("CQ W1AW FN42")),
             utcNowMs = 1_000L,
         )
@@ -225,7 +226,7 @@ class AutoProgramTest {
         val s = scheduler(program.copy(autoCallFollow = false))
         assertEquals(
             AutoAction.SendCq,
-            s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
+            s.onIdleBatch(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
         )
     }
 
@@ -235,7 +236,7 @@ class AutoProgramTest {
         val s = scheduler(program.copy(autoAddCqToFollow = false))
         assertEquals(
             AutoAction.SendCq,
-            s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
+            s.onIdleBatch(listOf(decoded("CQ W1AW FN42")), utcNowMs = 1_000L),
         )
     }
 
@@ -243,7 +244,7 @@ class AutoProgramTest {
     fun followedCqIsExceptionToAutoFollowCqSwitch() {
         // 照 FT8CN：关掉「自动跟踪 CQ」，但该台在跟踪名单里 → 仍自动呼叫
         val s = scheduler(program.copy(autoAddCqToFollow = false))
-        val action = s.onDecoded(
+        val action = s.onIdleBatch(
             listOf(decoded("CQ W1AW FN42")),
             filter = DecodeFilterState(followedCalls = setOf("W1AW")),
             utcNowMs = 1_000L,
@@ -255,7 +256,7 @@ class AutoProgramTest {
     @Test
     fun directedMessageWinsAndIsQueued() {
         val s = scheduler()
-        val action = s.onDecoded(
+        val action = s.onIdleBatch(
             listOf(
                 decoded("CQ W1AW FN42"),
                 decoded("F4FSY DL1ABC -12"),
@@ -273,7 +274,7 @@ class AutoProgramTest {
     fun queuedDirectedTargetsDrainAfterQso() {
         val s = scheduler()
         // 同一批两个定向：第一个立即处理，第二个进队列
-        s.onDecoded(
+        s.onIdleBatch(
             listOf(
                 decoded("F4FSY DL1ABC -12"),
                 decoded("F4FSY OK1ABC R-05"),
@@ -360,11 +361,11 @@ class AutoProgramTest {
         val limitMs = 1_000L + 5 * 60_000L
         // 未到点：无动作
         assertNull(s.checkSupervision(limitMs - 1))
-        val action = s.onDecoded(emptyList(), utcNowMs = limitMs)
+        val action = s.onIdleBatch(emptyList(), utcNowMs = limitMs)
         assertTrue(action is AutoAction.Stop)
         // 触发后进入保护停止：不再产出动作
         s.markProtectedStop()
-        assertEquals(AutoAction.None, s.onDecoded(listOf(decoded("CQ W1AW FN42")), utcNowMs = limitMs))
+        assertEquals(AutoAction.None, s.onIdleBatch(listOf(decoded("CQ W1AW FN42")), utcNowMs = limitMs))
     }
 
     @Test
@@ -377,7 +378,7 @@ class AutoProgramTest {
     fun resetSupervisionClearsProtectedStop() {
         val s = scheduler(program.copy(supervisionMinutes = 5), nowMs = 1_000L)
         val limitMs = 1_000L + 5 * 60_000L
-        assertTrue(s.onDecoded(emptyList(), utcNowMs = limitMs) is AutoAction.Stop)
+        assertTrue(s.onIdleBatch(emptyList(), utcNowMs = limitMs) is AutoAction.Stop)
         s.markProtectedStop()
         assertTrue(s.isProtectedStop())
         s.resetSupervision(limitMs)

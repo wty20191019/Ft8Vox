@@ -28,7 +28,7 @@ import com.example.ft8vox.engine.WaterfallInfo
 import com.example.ft8vox.qso.AutoAction
 import com.example.ft8vox.qso.AutoProgramSettings
 import com.example.ft8vox.qso.AutoProgramSelector
-import com.example.ft8vox.qso.AutoScheduler
+import com.example.ft8vox.qso.QsoPhase
 import com.example.ft8vox.qso.AutoTarget
 import com.example.ft8vox.qso.AutoTargetKind
 import com.example.ft8vox.qso.CQ_PREFIX_SLOTS
@@ -139,7 +139,7 @@ data class ReceiverStatus(
     val autoProgram: AutoProgramSettings = AutoProgramSettings(),
     /** 自动程序状态文案（发送总开关关闭时为 null）。 */
     val autoPhaseLabel: String? = null,
-    /** 第 2 层定向呼叫队列长度（等待逐个完成的回应者）。 */
+    /** 状态机定向呼叫队列长度（等待逐个完成的回应者）。 */
     val autoQueueSize: Int = 0,
     /** 待发的一次性报文（长按解码行选择；发完即清空）。 */
     val manualTxText: String? = null,
@@ -235,6 +235,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     /** **仅其它波段**已通联呼号（大写）：解码表「其它波段已通联＝蓝字」（FT8CN `checkQSLCallsign_OtherBand`）。 */
     val workedOtherBands: StateFlow<Set<String>> = _workedOtherBands.asStateFlow()
 
+    /**
+     * 唯一的会话级 QSO 状态机（`qso/QsoEngine.kt`）：一段 QSO 的序号推进、选台 / 定向队列 /
+     * 发射监管、以及「收尾报文待发」的显式阶段（[QsoPhase.FINISHING]）都在这里，见
+     * `docs/QsoStateMachine.md`。
+     */
     private val qsoEngine = QsoEngine()
 
     private var pollJob: Job? = null
@@ -276,17 +281,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * QSO 结束或「取消目标」时只解除固定，发射周期本身保持不变。
      */
     private var pinnedTxParity: Int? = null
-
-    /** 第 2 层自动程序调度器（定向队列 / S&P 选台 / 发射监管）。 */
-    private val scheduler = AutoScheduler()
-
-    /**
-     * QSO 已完成、但最后一条（RR73/73）还没发出去。
-     *
-     * 发完这条后在 [txTick] 里通知第 2 层，避免下一个动作覆盖掉状态机导致收尾报文丢失；
-     * 期间 `pollOnce` 也不让第 2 层启动新 QSO（见那里的「收尾报文待发」分支）。
-     */
-    private var pendingAutoFinish = false
 
     /**
      * 最近一次**已处理**的解码所属时隙序号（native `lastDecodedSlot`；与 `planTx` 的
@@ -426,8 +420,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (_status.value.running && s.protocol != _status.value.protocol) {
             restartForProtocol(s.protocol)
         }
-        qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit)
-        scheduler.configure(s.auto, s.myCall)
+        qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit, s.auto)
         applyDecodeParams(s)
         applyAudio(s)
         applySlotOffset(s)
@@ -708,7 +701,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
-        scheduler.enable(AudioEngine.utcNowMs())
+        qsoEngine.enable(AudioEngine.utcNowMs())
         relockAutoParityIfNeeded()
         val p = _status.value.txParity
         _status.update {
@@ -716,7 +709,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 txEnabled = true,
                 txParity = p,
                 autoPhaseLabel = autoPhaseText(),
-                autoQueueSize = scheduler.queuedCount(),
+                autoQueueSize = qsoEngine.queuedCount(),
                 status = "发送已开启（允许发射，${parityLabel(p)}）",
             )
         }
@@ -936,7 +929,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         stopTransmit()
-        scheduler.disable()
+        qsoEngine.disable()
         sessionSavedCalls.clear()
         stopPollingAndJoin()
         pinnedTxParity = null
@@ -1007,7 +1000,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 人工操作**不暂停**自动程序（FT8CN 模型），只是把发射指令改掉并复位发射监管计时。
      */
     fun startCq() {
-        scheduler.resetSupervision(AudioEngine.utcNowMs())
+        qsoEngine.resetSupervision(AudioEngine.utcNowMs())
         startCqInternal()
     }
 
@@ -1044,7 +1037,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      *   真机现象就是发射中左滑「呼叫」停不下来（ANR）、还把新报文发进本应接收的时隙。
      */
     fun answer(call: String, grid: String?, theirDf: Int? = null, slotUtcMs: Long = 0L) {
-        scheduler.resetSupervision(AudioEngine.utcNowMs())
+        qsoEngine.resetSupervision(AudioEngine.utcNowMs())
         answerInternal(call, grid, theirDf, slotUtcMs)
     }
 
@@ -1103,7 +1096,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 见那里的说明）。人工操作不暂停自动程序，只复位发射监管计时。
      */
     fun sendOnce(text: String) {
-        scheduler.resetSupervision(AudioEngine.utcNowMs())
+        qsoEngine.resetSupervision(AudioEngine.utcNowMs())
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         txBlockReason(_status.value.myCall, _status.value.txEnabled)?.let {
@@ -1251,7 +1244,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun stopTransmit() {
         abortTransmit()
-        pendingAutoFinish = false
         autoParity = null
         val p = qsoEngine.stop()
         _status.update {
@@ -1262,7 +1254,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 qso = p,
                 txCountdownMs = 0,
                 autoPhaseLabel = if (it.txEnabled) autoPhaseText() else null,
-                autoQueueSize = if (it.txEnabled) scheduler.queuedCount() else 0,
+                autoQueueSize = if (it.txEnabled) qsoEngine.queuedCount() else 0,
                 status = if (it.txEnabled) {
                     "已停止发射｜自动程序仍开启（要全停请关「发送总开关」）"
                 } else {
@@ -1455,15 +1447,26 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 发射监管（方案 §3.5）：每个接收批次都检查一次（含正在进行的 QSO 与仅自听批次）；
                 // 触发即关闭「发送总开关」，避免对静默伙伴无限重试而跑死。
                 val supervisionReason =
-                    if (st.txEnabled) scheduler.checkSupervision(s.utcNowMs) else null
+                    if (st.txEnabled) qsoEngine.checkSupervision(s.utcNowMs) else null
                 if (supervisionReason != null) {
                     stopAutoBySupervision(supervisionReason)
                 } else if (!onlyOwnTx) {
-                    if (st.qso.active) {
-                        if (st.qso.awaitingResponders) {
-                            // 第 2 层「已发 CQ、等回应者」阶段：解码交给调度器收集/排序回应者
-                            runAutoProgram(incoming, s.utcNowMs)
-                        } else {
+                    // 会话阶段是显式的（[QsoPhase]）：只按这一个值分支，
+                    // 不再自行组合 active / awaitingResponders / txText 三个标志。
+                    when (qsoEngine.phase) {
+                        // 「已发 CQ、等回应者」：解码交给选台逻辑收集/排序回应者
+                        QsoPhase.CQ -> runAutoProgram(incoming, s.utcNowMs)
+                        QsoPhase.IDLE ->
+                            // 空闲（无进行中 QSO、也无收尾报文待发）：交给自动程序决定「应答 / 发 CQ」
+                            if (st.txEnabled) runAutoProgram(incoming, s.utcNowMs)
+                        QsoPhase.FINISHING ->
+                            // 「QSO 已结束、收尾报文（RR73/73）还没真正发出去」：本时隙不启动新 QSO，
+                            // 否则 startCq/应答会 reset 引擎并把 qso.txText 覆盖成 CQ，这条收尾报文
+                            // 就永远发不出去了（真机现象：对方给我 RR73，我没回 73）。
+                            if (st.txEnabled) {
+                                Log.i(TAG_QSO, "收尾报文待发 ${st.qso.txText}：本时隙不启动新 QSO")
+                            }
+                        QsoPhase.QSO -> {
                             // 「无回应」只在对方**可能回我的那个周期**计数：对方只在我们不发射的
                             // 相反周期发报，所以我方发射时隙的批（自听 / 空批）不计，免得每周期数两次。
                             val decodedParity = (((s.lastDecodedSlot % 2) + 2) % 2).toInt()
@@ -1479,7 +1482,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                             // FT8CN `checkCQMeOrFollowCQMessage` 循环 2：当前目标本批沉默时，
                             // 也要应答「其他呼叫我方」的定向台（避免忙起来就漏应答）。
                             val takeover = if (p.active && !p.advanced && _status.value.txEnabled) {
-                                scheduler.directedTakeover(
+                                qsoEngine.directedTakeover(
                                     incoming,
                                     p.theirCall,
                                     currentFilter(),
@@ -1491,19 +1494,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                             if (takeover != null) {
                                 Log.i(TAG_QSO, "听到其他定向呼叫 → 换台 ${takeover.call}（${takeover.kind}）")
                                 startAutoTarget(takeover)
-                            } else {
-                                // 本批没有其他定向呼叫；「无回应 / 对方转呼别人」的兜底判据
-                                // 已在 QsoEngine 内（照 FT8CN 的 5 路完成判据）判定并收尾，
-                                // 收尾动作由 applyQsoProgress 按 p.gaveUp 派发。
                             }
+                            // 本批没有其他定向呼叫；「无回应 / 对方转呼别人」的兜底判据
+                            // 已在 QsoEngine 内（照 FT8CN 的 5 路完成判据）判定并收尾，
+                            // 收尾动作由 applyQsoProgress 按 p.gaveUp 派发。
                         }
-                    } else if (st.txEnabled && st.qso.txText == null) {
-                        runAutoProgram(incoming, s.utcNowMs)
-                    } else if (st.txEnabled) {
-                        // 「QSO 已结束、收尾报文（RR73/73）还没真正发出去」：本时隙不启动新 QSO，
-                        // 否则 startCq/应答会 reset 引擎并把 qso.txText 覆盖成 CQ，这条收尾报文
-                        // 就永远发不出去了（真机现象：对方给我 RR73，我没回 73）。
-                        Log.i(TAG_QSO, "收尾报文待发 ${st.qso.txText}：本时隙不启动新 QSO")
                     }
                 }
             }
@@ -1520,14 +1515,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 把状态机进度同步到 UI 状态、写入日志，并收口第 2 层调度。
+     * 把状态机进度同步到 UI 状态、写入日志，并收口会话状态机。
      *
      * QSO 结束时（成功/作废）：
-     * - 还有最后一条 RR73/73 要发 → 置 [pendingAutoFinish]，等它**真正发出去**后在 [txTick]
-     *   里收口；期间第 2 层既不会 `onQsoFinished`，`pollOnce` 也不会启动新 QSO —— 否则
+     * - 还有最后一条 RR73/73 要发 → 进入显式阶段 [QsoPhase.FINISHING]，等它**真正发出去**后在 [txTick]
+     *   里收口；期间状态机既不会 `onQsoFinished`，`pollOnce` 也不会启动新 QSO —— 否则
      *   `startCq` 会 reset 引擎把这条收尾报文覆盖掉（真机现象：收到 RR73 不回 73）。
-     * - 没有收尾报文 → 立刻通知第 2 层（[AutoScheduler.onQsoFinished]）决定下一步。
-     * - 发送总开关关闭时不通知第 2 层（自动程序已停）。
+     * - 没有收尾报文 → 立刻通知状态机（[QsoEngine.onQsoFinished]）决定下一步。
+     * - 发送总开关关闭时不通知状态机（自动程序已停）。
      *
      * 落库：**会话内同一呼号只写一条**（收到 73/RR73 立即落库、不弹确认、不关 TX），
      * 完成即写「已通联」索引（方案 §4.2 / §4.4）。
@@ -1605,23 +1600,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // 照 FT8CN 的兜底判据收尾（发过 RR73 后对方消失 / 转呼别人）→ **优先换台**，
             // 没有可换的台才回 CQ（FT8CN `getNewTargetCallsign`）。
             p.gaveUp -> runAutoAction(
-                scheduler.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
+                qsoEngine.onTargetGaveUp(incoming, currentFilter(), workedForAutoProgram(), utcNowMs),
             )
-            // 没有收尾报文：立刻让第 2 层决定下一步
-            p.txText == null -> runAutoAction(scheduler.onQsoFinished(utcNowMs))
-            // 还有 RR73/73 要发：发完再收口（见 txTick）
-            else -> pendingAutoFinish = true
+            // 没有收尾报文：立刻让状态机决定下一步
+            p.txText == null -> runAutoAction(qsoEngine.onQsoFinished(utcNowMs))
+            // 还有 RR73/73 要发 → 处于 [QsoPhase.FINISHING]：发完再收口（见 txTick），此处不动作
+            else -> Unit
         }
     }
 
     /**
-     * 第 2 层：在「无进行中 QSO」或「已发 CQ 等回应者」时，把本时隙解码交给调度器，
+     * 空闲 / 等回应者阶段：把本时隙解码交给状态机选台，
      * 并按返回的动作执行（发 CQ / 应答 CQ / 处理定向报文 / 发射监管停止）。
      */
     private fun runAutoProgram(batch: List<DecodeResult>, utcNowMs: Long) {
         val st = _status.value
         if (!st.txEnabled) return
-        val action = scheduler.onDecoded(
+        val action = qsoEngine.onIdleBatch(
             messages = batch,
             filter = currentFilter(),
             worked = workedForAutoProgram(),
@@ -1629,14 +1624,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         )
         Log.i(
             TAG_QSO,
-            "auto n=${batch.size} q=${scheduler.queuedCount()} -> ${action::class.simpleName} " +
+            "auto n=${batch.size} q=${qsoEngine.queuedCount()} -> ${action::class.simpleName} " +
                 "msgs=${batch.map { it.text }}",
         )
         publishAutoState()
         runAutoAction(action)
     }
 
-    /** 执行第 2 层给出的动作。 */
+    /** 执行状态机给出的动作。 */
     private fun runAutoAction(action: AutoAction) {
         when (action) {
             AutoAction.SendCq -> startCqInternal()
@@ -1662,16 +1657,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 重新打开总开关即恢复自动运行（监管计时重新开始）；总开关不持久化，重启 App 不会自动发射。
      */
     private fun stopAutoBySupervision(reason: String) {
-        scheduler.markProtectedStop()
+        qsoEngine.markProtectedStop()
         setTxEnabled(false)
         _status.update { it.copy(status = "自动程序已停止（$reason）：发送总开关已关闭") }
     }
 
-    /** 把第 2 层队列/监管状态同步到 UI 状态。 */
+    /** 把状态机的队列/监管状态同步到 UI 状态。 */
     private fun publishAutoState() {
         val st = _status.value
         val label = if (st.txEnabled) autoPhaseText() else null
-        val q = if (st.txEnabled) scheduler.queuedCount() else 0
+        val q = if (st.txEnabled) qsoEngine.queuedCount() else 0
         if (st.autoPhaseLabel != label || st.autoQueueSize != q) {
             _status.update { it.copy(autoPhaseLabel = label, autoQueueSize = q) }
         }
@@ -1717,7 +1712,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
         }
         tryRetargetNow(p.txText, manual = false)
-        // ROGER / RR73 场景一上来即完成：走统一收尾（写日志 + 通知第 2 层）
+        // ROGER / RR73 场景一上来即完成：走统一收尾（写日志 + 通知状态机）
         if (p.state == QsoState.DONE) applyQsoProgress(p)
     }
 
@@ -1738,7 +1733,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "请先打开「发射」开关") }
             return false
         }
-        scheduler.resetSupervision(AudioEngine.utcNowMs())
+        qsoEngine.resetSupervision(AudioEngine.utcNowMs())
         startAutoTarget(t)
         return true
     }
@@ -1836,6 +1831,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 // 而上一时隙的解码（可能把 qso 推进到收尾的 73/RR73）随后才处理 ——
                 // 把真实文本交给引擎，它就不会把还没发出去的收尾报文误清掉。
                 val sentText = _status.value.lastTxText
+                // 本次「发完」之前是否处于收尾阶段（[QsoPhase.FINISHING]）：收尾报文刚播出后要用它收口
+                val wasFinishing = qsoEngine.phase == QsoPhase.FINISHING
                 qsoEngine.onTransmitted(sentText, AudioEngine.utcNowMs())
                 val p = qsoEngine.progress()
                 val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
@@ -1852,10 +1849,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (finalPending) {
                     Log.i(TAG_QSO, "收尾报文未发完：${p.txText}，保持发射、暂不启动新 QSO")
-                } else if (finished && pendingAutoFinish) {
-                    // 收尾报文已发出：现在才让第 2 层决定下一步，避免覆盖掉这条 RR73/73
-                    pendingAutoFinish = false
-                    runAutoAction(scheduler.onQsoFinished(AudioEngine.utcNowMs()))
+                } else if (finished && wasFinishing) {
+                    // 收尾报文已发出：现在才让状态机决定下一步，避免覆盖掉这条 RR73/73
+                    runAutoAction(qsoEngine.onQsoFinished(AudioEngine.utcNowMs()))
                 }
             }
         }

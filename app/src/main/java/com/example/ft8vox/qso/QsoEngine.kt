@@ -31,6 +31,21 @@ enum class QsoState {
     FAILED,
 }
 
+/**
+ * **会话级阶段**——单一状态机对外暴露的显式状态（`docs/QsoStateMachine.md`）。
+ *
+ * 它取代了旧的第 1 层 `QsoState` + 第 2 层 `AutoScheduler` 的队列 / 监管 + 第 3 层
+ * `SessionViewModel.pendingAutoFinish` 三处分散状态：会话此刻在做什么，只看这一个值。
+ *
+ * | 阶段 | 含义 | 对应旧实现 |
+ * | --- | --- | --- |
+ * | [IDLE] | 无进行中的 QSO、也没有收尾报文待发 | `!active && txText == null` |
+ * | [CQ] | 我方主叫中（序号 6），等回应者由选台逻辑收集 | `awaitingResponders` |
+ * | [QSO] | 一段定向 QSO 进行中（序号 1~5） | `active && !awaitingResponders` |
+ * | [FINISHING] | QSO 已判定结束，但收尾报文（RR73/73）**还没真正发出** | `pendingAutoFinish` |
+ */
+enum class QsoPhase { IDLE, CQ, QSO, FINISHING }
+
 /** 一次完成的通联记录（由 `SessionViewModel` 持久化到 ADIF / Room）。 */
 data class QsoLogEntry(
     val theirCall: String,
@@ -71,21 +86,21 @@ data class QsoProgress(
     /**
      * 是否处于「已发 CQ、等回应者」阶段（只由 [QsoEngine.startCq] 置位）。
      *
-     * 照 FT8CN `functionOrder == 6` 的状态：该阶段的解码由第 2 层自动程序调度
+     * 照 FT8CN `functionOrder == 6` 的状态：该阶段的解码由选台逻辑
      * （收集、排序回应者）处理，状态机不自行认人，也**永不放弃主叫、不自增无回应计数**。
      */
     val awaitingResponders: Boolean = false,
     /**
      * 最近一次 [QsoEngine.onDecoded] 是否发生了推进（收到**当前对手**的有效回复）。
      *
-     * 第 2 层据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
+     * 据此识别「当前目标本批沉默」→ 应答其他呼叫我方的定向台
      * （FT8CN `checkCQMeOrFollowCQMessage` 循环 2；见 `docs/Ft8Vox.md`）。
      */
     val advanced: Boolean = false,
     /**
      * 本段不是正常跑完，而是按 FT8CN 的兜底判据收尾的（「我发过 RR73 但对方消失」等）。
      *
-     * 第 2 层据此走「换台 / 回 CQ」（`AutoScheduler.onTargetGaveUp`）而不是「正常结束」。
+     * 据此走「换台 / 回 CQ」（[QsoEngine.onTargetGaveUp]）而不是「正常结束」。
      */
     val gaveUp: Boolean = false,
     /**
@@ -100,6 +115,15 @@ data class QsoProgress(
     /** 是否处于进行中的 QSO。 */
     val active: Boolean
         get() = state != QsoState.IDLE && state != QsoState.DONE && state != QsoState.FAILED
+
+    /**
+     * QSO 已判定结束（成功 / 作废），但收尾报文（RR73/73）**还没真正发出**。
+     *
+     * 即会话阶段的 [QsoPhase.FINISHING]：此时必须保持发射武装，且**不得启动新 QSO**——
+     * 否则 `startCq` 会 `reset` 引擎，把这条收尾报文覆盖掉（真机现象：对方给我 RR73，我没回 73）。
+     */
+    val finishing: Boolean
+        get() = (state == QsoState.DONE || state == QsoState.FAILED) && txText != null
 
     /** 本阶段还没轮到我方时隙发射时的提示后缀。 */
     private val pendingHint: String get() = "待发（等我的发射时隙）"
@@ -131,11 +155,25 @@ data class QsoProgress(
 }
 
 /**
- * FT8 的 QSO 自动序列状态机（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
+ * **唯一的会话级 QSO 状态机**（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
+ *
+ * 它把原先散在三处的状态合而为一（`docs/QsoStateMachine.md`）：
+ *
+ * | 原位置 | 原职责 | 现在 |
+ * | --- | --- | --- |
+ * | `QsoEngine`（第 1 层） | 一段 QSO 的六步序号推进、落库、无回应判据 | 本类的「一段 QSO」[QsoPhase.QSO] 分支 |
+ * | `AutoScheduler`（第 2 层） | 选台 / 定向队列 / 发射监管 / 换台 | 本类的会话方法 |
+ * | `SessionViewModel.pendingAutoFinish`（第 3 层） | 「QSO 结束但收尾报文未发」的标志 | 显式阶段 [QsoPhase.FINISHING] |
+ *
+ * ### 驱动方式
+ *
+ * - 每个接收时隙结束：交给 [onDecoded]（进行中的一段 QSO）或 [onIdleBatch]（空闲 / 等回应者）；
+ * - 我方一条报文真正播出：[onTransmitted]；
+ * - 会话阶段由 [phase] 显式暴露，`SessionViewModel` 只按它分支，不再自行维护标志。
  *
  * ### 设计：照 FT8CN 的**报文序号**模型
  *
- * 本引擎是一场 QSO 的状态：**我下一条要发的报文序号** [order]（FT8CN `functionOrder`）。
+ * 本引擎是一场 QSO 的状态：**我下一条要发的报文序号** [QsoProgress.order]（FT8CN `functionOrder`）。
  * 转移规则只有一条（照 `FT8TransmitSignal.parseMessageToFunction` `:862`）：
  *
  * > 收到对方的报文 → 解析出它的序号（[FunctionOrder]）→ **我的序号 ＝ 它的序号 + 1**。
@@ -158,7 +196,7 @@ data class QsoProgress(
  * - **报告值**：我发给对方的报告取「**首次测到**的强度」（FT8CN `toCallsign.snr`）——
  *   进入序号 2 / 3 时算一次，之后**重发不刷新**；序号 3 的 `R<报告>` 与序号 2 **同一个值**。
  * - **落库**：进入序号 4 / 5（发出 RR73 / 73）即落库，幂等（FT8CN `record.saved`）。
- * - **无回应**：按**解码批次**累计（空批不计），收到回复清零；是否换台由第 2 层按
+ * - **无回应**：按**解码批次**累计（空批不计），收到回复清零；是否换台由
  *   `noReplyLimit` 决定，但兜底判据在**本引擎**里（见下）。
  * - **完成判据**（照 FT8CN `:832-843`，5 路 OR）：
  *   1. 对方的报文序号 = 5（对方发 73）→ 完成；
@@ -167,13 +205,11 @@ data class QsoProgress(
  *   4. 我的序号 = 4 且**对方开始呼叫别人**（[targetCallingOthers]）→ 作废换台；
  *   5. **除 CQ 主叫外各阶段**且 `noReplyLimit == 0` 且 `noReplyCount >= 20` → 作废换台。
  *
- *   第 3~5 路命中时 [QsoProgress.gaveUp] 为真，由第 2 层换台 / 回 CQ。
+ *   第 3~5 路命中时 [QsoProgress.gaveUp] 为真，由会话层换台 / 回 CQ。
  *   **与 FT8CN 的有意偏离**：FT8CN 第 3~5 路只在序号 4 生效、且第 3 路用 `× 2`；本机把
  *   第 3 / 5 路放宽到除 CQ 外各阶段、阈值取字面值，避免停在序号 1~3 的呼叫者永远重发。
  * - **序号 4 不是终态**：发出 RR73 后本段仍在跑（照 FT8CN 每周期重发 RR73），
  *   直到对方的 73 或上面第 3~5 路兜底。
- *
- * 驱动方式：每个接收时隙结束后把解码结果交给 [onDecoded]。
  */
 class QsoEngine {
 
@@ -182,12 +218,18 @@ class QsoEngine {
         const val NO_REPLY_HARD_LIMIT = 20
     }
 
+    // ---- 台站与设置 ----
+
     private var myCall: String = ""
     private var myGrid: String = ""
     /** CQ 前缀（`CQ <前缀> <我> <网格>`；空串＝普通 CQ），由 [startCq] 设置。 */
     private var cqModifier: String = ""
     /** 无回应次数上限（FT8CN `noReplyLimit`；`0`＝忽略）。完成判据要用，由 [configure] 下发。 */
     private var noReplyLimit = 0
+    /** 自动程序策略（选台 / 监管阈值），由 [configure] 下发。 */
+    private var settings = AutoProgramSettings()
+
+    // ---- 一段 QSO 的状态（原第 1 层） ----
 
     private var role = QsoRole.NONE
     private var state = QsoState.IDLE
@@ -204,7 +246,7 @@ class QsoEngine {
     private var startedUtcMs = 0L
     /** 无回应计数（FT8CN 口径，按解码批次累计，收到回复清零）。 */
     private var noReplyCount = 0
-    /** 最近一次 [onDecoded] 是否推进（供第 2 层识别「目标本批沉默」，见 [QsoProgress.advanced]）。 */
+    /** 最近一次 [onDecoded] 是否推进（供会话层识别「目标本批沉默」，见 [QsoProgress.advanced]）。 */
     private var lastAdvanced = false
     /** **真正发出去**的那条报文文本（[onTransmitted] 记录，用于 [QsoProgress.txSent] 判定）。 */
     private var lastSentText: String? = null
@@ -218,22 +260,50 @@ class QsoEngine {
     /** 最近一次带时间戳的调用（毫秒）；[finish] 拿不到显式时间时回退它。 */
     private var lastUtcMs = 0L
 
+    // ---- 会话调度状态（原第 2 层 AutoScheduler） ----
+
+    /** 定向呼叫队列（回应者 / 呼叫我方的台），逐个完成。 */
+    private val queue = ArrayDeque<AutoTarget>()
+
+    /** 发射监管计时基准（每次 [enable] / 人工操作 [resetSupervision] 重置）。 */
+    private var supervisionSinceMs = 0L
+
+    /** 发射监管已触发（停止后再不产出动作，直到 [enable] / [resetSupervision]）。 */
+    private var protectedStop = false
+
     /** 是否已配置好呼号，可以开始 QSO。 */
     val canOperate: Boolean get() = myCall.isNotEmpty()
+
+    /**
+     * 会话当前阶段（**单一状态机的显式状态**，见 [QsoPhase]）。
+     *
+     * `SessionViewModel` 只按它分支，不再自行组合 `active` / `awaitingResponders` / `txText` 三个标志。
+     */
+    val phase: QsoPhase
+        get() = when {
+            awaitingResponders -> QsoPhase.CQ
+            state == QsoState.DONE || state == QsoState.FAILED ->
+                if (txText != null) QsoPhase.FINISHING else QsoPhase.IDLE
+            state == QsoState.IDLE -> QsoPhase.IDLE
+            else -> QsoPhase.QSO
+        }
 
     /**
      * 更新台站信息与安全阀设置（来自设置页）。
      *
      * [noReplyLimit] 是 FT8CN 的「无回应限制」（**除 CQ 主叫外各阶段**生效；`0`＝用内置硬上限 20）。
+     * [program] 是自动程序策略（选台开关 / 发射监管分钟数），供会话层选台与监管使用。
      */
     fun configure(
         myCall: String,
         myGrid: String,
         noReplyLimit: Int = 0,
+        program: AutoProgramSettings = AutoProgramSettings(),
     ) {
         this.myCall = myCall.trim().uppercase()
         this.myGrid = myGrid.trim().uppercase()
         this.noReplyLimit = noReplyLimit.coerceAtLeast(0)
+        this.settings = program
     }
 
     fun progress(): QsoProgress = QsoProgress(
@@ -263,13 +333,13 @@ class QsoEngine {
      * 通知状态机：某一轮报文已实际发射完毕。
      *
      * [sentText] 为**实际发出去**的那条报文文本。真机上存在这样的时序：本时隙的发射在前导
-     * 提前量到点时就被排定，而上一时隙的解码要等到时隙末尾才处理完；于是 ``qso.txText``
+     * 提前量到点时就被排定，而上一时隙的解码要等到时隙末尾才处理完；于是 `qso.txText`
      * 已经推进成收尾的 `73`/`RR73`，**真正在播的却还是旧报文**（如 `R-07`）。此时若照旧
      * 在 DONE 下清空 `txText`，收尾报文就再也没有时隙可发 —— 真机现象是「对方给我 RR73
      * 后我没有回 73，反而开始发 CQ」。
      *
      * 所以只有「刚发出去的这一条就是当前应发报文」才允许清空；发的是旧报文时**保留**，
-     * 由第 2 层在下一次我方时隙把它发出去（见 `SessionViewModel.txTick`）。
+     * 由执行层在下一次我方时隙把它发出去（见 `SessionViewModel.txTick`）。
      *
      * 照 FT8CN `setCurrentFunctionOrder` `:550`：我方序号进到 4 / 5（RR73 / 73）时**落库**。
      */
@@ -428,7 +498,7 @@ class QsoEngine {
         lastAdvanced = false
         if (!canOperate) return progress()
         if (!progress().active) return progress()
-        // 序号 6（已发 CQ、等回应者）阶段由第 2 层自动程序收集/排序回应者；
+        // 序号 6（已发 CQ、等回应者）阶段由选台逻辑收集/排序回应者；
         // 照 FT8CN，此阶段永不放弃主叫、也不自增无回应计数。
         if (awaitingResponders) return progress()
 
@@ -503,6 +573,150 @@ class QsoEngine {
         // 对方只可能在我们**不发射**的周期回我，所以我方发射时隙的批不计，免得每周期数两次。
         if (countNoReply) noReplyCount++
         return progress()
+    }
+
+    // ---- 会话调度（原第 2 层 AutoScheduler） ----
+
+    /** 「发送总开关」打开时调用：清空队列、复位监管计时。 */
+    fun enable(utcNowMs: Long) {
+        queue.clear()
+        protectedStop = false
+        supervisionSinceMs = utcNowMs
+    }
+
+    /** 「发送总开关」关闭 / 停止会话时调用。 */
+    fun disable() {
+        queue.clear()
+        protectedStop = false
+        supervisionSinceMs = 0L
+    }
+
+    fun queuedCount(): Int = queue.size
+
+    fun isProtectedStop(): Boolean = protectedStop
+
+    /** 人工操作（手动呼叫 / 应答 / 发 CQ）后复位发射监管计时（FT8CN `resetLaunchSupervision`）。 */
+    fun resetSupervision(utcNowMs: Long) {
+        supervisionSinceMs = utcNowMs
+        protectedStop = false
+    }
+
+    /** 发射监管检查：触发返回可读原因，否则 null（方案 §3.5）。 */
+    fun checkSupervision(utcNowMs: Long): String? {
+        if (protectedStop) return null
+        if (supervisionSinceMs == 0L) supervisionSinceMs = utcNowMs
+        val m = settings.supervisionMinutes
+        if (m <= 0 || utcNowMs <= 0 || supervisionSinceMs <= 0) return null
+        if (utcNowMs - supervisionSinceMs >= m * 60_000L) {
+            return "发射监管超时（连续发射 $m 分钟）"
+        }
+        return null
+    }
+
+    /** 标记发射监管已触发（避免每时隙重复上报）。 */
+    fun markProtectedStop() {
+        protectedStop = true
+    }
+
+    /**
+     * 接收时隙结束、且当前处于**空闲**或**等回应者**阶段时的决策。
+     *
+     * 顺序（方案 §3.2）：监管超时 → Stop；定向候选非空 → 一律应答（最高优先）；
+     * 否则按两个开关决定「应答未通联的 CQ」或「发 CQ」。
+     */
+    fun onIdleBatch(
+        messages: List<DecodeResult>,
+        filter: DecodeFilterState = DecodeFilterState(),
+        worked: WorkedIndex = WorkedIndex.EMPTY,
+        utcNowMs: Long = 0L,
+    ): AutoAction {
+        checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
+        if (protectedStop) return AutoAction.None
+
+        val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
+        val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
+        // 「有人呼叫我方一定应答」：定向报文优先，且不受任何开关 / 筛选 / 已通联影响
+        if (directed.isNotEmpty()) {
+            enqueue(AutoProgramSelector.rank(directed))
+            return AutoAction.HandleDirected(queue.removeFirst())
+        }
+        return nextAction(candidates.filter { it.kind == AutoTargetKind.CQ })
+    }
+
+    /** 一段 QSO 结束（成功）后的决策：先处理队列，否则回到发 CQ（FT8CN `resetToCQ`）。 */
+    fun onQsoFinished(utcNowMs: Long = 0L): AutoAction {
+        if (protectedStop) return AutoAction.None
+        checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
+        if (queue.isNotEmpty()) return AutoAction.HandleDirected(queue.removeFirst())
+        return AutoAction.SendCq
+    }
+
+    /**
+     * 目标无回应超限、被判定作废后的决策（FT8CN `getNewTargetCallsign`）：
+     * **优先换台**（有未通联 CQ 候选就应答最优的），**没有才回 CQ**。
+     */
+    fun onTargetGaveUp(
+        messages: List<DecodeResult>,
+        filter: DecodeFilterState = DecodeFilterState(),
+        worked: WorkedIndex = WorkedIndex.EMPTY,
+        utcNowMs: Long = 0L,
+    ): AutoAction {
+        checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
+        if (protectedStop) return AutoAction.None
+        queue.clear()
+        val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
+        val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
+        if (directed.isNotEmpty()) {
+            return AutoAction.HandleDirected(AutoProgramSelector.rank(directed).first())
+        }
+        return nextAction(candidates.filter { it.kind == AutoTargetKind.CQ })
+    }
+
+    /**
+     * FT8CN `checkCQMeOrFollowCQMessage` **循环 2** 的落地：进行中的 QSO **目标本批沉默**时，
+     * 也必须应答「其他呼叫我方」的定向台（否则忙起来就会漏应答）。
+     *
+     * 与 [onIdleBatch] 的差别：**不看**两个开关、不看是否已有目标，只排除「当前目标自身」；
+     * 本批里 `73`（已互相收尾）也不据以开新 QSO，`RR73`/`RRR` 可以（回 73 收尾）。
+     * 命中则返回应切换到的目标，没有则 null
+     * （调用方继续走无回应 / 放弃判定）。保持当前目标不换台由调用方在目标有回应时不调用本方法保证。
+     */
+    fun directedTakeover(
+        messages: List<DecodeResult>,
+        currentTarget: String?,
+        filter: DecodeFilterState = DecodeFilterState(),
+        worked: WorkedIndex = WorkedIndex.EMPTY,
+    ): AutoTarget? {
+        if (protectedStop) return null
+        val directed = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
+            .filter { it.kind != AutoTargetKind.CQ }
+            .filter { !CallMatch.isFrom(it.call, currentTarget) }
+        if (directed.isEmpty()) return null
+        return AutoProgramSelector.rank(directed).first()
+    }
+
+    /**
+     * 「优先应答未通联的 CQ 台」（S&P）；否则发 CQ。
+     *
+     * 对应 FT8CN `checkCQMeOrFollowCQMessage` 循环 3（条件
+     * `autoCallFollow && (autoFollowCQ || 该台在跟踪名单里)`）。本机两个开关**串联**生效：
+     * - [AutoProgramSettings.autoAddCqToFollow]：CQ 台是否**纳入候选**（并自动写进跟踪名单；照 FT8CN「自动
+     *   跟踪 CQ」＝把 CQ 推送到可呼叫集合；已在 [AutoProgramSelector.collect] 里把关，跟踪名单是它的例外）。
+     * - [AutoProgramSettings.autoCallFollow]：是否**真的去呼叫**（FT8CN `:714`，关掉则一条 CQ 都不叫）。
+     *
+     * 因此「自动跟踪 CQ」关掉后，本机**只**自动呼叫跟踪名单里的 CQ 台（没有名单时就不叫 CQ）。
+     */
+    private fun nextAction(cqs: List<AutoTarget>): AutoAction =
+        if (settings.autoCallFollow && cqs.isNotEmpty()) {
+            AutoAction.AnswerCq(AutoProgramSelector.rank(cqs).first())
+        } else {
+            AutoAction.SendCq
+        }
+
+    private fun enqueue(list: List<AutoTarget>) {
+        list.forEach { t ->
+            if (queue.none { it.call.equals(t.call, ignoreCase = true) }) queue.addLast(t)
+        }
     }
 
     // ---- 内部 ----
