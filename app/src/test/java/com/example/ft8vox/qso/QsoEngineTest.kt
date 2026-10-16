@@ -125,7 +125,7 @@ class QsoEngineTest {
         val q = engine()
         val cq = q.startCq()
         assertTrue("发 CQ 后应处于等回应者阶段", cq.awaitingResponders)
-        // CQ 阶段由第 2 层收集/排序回应者：状态机不自行认人，也不计重试
+        // CQ 阶段由状态机（onIdleBatch）收集/排序回应者：引擎本身不自行认人，也不计重试
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
         assertEquals(QsoState.WAIT_REPLY, s.state)
         assertEquals(0, s.noReplyCount)

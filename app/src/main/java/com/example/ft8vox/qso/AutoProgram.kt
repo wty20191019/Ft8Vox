@@ -109,7 +109,7 @@ sealed interface AutoAction {
     data class AnswerCq(val target: AutoTarget) : AutoAction
 
     /**
-     * 处理发给我方的定向报文（第 1 层）：
+     * 处理发给我方的定向报文（交给会话状态机 [QsoEngine]）：
      * 呼叫我 → 直接发报告；给我报告 → 回 R 报告；Roger 我的报告 → 回 RR73 收尾；
      * 直接给我 RR73 → 回 73 收尾。
      */
@@ -126,7 +126,7 @@ sealed interface AutoAction {
 }
 
 /**
- * 第 2 层选台：从本时隙解码里收集候选（纯 Kotlin，可 JVM 单测）。
+ * 选台：从本时隙解码里收集候选（**无状态纯函数**，可 JVM 单测；由会话状态机调用）。
  *
  * 候选覆盖两类「能推进到完成 QSO」的报文：
  * - 对方的 **CQ**（[AutoTargetKind.CQ]，我来应答）；
