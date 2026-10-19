@@ -15,6 +15,7 @@
 #include "ft8_gfsk.h"
 #include "ft8_subtract.h"
 #include "ft8_spectrum.h"
+#include "ft8_block.h"
 
 #include <ft8/constants.h>
 #include <ft8/crc.h>
@@ -102,8 +103,8 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
     cfg->block_max_n = 0;           /**< 论文式分组检测默认关闭，保持既有行为 */
     cfg->block_min_n = 1;           /**< 默认从 N=1 开始 */
     cfg->block_skip_fast = false;   /**< 诊断开关：跳过瀑布域 N=1 */
-    cfg->block_min_score = 12;      /**< 与 OSD 相同的候选同步分门限 */
-    cfg->block_max_bp_errors = 24;  /**< BP 残错超过此值视为噪声候选，不做分组检测 */
+    cfg->block_min_score = 10;      /**< 与候选搜索同一门限；分组检测自身还会做同步质量检查 */
+    cfg->block_max_bp_errors = 48;  /**< BP 残错超过此值视为噪声候选，不做分组检测 */
     cfg->max_block_candidates = 40; /**< 每遍分组检测预算（0=不限） */
 }
 
@@ -307,6 +308,7 @@ typedef struct
     int osd_depth;
     int enable_llr_refine; /**< P2.3：BP 失败候选用时域精化 LLR 重解 */
     const ft8_decode_config_t* cfg; /**< 分组检测参数（block_*） */
+    const ft8_ddc_t* ddc;           /**< 本段/遍共享的 200 Hz DDC 上下文，可为 NULL */
     int* block_budget;              /**< 本遍剩余的分组检测次数，受 block_lock 保护 */
     ft8_mutex_t* block_lock;
     raw_decode_t* out;
@@ -501,7 +503,7 @@ static void decode_worker(void* arg)
                               (float)cand->time_sub / w->wf->time_osr) *
                              w->mon->symbol_period;
             ok = ftx_decode_candidate_block(w->wf, cand, w->samples, w->num_samples,
-                                            w->sample_rate, freq0, dt,
+                                            w->sample_rate, freq0, dt, w->ddc,
                                             w->ldpc_iterations, w->osd_depth,
                                             w->cfg->block_max_n, w->cfg->block_min_n,
                                             w->cfg->block_min_score,
@@ -584,8 +586,23 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         free(regions);
         free(args);
         free(threads);
+        if (block_lock)
+            ft8_mutex_free(block_lock);
         set_error("解码线程资源分配失败");
         return FT8_ERR_NOMEM;
+    }
+
+    /* 论文式分组检测：整遍只算一次 192000 点长 FFT，所有候选共享。
+     * 若采样率不是 12 kHz 或内存不足，ddc=NULL，分组检测退回旧 Goertzel 路径。 */
+    ft8_ddc_t* ddc = NULL;
+    if (cfg->block_max_n > 0 && samples && num_samples > 0 && sample_rate == 12000)
+    {
+        ddc = ft8_ddc_create(sample_rate);
+        if (ddc && ft8_ddc_set_signal(ddc, samples, num_samples) != 0)
+        {
+            ft8_ddc_free(ddc);
+            ddc = NULL;
+        }
     }
 
     for (int t = 0; t < num_threads; ++t)
@@ -602,6 +619,7 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         args[t].osd_depth = cfg->osd_depth;
         args[t].enable_llr_refine = cfg->enable_llr_refine;
         args[t].cfg = cfg;
+        args[t].ddc = ddc;
         args[t].block_budget = (block_lock && block_budget > 0) ? &block_budget : NULL;
         args[t].block_lock = block_lock;
         args[t].out = regions + (size_t)t * num_cand;
@@ -734,6 +752,8 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
     free(threads);
     free(args);
     free(regions);
+    if (ddc)
+        ft8_ddc_free(ddc);
     if (block_lock)
         ft8_mutex_free(block_lock);
     return num_hits;

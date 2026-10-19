@@ -6,6 +6,7 @@
 
 #include "ft8_osd.h"
 #include "ft8_spectrum.h"
+#include "ft8_block.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -339,6 +340,22 @@ static void ftx_normalize_logl(float* log174)
 #define FT8_OSD_MAX_HARD 40
 // 候选 Costas 同步分下限（低于此值不触发 OSD）。用于过滤噪声候选。
 #define FT8_OSD_MIN_SCORE 12
+// 码字与**输入 LLR** 的硬判决错误上限（WSJT-X ft8b.f90: nharderrors > 36 丢弃）。
+// 这是 CRC-14 之外的第二道假解码抑制，尤其对 OSD/AP/分组检测的多候选有效。
+#define FT8_MAX_HARD_ERRORS 36
+
+/* 码字与输入 LLR 符号不一致的比特数。 */
+static int count_hard_errors(const float* logl, const uint8_t* plain174)
+{
+    int n = 0;
+    for (int i = 0; i < FTX_LDPC_N; ++i)
+    {
+        const float s = plain174[i] ? 1.0f : -1.0f;
+        if (s * logl[i] < 0.0f)
+            ++n;
+    }
+    return n;
+}
 
 // 由 174 比特码字完成 CRC 校验与载荷提取。成功返回 true 并填好 message。
 static bool finish_candidate(const ftx_waterfall_t* wf, const uint8_t* plain174,
@@ -387,6 +404,7 @@ static bool finish_candidate(const ftx_waterfall_t* wf, const uint8_t* plain174,
 typedef struct
 {
     const ftx_waterfall_t* wf;
+    const float* logl;
     ftx_message_t* message;
     ftx_decode_status_t* status;
 } osd_accept_ctx_t;
@@ -395,6 +413,9 @@ static bool osd_accept_cb(const uint8_t* plain174, void* vctx)
 {
     osd_accept_ctx_t* c = (osd_accept_ctx_t*)vctx;
     if (!finish_candidate(c->wf, plain174, c->message, c->status))
+        return false;
+    /* WSJT-X ft8b.f90：码字与输入 LLR 的硬判决错误 > 36 视为假解码 */
+    if (count_hard_errors(c->logl, plain174) > FT8_MAX_HARD_ERRORS)
         return false;
     c->status->ldpc_errors = 0; // OSD 生成的码字按构造满足校验
     return true;
@@ -418,7 +439,9 @@ static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
     {
         if (finish_candidate(wf, plain174, message, status))
         {
-            return true;
+            if (count_hard_errors(logl, plain174) <= FT8_MAX_HARD_ERRORS)
+                return true;
+            /* 硬判决错误过多：视为假解码，继续尝试 OSD */
         }
         /* BP 收敛到合法码字但 CRC 不匹配：继续尝试 OSD */
     }
@@ -428,6 +451,7 @@ static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
     {
         osd_accept_ctx_t ctx;
         ctx.wf = wf;
+        ctx.logl = logl;
         ctx.message = message;
         ctx.status = status;
         if (ft8_osd_decode((float*)logl, osd_depth, FT8_OSD_MAX_HARD, osd_accept_cb, &ctx))
@@ -581,7 +605,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
 
 bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
-                                float freq0, float dt,
+                                float freq0, float dt, const ft8_ddc_t* ddc,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,
@@ -620,31 +644,55 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
         fast_errors = status->ldpc_errors;
     }
 
-    /* 第二级：论文式 N=1/2/3 分组检测（时域复数相关）。
-     * N=1 也在这里保留一份时域版本：瀑布域失败后，更精细的对齐有时能把
-     * 同一信号救回来；N=2/3 则利用块内相干积累提高灵敏度。 */
+    /* 第二级：论文式 N=1/2/3 分组检测。
+     * 优先走 200 Hz 复基带（WSJT-X ft8_downsample + sync8d + ft8b 结构）；
+     * 没有 DDC 上下文时退回旧的 12 kHz 逐符号 Goertzel 路径（测试/兼容用）。 */
     if (wf->protocol == FTX_PROTOCOL_FT8 && samples && num_samples > 0 && sample_rate > 0 &&
         block_max_n >= 1 && cand->score >= block_min_score &&
         fast_errors <= block_max_bp_errors)
     {
-        float corr_re[FT8_SP_ND * FT8_SP_NTONE];
-        float corr_im[FT8_SP_ND * FT8_SP_NTONE];
-        if (ft8_spectrum_correlate(samples, num_samples, sample_rate,
-                                   freq0, dt, corr_re, corr_im) == 0)
+        const int nmax = (block_max_n > 3) ? 3 : block_max_n;
+        int nmin = (block_min_n < 1) ? 1 : block_min_n;
+        if (nmin > 3)
+            nmin = 3;
+
+        if (ddc)
         {
-            const int nmax = (block_max_n > 3) ? 3 : block_max_n;
-            int nmin = (block_min_n < 1) ? 1 : block_min_n;
-            if (nmin > 3)
-                nmin = 3;
-            for (int n_syms = nmin; n_syms <= nmax; ++n_syms)
+            ft8_block_ctx_t* bctx = ft8_block_prepare(ddc, freq0, dt);
+            if (bctx)
             {
-                ft8_block_likelihood(corr_re, corr_im, n_syms, log174);
-                ftx_normalize_logl(log174);
-                if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
-                                   plain174, message, status))
+                for (int n_syms = nmin; n_syms <= nmax; ++n_syms)
                 {
-                    status->block_n = n_syms;
-                    return true;
+                    ft8_block_llr(bctx, n_syms, log174);
+                    ft8_block_normalize(log174);
+                    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                                       plain174, message, status))
+                    {
+                        status->block_n = n_syms;
+                        ft8_block_free(bctx);
+                        return true;
+                    }
+                }
+                ft8_block_free(bctx);
+            }
+        }
+        else
+        {
+            float corr_re[FT8_SP_ND * FT8_SP_NTONE];
+            float corr_im[FT8_SP_ND * FT8_SP_NTONE];
+            if (ft8_spectrum_correlate(samples, num_samples, sample_rate,
+                                       freq0, dt, corr_re, corr_im) == 0)
+            {
+                for (int n_syms = nmin; n_syms <= nmax; ++n_syms)
+                {
+                    ft8_block_likelihood(corr_re, corr_im, n_syms, log174);
+                    ftx_normalize_logl(log174);
+                    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                                       plain174, message, status))
+                    {
+                        status->block_n = n_syms;
+                        return true;
+                    }
                 }
             }
         }

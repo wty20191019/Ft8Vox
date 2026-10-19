@@ -26,6 +26,7 @@ set(FT8_CORE_SOURCES
     api/ft8_subtract.c
     api/ft8_osd.c
     api/ft8_spectrum.c
+    api/ft8_block.c
     api/ft8api.c
 )
 

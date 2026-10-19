@@ -7,6 +7,9 @@
 #include "constants.h"
 #include "message.h"
 
+/* 前置声明：分组检测的 DDC 上下文（定义见 api/ft8_block.h） */
+typedef struct ft8_ddc ft8_ddc_t;
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -120,7 +123,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* power, const ftx_candidate_t
 /// 每次生成一份 LLR 并复用同一 BP+OSD 级联。samples 为当前遍的时域残差。
 bool ftx_decode_candidate_block(const ftx_waterfall_t* power, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
-                                float freq0, float dt,
+                                float freq0, float dt, const ft8_ddc_t* ddc,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,
