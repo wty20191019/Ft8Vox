@@ -72,7 +72,7 @@ void ft8_block_free(ft8_block_ctx_t* ctx);
  * @param log174  输出，174 个 LLR
  * @return 0 成功；-1 参数非法
  */
-int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, float* log174);
+int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, int power_metric, float* log174);
 
 /**
  * 按 WSJT-X `normalizebmet()` 的口径归一化：除以标准差，再乘 2.83。

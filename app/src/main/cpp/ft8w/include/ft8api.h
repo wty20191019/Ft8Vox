@@ -111,6 +111,11 @@ typedef struct
     int   block_min_score;      /**< 触发分组检测的 Costas 同步分下限，默认 12 */
     int   block_max_bp_errors;  /**< 触发分组检测的 BP 残余错误上限，默认 24 */
     int   max_block_candidates; /**< 每遍最多对多少个候选做分组检测，默认 40；0=不限 */
+
+    /* --- 论文式度量（追加于末尾） --- */
+    int   imetric;              /**< 分组检测度量：1=强制幅度（默认，语料实测最优）；
+                                 *   0=自动（第 1 遍幅度、后续遍功率，对应 WSJT-X
+                                 *   ft8_decode.f90 的 imetric=1/2）；2=强制功率。 */
 } ft8_decode_config_t;
 
 /** 用默认值填充解码配置。 */

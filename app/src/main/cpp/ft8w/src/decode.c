@@ -344,6 +344,8 @@ static void ftx_normalize_logl(float* log174)
 // 码字与**输入 LLR** 的硬判决错误上限（WSJT-X ft8b.f90: nharderrors > 36 丢弃）。
 // 这是 CRC-14 之外的第二道假解码抑制，尤其对 OSD/AP/分组检测的多候选有效。
 #define FT8_MAX_HARD_ERRORS 36
+// 诊断用：status->block_n = 9 表示命中“逐比特取 N=1/2/3 最大 |metric|”的混合 LLR。
+#define FT8_BLOCK_MIXED 9
 
 /* 码字与输入 LLR 符号不一致的比特数。 */
 static int count_hard_errors(const float* logl, const uint8_t* plain174)
@@ -608,7 +610,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
 bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
                                 float freq0, float dt, const ft8_ddc_t* ddc,
-                                const ft8_ap_hints_t* ap,
+                                const ft8_ap_hints_t* ap, int power_metric,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,
@@ -664,14 +666,54 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
             ft8_block_ctx_t* bctx = ft8_block_prepare(ddc, freq0, dt);
             if (bctx)
             {
+                float llr_n[3][FTX_LDPC_N];
+                int have_n[3] = {0, 0, 0};
+
                 for (int n_syms = nmin; n_syms <= nmax; ++n_syms)
                 {
-                    ft8_block_llr(bctx, n_syms, log174);
+                    ft8_block_llr(bctx, n_syms, power_metric, log174);
                     ft8_block_normalize(log174);
+                    memcpy(llr_n[n_syms - 1], log174, sizeof(llr_n[0]));
+                    have_n[n_syms - 1] = 1;
                     if (try_decode_llr(wf, log174, NULL, log174, cand->score, max_iterations, osd_depth,
                                        plain174, message, status))
                     {
                         status->block_n = n_syms;
+                        ft8_block_free(bctx);
+                        return true;
+                    }
+                }
+
+                /* WSJT-X ft8b.f90 的 pass 5：逐比特取 N=1/2/3 中 |metric| 最大的那个。
+                 * 三种块长的“最可靠”比特可能不同，混合后常能补回单一块长漏掉的码字。 */
+                if (nmax >= 2)
+                {
+                    float mixed[FTX_LDPC_N];
+                    bool any = false;
+                    for (int i = 0; i < FTX_LDPC_N; ++i)
+                    {
+                        int best_n = -1;
+                        float best_v = 0.0f;
+                        for (int n_syms = 1; n_syms <= nmax; ++n_syms)
+                        {
+                            if (!have_n[n_syms - 1])
+                                continue;
+                            const float v = llr_n[n_syms - 1][i];
+                            if (best_n < 0 || fabsf(v) > fabsf(best_v))
+                            {
+                                best_v = v;
+                                best_n = n_syms;
+                            }
+                        }
+                        mixed[i] = best_v;
+                        if (best_n >= 0)
+                            any = true;
+                    }
+                    if (any && try_decode_llr(wf, mixed, NULL, mixed, cand->score,
+                                              max_iterations, osd_depth,
+                                              plain174, message, status))
+                    {
+                        status->block_n = FT8_BLOCK_MIXED;
                         ft8_block_free(bctx);
                         return true;
                     }
@@ -682,7 +724,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                 if (ap && ap->count > 0 && cand->score >= block_min_score)
                 {
                     float channel[FTX_LDPC_N];
-                    ft8_block_llr(bctx, 1, channel);
+                    ft8_block_llr(bctx, 1, power_metric, channel);
                     ft8_block_normalize(channel);
 
                     for (int hi = 0; hi < ap->count; ++hi)
@@ -702,7 +744,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                             }
                             else
                             {
-                                ft8_block_llr(bctx, n_syms, ap_llr);
+                                ft8_block_llr(bctx, n_syms, power_metric, ap_llr);
                                 ft8_block_normalize(ap_llr);
                             }
 

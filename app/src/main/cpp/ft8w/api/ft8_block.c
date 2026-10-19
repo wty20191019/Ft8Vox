@@ -413,7 +413,7 @@ void ft8_block_free(ft8_block_ctx_t* ctx)
 
 /* 一段 29 符号内的 N 符号块 LLR。 */
 static void block_llr_half(const ft8_block_ctx_t* ctx, int half, int n_syms,
-                           float* log174)
+                           int power_metric, float* log174)
 {
     const int base = (half == 0) ? 7 : 43;
     const int bit_base = half * 87;
@@ -444,7 +444,8 @@ static void block_llr_half(const ft8_block_ctx_t* ctx, int half, int n_syms,
                 si += ctx->cs_im[idx];
             }
 
-            const float mag = sqrtf(sr * sr + si * si);
+            const float p = sr * sr + si * si;
+            const float mag = power_metric ? p : sqrtf(p);
             unsigned int mask = 1u << (n_bits - 1);
             for (int i = 0; i < n_bits; ++i, mask >>= 1)
             {
@@ -475,7 +476,8 @@ static void block_llr_half(const ft8_block_ctx_t* ctx, int half, int n_syms,
         {
             const int tone = kFT8_Gray_map[j];
             const int idx = sym * FT8_BLOCK_NTONE + tone;
-            s2[j] = sqrtf(block_abs2(ctx->cs_re[idx], ctx->cs_im[idx]));
+            const float p = block_abs2(ctx->cs_re[idx], ctx->cs_im[idx]);
+            s2[j] = power_metric ? p : sqrtf(p);
         }
         float* ll = log174 + bit_base + 3 * k;
         ll[0] = fmaxf(fmaxf(s2[4], s2[5]), fmaxf(s2[6], s2[7])) -
@@ -488,7 +490,7 @@ static void block_llr_half(const ft8_block_ctx_t* ctx, int half, int n_syms,
     }
 }
 
-int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, float* log174)
+int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, int power_metric, float* log174)
 {
     if (!ctx || !log174)
         return -1;
@@ -498,8 +500,8 @@ int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, float* log174)
         n_syms = 3;
 
     memset(log174, 0, FTX_LDPC_N * sizeof(float));
-    block_llr_half(ctx, 0, n_syms, log174);
-    block_llr_half(ctx, 1, n_syms, log174);
+    block_llr_half(ctx, 0, n_syms, power_metric, log174);
+    block_llr_half(ctx, 1, n_syms, power_metric, log174);
     return 0;
 }
 

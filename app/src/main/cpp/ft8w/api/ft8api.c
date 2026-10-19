@@ -107,6 +107,8 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
     cfg->block_min_score = 10;      /**< 与候选搜索同一门限；分组检测自身还会做同步质量检查 */
     cfg->block_max_bp_errors = 48;  /**< BP 残错超过此值视为噪声候选，不做分组检测 */
     cfg->max_block_candidates = 40; /**< 每遍分组检测预算（0=不限） */
+    cfg->imetric = 1;               /**< 本语料实测：强制幅度优于自动/功率；
+                                     *   0=自动（第 1 遍幅度、后续遍功率），2=强制功率。 */
 }
 
 void ft8_encode_config_default(ft8_encode_config_t* cfg)
@@ -308,6 +310,7 @@ typedef struct
     int ldpc_iterations;
     int osd_depth;
     int enable_llr_refine; /**< P2.3：BP 失败候选用时域精化 LLR 重解 */
+    int power_metric;      /**< 分组检测用功率度量（WSJT-X imetric=2） */
     const ft8_decode_config_t* cfg; /**< 分组检测参数（block_*） */
     const ft8_ddc_t* ddc;           /**< 本段/遍共享的 200 Hz DDC 上下文，可为 NULL */
     const ft8_ap_hints_t* ap;       /**< 本段/遍共享的 AP 提示，可为 NULL */
@@ -506,6 +509,7 @@ static void decode_worker(void* arg)
                              w->mon->symbol_period;
             ok = ftx_decode_candidate_block(w->wf, cand, w->samples, w->num_samples,
                                             w->sample_rate, freq0, dt, w->ddc, w->ap,
+                                            w->power_metric,
                                             w->ldpc_iterations, w->osd_depth,
                                             w->cfg->block_max_n, w->cfg->block_min_n,
                                             w->cfg->block_min_score,
@@ -553,6 +557,7 @@ static int raw_compare(const void* a, const void* b)
  * 全局去重/排序，再按段把候选分发回各自的瀑布解码；本函数负责其中「一段 + 一批候选」。 */
 static int decode_candidate_set(const monitor_t* mon, const float* samples, int num_samples,
                                 int sample_rate, const ft8_decode_config_t* cfg,
+                                int power_metric,
                                 const ftx_candidate_t* cands, int num_cand,
                                 const ftx_message_t* seen, int num_seen,
                                 pass_hit_t* out, int max_out)
@@ -628,6 +633,7 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         args[t].ldpc_iterations = iters;
         args[t].osd_depth = cfg->osd_depth;
         args[t].enable_llr_refine = cfg->enable_llr_refine;
+        args[t].power_metric = power_metric;
         args[t].cfg = cfg;
         args[t].ddc = ddc;
         args[t].ap = have_ap ? &ap_hints : NULL;
@@ -773,11 +779,16 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
 /* 单遍解码：在瀑布上搜索候选 + 多线程解码，返回按候选顺序排列的命中
  * （不做去重，由调用方处理）。返回命中条数，负数见 ft8_error_t。 */
 static int decode_pass(const monitor_t* mon, const float* samples, int num_samples, int sample_rate,
-                       const ft8_decode_config_t* cfg,
+                       const ft8_decode_config_t* cfg, int pass_index,
                        const ftx_message_t* seen, int num_seen,
                        pass_hit_t* out, int max_out)
 {
     const ftx_waterfall_t* wf = &mon->wf;
+
+    /* WSJT-X ft8_decode.f90：第 1 遍 imetric=1（幅度），后续遍 imetric=2（功率）。
+     * 这里由 imetric 允许强制覆盖，便于主机 A/B 调参。 */
+    const int power_metric = (cfg->imetric == 2) ||
+                             (cfg->imetric == 0 && pass_index > 0);
 
     int max_cand = cfg->max_candidates;
     if (max_cand < 1)
@@ -793,8 +804,8 @@ static int decode_pass(const monitor_t* mon, const float* samples, int num_sampl
     }
 
     int num_cand = ftx_find_candidates(wf, max_cand, cands, cfg->min_sync_score);
-    int rc = decode_candidate_set(mon, samples, num_samples, sample_rate, cfg, cands, num_cand,
-                                  seen, num_seen, out, max_out);
+    int rc = decode_candidate_set(mon, samples, num_samples, sample_rate, cfg, power_metric,
+                                  cands, num_cand, seen, num_seen, out, max_out);
     free(cands);
     return rc;
 }
@@ -857,7 +868,7 @@ static int decode_from_monitor(monitor_t* mon, const float* samples, int num_sam
         return FT8_ERR_NOMEM;
     }
 
-    int total = decode_pass(mon, samples, num_samples, sample_rate, cfg, NULL, 0, hits, cap);
+    int total = decode_pass(mon, samples, num_samples, sample_rate, cfg, 0, NULL, 0, hits, cap);
     if (total < 0)
     {
         free(hits);
@@ -952,7 +963,7 @@ static int decode_slot_multipass(monitor_t* mon, const float* samples, int num_s
     {
         monitor_feed_slot(mon, resid, num_samples);
 
-        int total = decode_pass(mon, resid, num_samples, sample_rate, cfg, seen, num_seen, hits, cap);
+        int total = decode_pass(mon, resid, num_samples, sample_rate, cfg, pass, seen, num_seen, hits, cap);
         if (total < 0)
         {
             rc = total;
@@ -1240,6 +1251,7 @@ typedef struct
     int num_samples;
     int sample_rate;
     const ft8_decode_config_t* cfg;
+    int power_metric;
     const ftx_candidate_t* cands;
     int num_cand;
     const ftx_message_t* seen;
@@ -1255,6 +1267,7 @@ static void band_decode_worker(void* arg)
 {
     band_decode_arg_t* b = (band_decode_arg_t*)arg;
     b->count = decode_candidate_set(b->mon, b->resid, b->num_samples, b->sample_rate, b->cfg,
+                                    b->power_metric,
                                     b->cands, b->num_cand, b->seen, b->num_seen,
                                     b->out, b->max_out);
     if (b->count <= 0 || !b->sub)
@@ -1465,6 +1478,8 @@ static int decode_slot_bands_global(const float* samples, int num_samples,
             dargs[i].num_samples = num_samples;
             dargs[i].sample_rate = sample_rate;
             dargs[i].cfg = &bcfg[i];
+            dargs[i].power_metric = (cfg->imetric == 2) ||
+                                    (cfg->imetric == 0 && pass > 0);
             dargs[i].cands = band_cands + band_off[i];
             dargs[i].num_cand = band_n[i];
             dargs[i].seen = seen;

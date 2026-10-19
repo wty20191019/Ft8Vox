@@ -127,7 +127,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* power, const ftx_candidate_t
 bool ftx_decode_candidate_block(const ftx_waterfall_t* power, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
                                 float freq0, float dt, const ft8_ddc_t* ddc,
-                                const ft8_ap_hints_t* ap,
+                                const ft8_ap_hints_t* ap, int power_metric,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,

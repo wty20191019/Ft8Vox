@@ -180,6 +180,8 @@ static bool parse_option(int argc, char** argv, int* i, options_t* o)
         o->dec.his_call = argv[++(*i)];
         return true;
     }
+    if (strcmp(a, "--imetric") == 0)
+        return next_int(argc, argv, i, &o->dec.imetric);
     return false;
 }
 
