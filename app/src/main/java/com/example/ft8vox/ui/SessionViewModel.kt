@@ -421,10 +421,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             restartForProtocol(s.protocol)
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit, s.auto)
+        val q = _status.value.qso
         AudioEngine.setDecodeContext(
             s.myCall,
-            _status.value.qso.theirCall,
-            _status.value.qso.theirGrid,
+            q.theirCall,
+            q.theirGrid,
+            apModeFor(q.state, q.theirCall != null),
         )
         applyDecodeParams(s)
         applyAudio(s)
@@ -902,6 +904,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             latestSettings.myCall,
             _status.value.qso.theirCall,
             _status.value.qso.theirGrid,
+            apModeFor(_status.value.qso.state, _status.value.qso.theirCall != null),
         )
         engineGen++   // 新引擎：作废所有还在路上的发射协程（见 transmit 的 genAtPlan）
 
@@ -1035,7 +1038,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
         }
-        AudioEngine.setDecodeContext(_status.value.myCall, p.theirCall, p.theirGrid)
+        AudioEngine.setDecodeContext(
+            _status.value.myCall,
+            p.theirCall,
+            p.theirGrid,
+            apModeFor(p.state, p.theirCall != null),
+        )
         tryRetargetNow(p.txText, manual = false)
     }
 
@@ -1093,7 +1101,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
         }
-        AudioEngine.setDecodeContext(_status.value.myCall, p.theirCall, p.theirGrid)
+        AudioEngine.setDecodeContext(
+            _status.value.myCall,
+            p.theirCall,
+            p.theirGrid,
+            apModeFor(p.state, p.theirCall != null),
+        )
         tryRetargetNow(p.txText, manual = false)
     }
 
@@ -1274,7 +1287,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
-        AudioEngine.setDecodeContext(_status.value.myCall, null, null)
+        AudioEngine.setDecodeContext(_status.value.myCall, null, null, 0)
     }
 
     /**
@@ -1540,6 +1553,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * 落库：**会话内同一呼号只写一条**（收到 73/RR73 立即落库、不弹确认、不关 TX），
      * 完成即写「已通联」索引（方案 §4.2 / §4.4）。
      */
+    /**
+     * 按 QSO 阶段选择 AP 类型（对应 WSJT-X ft8b.f90 的 naptypes）：
+     * - 无目标：iaptype 2（只固定本台呼号）；
+     * - 中段：iaptype 2 + 3（双方呼号，报告/网格未知）；
+     * - 收尾（等 RR73 / 等 73）：iaptype 3 + 4/5/6（全 77 bit，RRR/73/RR73）。
+     */
+    private fun apModeFor(state: QsoState, hasHis: Boolean): Int = when {
+        _status.value.myCall.isBlank() -> 0
+        !hasHis -> 1
+        state == QsoState.WAIT_RR73 || state == QsoState.WAIT_FINAL -> 6
+        else -> 3
+    }
+
     private fun applyQsoProgress(
         p: QsoProgress,
         utcNowMs: Long = AudioEngine.utcNowMs(),
@@ -1551,11 +1577,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         if (p.state == QsoState.FAILED) pinnedTxParity = null
         _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
         // AP 解码上下文：目标 QSO 进行中时用双方呼号；结束后清掉对方呼号，
-        // 避免把上一段 QSO 的 AP 继续套到新解码上。
+        // 避免把上一段 QSO 的 AP 继续套到新解码上。收尾阶段自动升到 iaptype 4/5/6。
         AudioEngine.setDecodeContext(
             _status.value.myCall,
             if (finished) null else p.theirCall,
             p.theirGrid,
+            apModeFor(if (finished) QsoState.DONE else p.state, !finished && p.theirCall != null),
         )
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
             // 会话内去重（取代旧的 90s 时间窗）：同一呼号一段会话只落一条。

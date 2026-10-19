@@ -687,6 +687,12 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
 
                     for (int hi = 0; hi < ap->count; ++hi)
                     {
+                        /* iaptype 4/5/6 固定全部 77 bit，假解码风险高于 2/3。
+                         * 保护主要来自上层“只在 QSO 收尾阶段启用”的状态门控；
+                         * 这里不再额外抬高同步分，否则弱信号收尾会被漏掉。 */
+                        if (cand->score < block_min_score)
+                            continue;
+
                         for (int n_syms = 1; n_syms <= 2; ++n_syms)
                         {
                             float ap_llr[FTX_LDPC_N];

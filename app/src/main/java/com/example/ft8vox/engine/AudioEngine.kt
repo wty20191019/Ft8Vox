@@ -108,8 +108,8 @@ object AudioEngine {
      * 更新 AP 解码上下文（本台呼号 / 当前目标呼号与网格）。
      * 只在有目标 QSO 时启用 AP；目标为空时自动退回仅本台呼号的 AP 或关闭。
      */
-    fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?) {
-        engine?.setDecodeContext(myCall, hisCall, hisGrid)
+    fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?, apMode: Int = 0) {
+        engine?.setDecodeContext(myCall, hisCall, hisGrid, apMode)
     }
 
     /** 释放引擎（停止采集与播放、关闭解码线程）。可重复调用。 */
@@ -222,10 +222,14 @@ object AudioEngine {
         @Volatile
         private var decodeHisGrid: String? = null
 
-        fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?) {
+        @Volatile
+        private var decodeApMode: Int = 0
+
+        fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?, apMode: Int) {
             decodeMyCall = myCall?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
             decodeHisCall = hisCall?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
             decodeHisGrid = hisGrid?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+            decodeApMode = apMode.coerceIn(0, 63)
         }
 
         @Volatile
@@ -757,11 +761,6 @@ object AudioEngine {
         private fun buildDecodeConfig(): Ft8DecodeConfig {
             val p = decodeParams
             val cores = Runtime.getRuntime().availableProcessors()
-            val apMode = when {
-                decodeMyCall.isNullOrEmpty() -> 0
-                decodeHisCall.isNullOrEmpty() -> 1
-                else -> 3
-            }
             return Ft8DecodeConfig(
                 fMinHz = decodeConfig.fMinHz,
                 fMaxHz = decodeConfig.fMaxHz,
@@ -772,7 +771,7 @@ object AudioEngine {
                 minSyncScore = p.minScore,
                 ldpcIterations = p.ldpcIterations,
                 decodeDepth = p.passes,
-                apMode = apMode,
+                apMode = decodeApMode,
                 enableSubtract = p.passes > 1,
                 numThreads = decodeThreadsFor(cores),
                 returnDuplicates = false,
