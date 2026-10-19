@@ -72,7 +72,7 @@ class QsoPhaseTest {
         q.startResponderQso("GJ0KYZ", "IO90", utcMs = 1_000L, snr = -11)
         val p = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-07")), 2_000L) // 对方 R → 我方序号 4
         assertEquals(4, p.order)
-        assertEquals(QsoState.WAIT_FINAL, p.state)
+        assertEquals(QsoState.ROGERS, p.state)
         assertEquals(QsoPhase.QSO, q.phase)
         assertFalse(q.progress().finishing)
     }
@@ -106,7 +106,7 @@ class QsoPhaseTest {
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11, utcMs = 1_000L) // 我方序号 2
         val p = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ 73")), 2_000L) // 对方 73 → 完成
-        assertEquals(QsoState.DONE, p.state)
+        assertEquals(QsoState.SIGNOFF, p.state)
         assertEquals(QsoPhase.IDLE, q.phase)
     }
 
@@ -119,7 +119,7 @@ class QsoPhaseTest {
         // 判据在自增之前比较：前两批把计数推到 2，第三批的开头才判定超限 → 兜底收尾
         q.onDecoded(emptyList(), 4_000L, countNoReply = true)
         val p = q.progress()
-        assertEquals(QsoState.DONE, p.state)
+        assertEquals(QsoState.SIGNOFF, p.state)
         assertTrue(p.gaveUp)
         assertEquals(QsoPhase.IDLE, q.phase)
     }

@@ -58,7 +58,7 @@ class TxSendGateTest {
         assertTrue(
             qsoStillNeedsTx(
                 QsoProgress(
-                    state = QsoState.WAIT_REPLY,
+                    state = QsoState.REPLYING,
                     theirCall = "JA1ABC",
                     txText = "JA1ABC BG7ZJW -11",
                 ),
@@ -71,14 +71,14 @@ class TxSendGateTest {
         // 已 DONE 但 RR73/73 还没播出去：必须保持武装，否则收尾报文永远发不出去
         assertTrue(
             qsoStillNeedsTx(
-                QsoProgress(state = QsoState.DONE, theirCall = "JA1ABC", txText = "JA1ABC BG7ZJW RR73"),
+                QsoProgress(state = QsoState.SIGNOFF, theirCall = "JA1ABC", txText = "JA1ABC BG7ZJW RR73"),
             ),
         )
     }
 
     @Test
     fun doneWithoutFinalMessageNeedsNothing() {
-        assertFalse(qsoStillNeedsTx(QsoProgress(state = QsoState.DONE, theirCall = "JA1ABC")))
+        assertFalse(qsoStillNeedsTx(QsoProgress(state = QsoState.SIGNOFF, theirCall = "JA1ABC")))
     }
 
     @Test

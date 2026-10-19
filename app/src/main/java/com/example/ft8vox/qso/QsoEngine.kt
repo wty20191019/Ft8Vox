@@ -6,28 +6,40 @@ import com.example.ft8vox.engine.DecodeResult
 enum class QsoRole { NONE, CALLER, RESPONDER }
 
 /**
- * QSO 状态机的对外状态（[QsoProgress.order] 的可读化；`docs/Ft8Vox.md`）。
+ * QSO 状态机的对外状态，直接采用论文（QEX 2020《The FT4 and FT8 Communication
+ * Protocols》§7）的六个状态，并保留本机的 IDLE / FAILED 扩展：
+ *
+ * | 论文状态 | 本机 | 含义 |
+ * | --- | --- | --- |
+ * | Calling | [CALLING] | 发 CQ，等第一个回应 |
+ * | Replying | [REPLYING] | 已发网格（Tx1），等对方报告 |
+ * | Report | [REPORT] | 已发报告（Tx2），等对方 R 报告 |
+ * | Roger Report | [ROGER_REPORT] | 已发 R 报告（Tx3），等 RR73/RRR |
+ * | Rogers | [ROGERS] | 已发 RR73（Tx4），等对方 73 |
+ * | Signoff | [SIGNOFF] | 已发 73（Tx5），QSO 完成 |
  */
 enum class QsoState {
     IDLE,
 
-    /** 已发出序号 1（网格）或 6（CQ），等待对方回复。 */
-    WAIT_REPLY,
+    /** 论文 Calling：发 CQ（Tx6），等回应者。 */
+    CALLING,
 
-    /** 已发出序号 2（信号报告），等待对方的 R 报告（序号 3）。 */
-    WAIT_REPORT,
+    /** 论文 Replying：已应答 CQ / 发出网格（Tx1），等对方报告。 */
+    REPLYING,
 
-    /** 已发出序号 3（R 报告），等待对方的 RR73（序号 4）。 */
-    WAIT_RR73,
+    /** 论文 Report：已发信号报告（Tx2），等对方 R 报告（Tx3）。 */
+    REPORT,
 
-    /**
-     * 已发出序号 4（RR73）并**已落库**；照 FT8CN 本段**仍未结束**：还要等对方的 73，
-     * 等不到就按「无回应上限 / 对方转呼别人 / 20 次硬上限」收尾（`docs/Ft8Vox.md`）。
-     */
-    WAIT_FINAL,
+    /** 论文 Roger Report：已发 R 报告（Tx3），等对方的 RR73 / RRR。 */
+    ROGER_REPORT,
 
-    DONE,
+    /** 论文 Rogers：已发 RR73（Tx4），等对方的 73。 */
+    ROGERS,
 
+    /** 论文 Signoff：已发 73（Tx5），QSO 完成。 */
+    SIGNOFF,
+
+    /** 本机扩展：按兜底判据放弃（对方无响应 / 转呼别人）。 */
     FAILED,
 }
 
@@ -153,7 +165,7 @@ data class QsoProgress(
 ) {
     /** 是否处于进行中的 QSO。 */
     val active: Boolean
-        get() = state != QsoState.IDLE && state != QsoState.DONE && state != QsoState.FAILED
+        get() = state != QsoState.IDLE && state != QsoState.SIGNOFF && state != QsoState.FAILED
 
     /**
      * QSO 已判定结束（成功 / 作废），但收尾报文（RR73/73）**还没真正发出**。
@@ -162,7 +174,7 @@ data class QsoProgress(
      * 否则 `startCq` 会 `reset` 引擎，把这条收尾报文覆盖掉（真机现象：对方给我 RR73，我没回 73）。
      */
     val finishing: Boolean
-        get() = (state == QsoState.DONE || state == QsoState.FAILED) && txText != null
+        get() = (state == QsoState.SIGNOFF || state == QsoState.FAILED) && txText != null
 
     /** 本阶段还没轮到我方时隙发射时的提示后缀。 */
     private val pendingHint: String get() = "待发（等我的发射时隙）"
@@ -170,24 +182,27 @@ data class QsoProgress(
     val description: String
         get() = when (state) {
             QsoState.IDLE -> "空闲"
-            QsoState.DONE -> "已完成"
+            QsoState.SIGNOFF -> "已完成"
             QsoState.FAILED -> "已放弃（对方无响应）"
-            QsoState.WAIT_REPLY ->
+            QsoState.CALLING ->
                 when {
                     awaitingResponders && txSent -> "CQ 已发出，等待回应"
                     awaitingResponders -> "CQ $pendingHint"
                     txSent -> "已呼叫 $theirCall，等待回复"
                     else -> "呼叫 $theirCall $pendingHint"
                 }
-            QsoState.WAIT_REPORT -> {
+            QsoState.REPLYING ->
+                if (txSent) "已应答 $theirCall，等待回复"
+                else "应答 $theirCall $pendingHint"
+            QsoState.REPORT -> {
                 val r = reportSent?.let { MessageParser.formatReport(it) } ?: ""
                 if (txSent) "已发报告 $r，等待 $theirCall 的 R 报告"
                 else "报告 $r $pendingHint"
             }
-            QsoState.WAIT_RR73 ->
+            QsoState.ROGER_REPORT ->
                 if (txSent) "已发 R 报告，等待 $theirCall 的 RR73"
                 else "R 报告 $pendingHint"
-            QsoState.WAIT_FINAL ->
+            QsoState.ROGERS ->
                 if (txSent) "已发 RR73（已落库），等待 $theirCall 的 73"
                 else "RR73 $pendingHint"
         }
@@ -239,7 +254,7 @@ data class QsoProgress(
  *   `noReplyLimit` 决定，但兜底判据在**本引擎**里（见下）。
  * - **完成判据**（照 FT8CN `:832-843`，5 路 OR）：
  *   1. 对方的报文序号 = 5（对方发 73）→ 完成；
- *   2. 我的序号 = 5 且对方沉默（本机结构上不可达：发出 73 后状态已是 [QsoState.DONE]）；
+ *   2. 我的序号 = 5 且对方沉默（本机结构上不可达：发出 73 后状态已是 [QsoState.SIGNOFF]）；
  *   3. **除 CQ 主叫（序号 6）外各阶段**且 `noReplyLimit > 0` 且 `noReplyCount >= noReplyLimit` → 作废换台；
  *   4. 我的序号 = 4 且**对方开始呼叫别人**（[targetCallingOthers]）→ 作废换台；
  *   5. **除 CQ 主叫外各阶段**且 `noReplyLimit == 0` 且 `noReplyCount >= 20` → 作废换台。
@@ -321,7 +336,7 @@ class QsoEngine {
     val phase: QsoPhase
         get() = when {
             awaitingResponders -> QsoPhase.CQ
-            state == QsoState.DONE || state == QsoState.FAILED ->
+            state == QsoState.SIGNOFF || state == QsoState.FAILED ->
                 if (txText != null) QsoPhase.FINISHING else QsoPhase.IDLE
             state == QsoState.IDLE -> QsoPhase.IDLE
             else -> QsoPhase.QSO
@@ -386,7 +401,7 @@ class QsoEngine {
         markTime(utcMs)
         // 记录「真正发出去的是哪条」，供 QsoProgress.txSent / description 区分「待发」与「已发出」
         if (sentText != null) lastSentText = sentText
-        if (state == QsoState.DONE || state == QsoState.FAILED) {
+        if (state == QsoState.SIGNOFF || state == QsoState.FAILED) {
             if (sentText == null || txText == null || sentText == txText) txText = null
         }
         // 收尾报文真正发出即落库（发的是旧报文时不算：那条还没轮到我方的收尾序号）
@@ -475,7 +490,7 @@ class QsoEngine {
     /**
      * 对方已确认收到我的报告（序号 3 的 `R<报告>`）→ 我收尾（我方序号 4 的 `RR73`）。
      *
-     * 发出 RR73 即**落库**（FT8CN `setCurrentFunctionOrder(4)`）；本段仍会停在 [QsoState.WAIT_FINAL]
+     * 发出 RR73 即**落库**（FT8CN `setCurrentFunctionOrder(4)`）；本段仍会停在 [QsoState.ROGERS]
      * 等对方的 73（照 FT8CN，等不到会重发 RR73 / 按兜底收尾）。
      *
      * @param utcMs 落库时间（UTC 毫秒）；<=0 时回退到最近一次带时间戳的调用
@@ -584,7 +599,7 @@ class QsoEngine {
             gaveUp = giveUpByNoReply
             step = QsoStep.NONE
             txText = null
-            state = QsoState.DONE
+            state = QsoState.SIGNOFF
             lastAdvanced = newOrder != FunctionOrder.NONE
             return progress()
         }
@@ -851,12 +866,13 @@ class QsoEngine {
      */
     private fun syncState() {
         state = when (step) {
-            QsoStep.RR73 -> QsoState.WAIT_FINAL
-            QsoStep.FINAL_73 -> QsoState.DONE
-            QsoStep.REPORT -> QsoState.WAIT_REPORT
-            QsoStep.ROGER -> QsoState.WAIT_RR73
-            QsoStep.GRID, QsoStep.CQ -> QsoState.WAIT_REPLY
-            QsoStep.NONE -> if (role != QsoRole.NONE) QsoState.WAIT_REPLY else QsoState.IDLE
+            QsoStep.RR73 -> QsoState.ROGERS
+            QsoStep.FINAL_73 -> QsoState.SIGNOFF
+            QsoStep.REPORT -> QsoState.REPORT
+            QsoStep.ROGER -> QsoState.ROGER_REPORT
+            QsoStep.GRID -> QsoState.REPLYING
+            QsoStep.CQ -> QsoState.CALLING
+            QsoStep.NONE -> if (role != QsoRole.NONE) QsoState.CALLING else QsoState.IDLE
         }
     }
 

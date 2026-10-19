@@ -1562,7 +1562,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun apModeFor(state: QsoState, hasHis: Boolean): Int = when {
         _status.value.myCall.isBlank() -> 0
         !hasHis -> 1
-        state == QsoState.WAIT_RR73 || state == QsoState.WAIT_FINAL -> 6
+        state == QsoState.ROGER_REPORT || state == QsoState.ROGERS -> 6
         else -> 3
     }
 
@@ -1571,7 +1571,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         utcNowMs: Long = AudioEngine.utcNowMs(),
         incoming: List<DecodeResult> = emptyList(),
     ) {
-        val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+        val finished = p.state == QsoState.SIGNOFF || p.state == QsoState.FAILED
         // 完成时**保留发射周期**：还要用同一周期把最后一条 RR73/73 发出去；
         // 失败时只解除「目标时隙固定」（保留当前周期，避免下一段跳时隙）。
         if (p.state == QsoState.FAILED) pinnedTxParity = null
@@ -1582,7 +1582,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.value.myCall,
             if (finished) null else p.theirCall,
             p.theirGrid,
-            apModeFor(if (finished) QsoState.DONE else p.state, !finished && p.theirCall != null),
+            apModeFor(if (finished) QsoState.SIGNOFF else p.state, !finished && p.theirCall != null),
         )
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
             // 会话内去重（取代旧的 90s 时间窗）：同一呼号一段会话只落一条。
@@ -1753,14 +1753,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
             AutoTargetKind.RR73 -> qsoEngine.respondToRr73(t.call, t.snr, t.slotUtcMs)
         }
-        if (!p.active && p.state != QsoState.DONE) return
+        if (!p.active && p.state != QsoState.SIGNOFF) return
         Log.i(TAG_QSO, "auto start kind=${t.kind} call=${t.call} -> ${p.state} tx=${p.txText}")
         _status.update {
             it.copy(qso = p, txArmed = true, status = "自动程序：应答 ${t.call}")
         }
         tryRetargetNow(p.txText, manual = false)
         // ROGER / RR73 场景一上来即完成：走统一收尾（写日志 + 通知状态机）
-        if (p.state == QsoState.DONE) applyQsoProgress(p)
+        if (p.state == QsoState.SIGNOFF) applyQsoProgress(p)
     }
 
     /**
@@ -1882,7 +1882,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val wasFinishing = qsoEngine.phase == QsoPhase.FINISHING
                 qsoEngine.onTransmitted(sentText, AudioEngine.utcNowMs())
                 val p = qsoEngine.progress()
-                val finished = p.state == QsoState.DONE || p.state == QsoState.FAILED
+                val finished = p.state == QsoState.SIGNOFF || p.state == QsoState.FAILED
                 // 收尾报文（RR73/73）**还没真正发出去** → 保留武装与周期，等下一个我方时隙。
                 val finalPending = finished && p.txText != null
                 if (finished && !finalPending) {
@@ -2309,7 +2309,7 @@ internal fun txBlockReason(myCall: String, txEnabled: Boolean): String? = when {
  * 要不要接着发原序列，都看它 —— 两处判据本来各写一遍，统一到这里。纯逻辑便于单测。
  */
 internal fun qsoStillNeedsTx(p: QsoProgress): Boolean =
-    p.active || ((p.state == QsoState.DONE || p.state == QsoState.FAILED) && p.txText != null)
+    p.active || ((p.state == QsoState.SIGNOFF || p.state == QsoState.FAILED) && p.txText != null)
 
 /** 发射区一次性提示（红字）的显示时长：够看清一句短句，又不至于长时间盖住 QSO 进度那一行。 */
 internal const val TX_NOTICE_MS = 6000L

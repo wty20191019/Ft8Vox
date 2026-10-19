@@ -50,7 +50,7 @@ class SessionServiceTextTest {
                 protocol = Protocol.FT8,
                 band = "20m",
                 decodedTotal = 1,
-                qso = QsoProgress(state = QsoState.WAIT_REPLY, theirCall = "JA1XYZ"),
+                qso = QsoProgress(state = QsoState.CALLING, theirCall = "JA1XYZ"),
             ),
         )
         assertTrue(text, text.endsWith("· JA1XYZ"))
@@ -64,7 +64,7 @@ class SessionServiceTextTest {
                 protocol = Protocol.FT8,
                 band = "20m",
                 decodedTotal = 1,
-                qso = QsoProgress(state = QsoState.DONE, theirCall = "JA1XYZ"),
+                qso = QsoProgress(state = QsoState.SIGNOFF, theirCall = "JA1XYZ"),
             ),
         )
         assertEquals("接收中 · FT8 · 20m · 解码 1", text)

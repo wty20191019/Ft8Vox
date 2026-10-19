@@ -85,6 +85,25 @@ FINISHING ──收尾报文发出──────► IDLE / CQ         ← �
 角色推断三处 `when` 现在都收敛到同一个枚举上——新增一步不会再漏改一处。唯一转移规则仍是
 `QsoStep.replyTo(对方序号) = of(对方序号 + 1)`；对外的 `QsoProgress.order` 由它派生，数值不变。
 
+### 2.3 对外状态改用论文的六状态（`QsoState`）
+
+论文 §7 / Figure 5 把标准 QSO 分成 **Calling / Replying / Report / Roger_Report /
+Rogers / Signoff** 六个状态。`QsoState` 现在直接采用这套命名（行为不变，只是把原来的
+`WAIT_REPLY / WAIT_REPORT / WAIT_RR73 / WAIT_FINAL / DONE` 改名并拆开）：
+
+| 论文状态 | 本机 `QsoState` | 我方下一条报文 | 原枚举 |
+| --- | --- | --- | --- |
+| Calling | `CALLING` | Tx6 `CQ ...` | `WAIT_REPLY`（CQ 分支） |
+| Replying | `REPLYING` | Tx1 `<对方> <我> [网格]` | `WAIT_REPLY`（GRID 分支） |
+| Report | `REPORT` | Tx2 `<对方> <我> <±dd>` | `WAIT_REPORT` |
+| Roger Report | `ROGER_REPORT` | Tx3 `<对方> <我> R<±dd>` | `WAIT_RR73` |
+| Rogers | `ROGERS` | Tx4 `<对方> <我> RR73` | `WAIT_FINAL` |
+| Signoff | `SIGNOFF` | Tx5 `<对方> <我> 73` | `DONE` |
+
+本机保留两个扩展状态：`IDLE`（无 QSO）与 `FAILED`（按无回应/转呼别人的兜底判据放弃）。
+`QsoState` 仍由 `QsoStep` 单向派生（`syncState()`），不新增第二份可写状态；因此这次改名
+不改变任何转移、计数、落库或发射行为，`QsoEngineTest` 原样通过。
+
 ---
 
 ## 3. 不变式（改造中始终成立）

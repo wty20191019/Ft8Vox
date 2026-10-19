@@ -29,7 +29,7 @@ class QsoEngineTest {
         val q = engine()
         // 主叫 QSO（对方是我方 CQ 的回应者）：我发信号报告
         val cq = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
-        assertEquals(QsoState.WAIT_REPORT, cq.state)
+        assertEquals(QsoState.REPORT, cq.state)
         assertEquals(QsoRole.CALLER, cq.role)
         assertEquals("GJ0KYZ F4FSY -11", cq.txText)
         assertEquals("GJ0KYZ", cq.theirCall)
@@ -37,7 +37,7 @@ class QsoEngineTest {
         // 对方发 R 报告（序号 3）→ 我发 RR73（序号 4）并**立即落库**；
         // 照 FT8CN，此时本段还没结束，还等对方的 73（等不到会重发 RR73 / 按兜底收尾）。
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
-        assertEquals(QsoState.WAIT_FINAL, s2.state)
+        assertEquals(QsoState.ROGERS, s2.state)
         assertEquals("GJ0KYZ F4FSY RR73", s2.txText)
         assertTrue(s2.active)
 
@@ -51,7 +51,7 @@ class QsoEngineTest {
 
         // 对方的 73（序号 5）到手 → 通联完成，不再重发
         val s3 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ 73")))
-        assertEquals(QsoState.DONE, s3.state)
+        assertEquals(QsoState.SIGNOFF, s3.state)
         assertNull(s3.txText)
         q.onTransmitted()
         assertNull(q.progress().txText)
@@ -66,12 +66,12 @@ class QsoEngineTest {
 
         // 对方给我信号报告
         val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
-        assertEquals(QsoState.WAIT_RR73, s1.state)
+        assertEquals(QsoState.ROGER_REPORT, s1.state)
         assertEquals("GJ0KYZ F4FSY R-07", s1.txText)
 
         // 对方发 RR73 → 我回 73 并完成
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
-        assertEquals(QsoState.DONE, s2.state)
+        assertEquals(QsoState.SIGNOFF, s2.state)
         assertEquals("GJ0KYZ F4FSY 73", s2.txText)
 
         val log = q.consumeCompleted()
@@ -99,7 +99,7 @@ class QsoEngineTest {
 
         // 对方 RR73 到手（本时隙实际在播的仍是上一时隙抢发的 R-07）
         val s2b = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
-        assertEquals(QsoState.DONE, s2b.state)
+        assertEquals(QsoState.SIGNOFF, s2b.state)
         assertEquals("GJ0KYZ F4FSY 73", s2b.txText)
         assertNotNull(q.consumeCompleted())
 
@@ -127,7 +127,7 @@ class QsoEngineTest {
         assertTrue("发 CQ 后应处于等回应者阶段", cq.awaitingResponders)
         // CQ 阶段由状态机（onIdleBatch）收集/排序回应者：引擎本身不自行认人，也不计重试
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
-        assertEquals(QsoState.WAIT_REPLY, s.state)
+        assertEquals(QsoState.CALLING, s.state)
         assertEquals(0, s.noReplyCount)
         assertEquals("CQ F4FSY JN25", s.txText)
     }
@@ -138,7 +138,7 @@ class QsoEngineTest {
         q.startResponderQso("GJ0KYZ", "IO90")
         q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC W9XYZ IO90")))
-        assertEquals(QsoState.WAIT_REPLY, s.state)
+        assertEquals(QsoState.REPLYING, s.state)
         assertEquals(1, s.noReplyCount)
     }
 
@@ -148,7 +148,7 @@ class QsoEngineTest {
         q.startResponderQso("GJ0KYZ", "IO90")
         q.onTransmitted() // 已发出网格，等回复
         val s = q.onDecoded(listOf(decoded("K1ABC F4FSY JN25")))
-        assertEquals(QsoState.WAIT_REPLY, s.state)
+        assertEquals(QsoState.REPLYING, s.state)
         assertEquals(1, s.noReplyCount)
     }
 
@@ -188,7 +188,7 @@ class QsoEngineTest {
             last = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12")))
         }
         // 兜底阈值是 20：刚够 20 次还没收尾；第 21 次才换台（见 givesUpAtAnyStageExceptCqWhenNoReply）
-        assertEquals(QsoState.WAIT_REPLY, last.state)
+        assertEquals(QsoState.REPLYING, last.state)
         assertTrue(last.active)
         assertEquals(20, last.noReplyCount)
         assertNotNull(last.txText)
@@ -199,10 +199,10 @@ class QsoEngineTest {
         val q = engine()
         // 我方发过 CQ、对方用网格回应 → 已发出报告，等对方的 R 报告
         val s0 = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
-        assertEquals(QsoState.WAIT_REPORT, s0.state)
+        assertEquals(QsoState.REPORT, s0.state)
         // 双方同时进入「发报告」阶段：对方发来报告（未加 R）
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -03")))
-        assertEquals(QsoState.WAIT_RR73, s.state)
+        assertEquals(QsoState.ROGER_REPORT, s.state)
         // 回**我自己的**报告（R-11），不回显对方的 -03（那是他测到的我）
         assertEquals("GJ0KYZ F4FSY R-11", s.txText)
     }
@@ -213,12 +213,12 @@ class QsoEngineTest {
         // 双方同时进入「发报告」→ 各自回 R 报告 → 同时停在「等 RR73」：
         // 真机 bug 就是这里两端互相重复 R 报告（R-02 / R-10 每 30 s 交替）。
         val s0 = q.respondToReport("GJ0KYZ", theirReport = -12, snr = -7)
-        assertEquals(QsoState.WAIT_RR73, s0.state)
+        assertEquals(QsoState.ROGER_REPORT, s0.state)
         assertEquals("GJ0KYZ F4FSY R-07", s0.txText)
 
         // 对方也发来 R 报告（对撞）：照 FT8CN「对方序号 + 1」→ 我发 RR73（序号 4）并落库
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-09", snr = -5)))
-        assertEquals(QsoState.WAIT_FINAL, s.state)
+        assertEquals(QsoState.ROGERS, s.state)
         assertEquals("GJ0KYZ F4FSY RR73", s.txText)
         val log = q.consumeCompleted()
         assertNotNull(log)
@@ -233,7 +233,7 @@ class QsoEngineTest {
         q.startResponderQso("GJ0KYZ", "IO90")
         // 已发网格、还没发报告，却收到对方的 R 报告：照 FT8CN「对方序号 3 + 1」→ 直接发 RR73 并落库
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-04", snr = -7)))
-        assertEquals(QsoState.WAIT_FINAL, s.state)
+        assertEquals(QsoState.ROGERS, s.state)
         assertEquals("GJ0KYZ F4FSY RR73", s.txText)
         val log = q.consumeCompleted()
         assertNotNull(log)
@@ -248,7 +248,7 @@ class QsoEngineTest {
         // 双方同时在应答对方：对方发来「我的呼号 + 他的网格」→ 转主叫，直接发报告
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -9)))
         assertEquals(QsoRole.CALLER, s.role)
-        assertEquals(QsoState.WAIT_REPORT, s.state)
+        assertEquals(QsoState.REPORT, s.state)
         assertEquals("GJ0KYZ F4FSY -09", s.txText)
     }
 
@@ -280,8 +280,8 @@ class QsoEngineTest {
                 aText = a.progress().txText
             }
         }
-        assertEquals(QsoState.DONE, a.progress().state)
-        assertEquals(QsoState.DONE, b.progress().state)
+        assertEquals(QsoState.SIGNOFF, a.progress().state)
+        assertEquals(QsoState.SIGNOFF, b.progress().state)
         assertNotNull("A 应记入一条通联", a.consumeCompleted())
         assertNotNull("B 应记入一条通联", b.consumeCompleted())
         // 同一条报文不得重复出现（死循环特征：R 报告反复重发）
@@ -319,12 +319,12 @@ class QsoEngineTest {
         val q = engine()
         val start = q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         assertEquals(QsoRole.CALLER, start.role)
-        assertEquals(QsoState.WAIT_REPORT, start.state)
+        assertEquals(QsoState.REPORT, start.state)
         assertEquals("GJ0KYZ F4FSY -11", start.txText)
 
         // 对方 Roger（序号 3）→ 回 RR73（序号 4）并落库
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
-        assertEquals(QsoState.WAIT_FINAL, s.state)
+        assertEquals(QsoState.ROGERS, s.state)
         assertEquals("GJ0KYZ F4FSY RR73", s.txText)
 
         val log = q.consumeCompleted()
@@ -340,7 +340,7 @@ class QsoEngineTest {
         val q = engine()
         val s = q.respondToRoger("GJ0KYZ", theirReport = -12, snr = -7, utcMs = 30_000L)
         assertEquals(QsoRole.RESPONDER, s.role)
-        assertEquals(QsoState.WAIT_FINAL, s.state)
+        assertEquals(QsoState.ROGERS, s.state)
         assertEquals("GJ0KYZ F4FSY RR73", s.txText)
         assertTrue("发出 RR73 后仍等对方的 73（照 FT8CN）", s.active)
 
@@ -352,7 +352,7 @@ class QsoEngineTest {
 
         // 对方的 73 到手 → 完成
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ 73")))
-        assertEquals(QsoState.DONE, s2.state)
+        assertEquals(QsoState.SIGNOFF, s2.state)
         assertFalse(s2.active)
     }
 
@@ -362,7 +362,7 @@ class QsoEngineTest {
         val q = engine()
         val s = q.respondToRr73("GJ0KYZ", snr = -7, utcMs = 30_000L)
         assertEquals(QsoRole.RESPONDER, s.role)
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
         assertEquals("GJ0KYZ F4FSY 73", s.txText)
         assertFalse(s.active)
 
@@ -376,11 +376,11 @@ class QsoEngineTest {
     fun respondToReportWaitsForRr73() {
         val q = engine()
         val start = q.respondToReport("GJ0KYZ", theirReport = -12, snr = -7)
-        assertEquals(QsoState.WAIT_RR73, start.state)
+        assertEquals(QsoState.ROGER_REPORT, start.state)
         assertEquals("GJ0KYZ F4FSY R-07", start.txText)
 
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73")))
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
     }
 
     // ---- 死循环复现与收敛（真机 bug：-08 / R-10 每 30 s 交替） ----
@@ -392,11 +392,11 @@ class QsoEngineTest {
         //（不跳 RR73、也不刷新报告值）。对方按同一规则收到我的 R 后自然进到 RR73。
         val q = engine()
         val s0 = q.respondToReport("GJ0KYZ", theirReport = -8, snr = -7)
-        assertEquals(QsoState.WAIT_RR73, s0.state)
+        assertEquals(QsoState.ROGER_REPORT, s0.state)
         assertEquals("GJ0KYZ F4FSY R-07", s0.txText)
 
         val s1 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -08", snr = -10, slotUtcMs = 30_000L)))
-        assertEquals(QsoState.WAIT_RR73, s1.state)
+        assertEquals(QsoState.ROGER_REPORT, s1.state)
         assertEquals("GJ0KYZ F4FSY R-07", s1.txText)
         assertEquals("报告值不随重发刷新", -7, s1.reportSent)
         assertTrue(s1.advanced)
@@ -404,7 +404,7 @@ class QsoEngineTest {
 
         // 对方收到我的 R（序号 3）→ 回 RR73（序号 4）→ 我回 73（序号 5）完成
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ RR73", slotUtcMs = 46_000L)))
-        assertEquals(QsoState.DONE, s2.state)
+        assertEquals(QsoState.SIGNOFF, s2.state)
         assertEquals("GJ0KYZ F4FSY 73", s2.txText)
 
         val log = q.consumeCompleted()
@@ -463,8 +463,8 @@ class QsoEngineTest {
                 a.onTransmitted()
             }
         }
-        assertEquals(QsoState.DONE, a.progress().state)
-        assertEquals(QsoState.DONE, b.progress().state)
+        assertEquals(QsoState.SIGNOFF, a.progress().state)
+        assertEquals(QsoState.SIGNOFF, b.progress().state)
         assertNotNull("A 应记一条通联", a.consumeCompleted())
         assertNotNull("B 应记一条通联", b.consumeCompleted())
         assertEquals("空中不应出现重复报文：$air", air.size, air.distinct().size)
@@ -477,7 +477,7 @@ class QsoEngineTest {
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90")))
-        assertEquals(QsoState.WAIT_REPORT, s.state)
+        assertEquals(QsoState.REPORT, s.state)
         assertEquals("GJ0KYZ F4FSY -11", s.txText)
         // 再来一批（SNR -18）：仍是第一次的 -11
         assertEquals("GJ0KYZ F4FSY -11", q.onDecoded(listOf(decoded("F4FSY GJ0KYZ IO90", snr = -18))).txText)
@@ -513,7 +513,7 @@ class QsoEngineTest {
         q.onTransmitted()
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ -12", snr = -7)))
         assertEquals(0, s.noReplyCount)
-        assertEquals(QsoState.WAIT_RR73, s.state)
+        assertEquals(QsoState.ROGER_REPORT, s.state)
     }
 
     @Test
@@ -528,7 +528,7 @@ class QsoEngineTest {
         q.onTransmitted()
         // 对方 R 报告（本批 SNR -9）：回 RR73 完成并落库，reportSent 用 Tx2 的 -11（不是 -9）
         val s2 = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05", snr = -9)))
-        assertEquals(QsoState.WAIT_FINAL, s2.state)
+        assertEquals(QsoState.ROGERS, s2.state)
         val log = q.consumeCompleted()
         assertNotNull(log)
         assertEquals(-11, log!!.reportSent)
@@ -605,7 +605,7 @@ class QsoEngineTest {
         val q = engine()
         q.startCallerQso("GJ0KYZ", "IO90", snr = -11)
         q.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-05"))) // → 序号 4（RR73），已落库
-        assertEquals(QsoState.WAIT_FINAL, q.progress().state)
+        assertEquals(QsoState.ROGERS, q.progress().state)
         assertNotNull(q.consumeCompleted())
         q.onTransmitted("GJ0KYZ F4FSY RR73")
 
@@ -618,7 +618,7 @@ class QsoEngineTest {
 
         // 对方的 73 到手 → 完成
         val s = q.onDecoded(listOf(decoded("F4FSY GJ0KYZ 73")))
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
         assertNull(s.txText)
         assertFalse("正常完成不算「作废」", s.gaveUp)
         assertFalse(s.active)
@@ -635,7 +635,7 @@ class QsoEngineTest {
 
         val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 21 批：20 >= 20 → 兜底收尾
         assertTrue(s.gaveUp)
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
         assertFalse(s.active)
     }
 
@@ -660,7 +660,7 @@ class QsoEngineTest {
         // 目标开始呼别人（本批里目标发出的报文都不是给我的）→ 立刻作废换台
         val s = q.onDecoded(listOf(decoded("W9XYZ GJ0KYZ -05")))
         assertTrue(s.gaveUp)
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
     }
 
     @Test
@@ -669,13 +669,13 @@ class QsoEngineTest {
         q.startResponderQso("GJ0KYZ", "IO90") // 序号 1：还没发出 RR73
         repeat(20) { q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) }
         // 新口径：无回应兜底在除 CQ 主叫外各阶段都生效，不再死等序号 4
-        assertEquals(QsoState.WAIT_REPLY, q.progress().state)
+        assertEquals(QsoState.REPLYING, q.progress().state)
         assertFalse("刚够 20 次，判定在增量前，尚未收尾", q.progress().gaveUp)
         assertTrue(q.progress().active)
 
         val s = q.onDecoded(listOf(decoded("F4FSY DL1ABC -12"))) // 第 21 批：20 >= 20 → 兜底换台
         assertTrue(s.gaveUp)
-        assertEquals(QsoState.DONE, s.state)
+        assertEquals(QsoState.SIGNOFF, s.state)
         assertFalse(s.active)
     }
 }
