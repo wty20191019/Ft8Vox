@@ -387,6 +387,52 @@ class AutoProgramTest {
         assertNull(s.checkSupervision(limitMs + 1_000L))
     }
 
+    // ---- 论文 AutoSeq 三项 ----
+
+    @Test
+    fun paperAutoSeqDefaults() {
+        val d = AutoProgramSettings()
+        assertTrue("Auto Seq 默认开", d.autoSeq)
+        assertTrue("Call 1st 默认开", d.callFirst)
+        assertFalse("skip Tx1 默认关", d.skipTx1)
+    }
+
+    @Test
+    fun autoSeqOffStillAdvancesButDoesNotAutoAnswer() {
+        val s = scheduler(AutoProgramSettings(autoSeq = false))
+        val start = s.startCallerQso("GJ0KYZ", "IO90", snr = -11)
+        assertEquals(QsoState.REPORT, start.state)
+        assertEquals("GJ0KYZ F4FSY -11", start.txText)
+        // 对方发来 R 报告（序号 3）：状态仍推进到 RR73（六个报文槽要显示下一条），
+        // 但 txTick 不会自动播 qso.txText，等人工点槽发送。
+        val p = s.onDecoded(listOf(decoded("F4FSY GJ0KYZ R-11")))
+        assertEquals(QsoState.ROGERS, p.state)
+        assertEquals("GJ0KYZ F4FSY RR73", p.txText)
+        assertTrue("收到有效回复仍应记录 advanced", p.advanced)
+        // 空闲决策也不自动发 CQ / 应答。
+        assertTrue(s.onIdleBatch(listOf(decoded("CQ GJ0KYZ IO90"))) is AutoAction.None)
+    }
+
+    @Test
+    fun callFirstOffDoesNotAutoAnswerDirected() {
+        val off = scheduler(AutoProgramSettings(callFirst = false))
+        val a = off.onIdleBatch(listOf(decoded("F4FSY GJ0KYZ IO90")))
+        assertFalse("Call 1st 关：不自动应答定向报文", a is AutoAction.HandleDirected)
+        // 没有 CQ 候选时仍按自动程序发 CQ（自动选台是本机扩展，不受 Call 1st 影响）
+        assertTrue(a is AutoAction.SendCq)
+
+        val on = scheduler(AutoProgramSettings(callFirst = true))
+        assertTrue(on.onIdleBatch(listOf(decoded("F4FSY GJ0KYZ IO90"))) is AutoAction.HandleDirected)
+    }
+
+    @Test
+    fun skipTx1FlagsAnswerCq() {
+        val s = scheduler(AutoProgramSettings(skipTx1 = true))
+        val a = s.onIdleBatch(listOf(decoded("CQ GJ0KYZ IO90")))
+        assertTrue(a is AutoAction.AnswerCq)
+        assertTrue("skip Tx1 应透传到应答动作", (a as AutoAction.AnswerCq).skipTx1)
+    }
+
     // ---- 默认值（照 FT8CN） ----
 
     @Test

@@ -26,10 +26,10 @@ import com.example.ft8vox.qso.NO_REPLY_LIMIT_RANGE
 import com.example.ft8vox.qso.SUPERVISION_MINUTES
 
 /**
- * 「自动程序」设置弹窗（顶栏菜单入口），照 FT8CN 四项重做（见 `docs/Ft8Vox.md`）。
+ * 「自动程序」设置弹窗（顶栏菜单入口），FT8CN 四项 + 论文 AutoSeq 三项（见 `docs/Ft8Vox.md`）。
  *
  * **没有档位、也没有启用确认**：自动程序的唯一闸门是「发送总开关」，打开即自动发射。
- * 本弹窗只改策略（发射监管 / 无回应次数 / 两个开关）。
+ * 本弹窗只改策略（Auto Seq / Call 1st / skip Tx1 / 发射监管 / 无回应次数 / 两个 CQ 开关）。
  */
 @Composable
 fun AutoProgramDialog(
@@ -73,10 +73,31 @@ fun AutoProgramPanel(
             ),
     ) {
         Text(
-            "打开「发送总开关」即启用自动程序（无确认框）：定向报文一律应答；" +
+            "打开「发送总开关」即启用自动程序（无确认框）。论文 Auto Seq 三项见下；" +
                 "CQ 台由下面两个开关与「跟踪名单」共同决定。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        AutoSection("论文 AutoSeq")
+
+        AutoOptionRow(
+            title = "自动续跑（Auto Seq）",
+            subtitle = "收到发给我的有效回复时自动推进下一条；关闭后只手动发射（不自动应答/重发/放弃）",
+            checked = program.autoSeq,
+            onChange = { v -> onOption { it.copy(autoSeq = v) } },
+        )
+        AutoOptionRow(
+            title = "Call 1st",
+            subtitle = "CQ 阶段收到第一个定向回应就自动应答；关闭后由人工从解码列表选择",
+            checked = program.callFirst,
+            onChange = { v -> onOption { it.copy(callFirst = v) } },
+        )
+        AutoOptionRow(
+            title = "跳过 Tx1（直接发报告）",
+            subtitle = "应答 CQ 时跳过网格，直接发 Tx2 信号报告（论文 Calling 的 skip Tx1）",
+            checked = program.skipTx1,
+            onChange = { v -> onOption { it.copy(skipTx1 = v) } },
         )
 
         AutoSection("自动程序策略")

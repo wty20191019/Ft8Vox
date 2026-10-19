@@ -19,7 +19,7 @@ val SUPERVISION_MINUTES: List<Int> = listOf(0) + (5..95 step 10).toList()
 val NO_REPLY_LIMIT_RANGE: IntRange = 0..30
 
 /**
- * 自动程序策略（持久化于设置；**照 FT8CN 四项重做**，见 `docs/Ft8Vox.md`）。
+ * 自动程序策略（持久化于设置；FT8CN 四项 + 论文 AutoSeq 三项，见 `docs/Ft8Vox.md`）。
  *
  * 已**没有档位**：自动程序的开关就是「发送总开关」`txEnabled`（见方案 §2.4）。
  */
@@ -56,6 +56,21 @@ data class AutoProgramSettings(
      * 里的 CQ 台。
      */
     val autoCallFollow: Boolean = true,
+    /**
+     * 论文 Auto Seq：收到发给本台的**有效回复**时自动推进下一条报文；
+     * 关闭后不再自动推进/重发/放弃，只保留手动发射（对应 WSJT-X 的 Auto Seq 复选框）。
+     */
+    val autoSeq: Boolean = true,
+    /**
+     * 论文 `Call 1st`：CQ 阶段收到第一个“发给我”的定向回应时自动应答；
+     * 关闭后不自动应答定向报文，需手动选择（仍可按 [autoCallFollow] 主动呼叫 CQ 台）。
+     */
+    val callFirst: Boolean = true,
+    /**
+     * 论文 `skip Tx1`：应答 CQ 时跳过网格（Tx1），直接发信号报告（Tx2）。
+     * 对应 WSJT-X Calling 状态的 skip Tx1 选项。
+     */
+    val skipTx1: Boolean = false,
 )
 
 /** 自动程序目标的报文类型。 */
@@ -105,8 +120,8 @@ sealed interface AutoAction {
     /** 发 CQ（主叫）。 */
     data object SendCq : AutoAction
 
-    /** 应答对方的 CQ（S&P）。 */
-    data class AnswerCq(val target: AutoTarget) : AutoAction
+    /** 应答对方的 CQ（S&P）。[skipTx1] 对应论文 Calling 状态的 skip Tx1：直接发 Tx2 报告。 */
+    data class AnswerCq(val target: AutoTarget, val skipTx1: Boolean = false) : AutoAction
 
     /**
      * 处理发给我方的定向报文（交给会话状态机 [QsoEngine]）：

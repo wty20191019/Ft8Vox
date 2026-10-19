@@ -104,6 +104,23 @@ Rogers / Signoff** 六个状态。`QsoState` 现在直接采用这套命名（�
 `QsoState` 仍由 `QsoStep` 单向派生（`syncState()`），不新增第二份可写状态；因此这次改名
 不改变任何转移、计数、落库或发射行为，`QsoEngineTest` 原样通过。
 
+### 2.4 自动程序与论文 AutoSeq
+
+`AutoProgramSettings` 新增三项论文语义：
+
+| 选项 | 默认 | 行为 |
+| --- | --- | --- |
+| `autoSeq` | 开 | 关闭后 `onIdleBatch` 不自动选台/应答/发 CQ；`txTick` 只播人工排定的 `manualTxText`，不自动播 `qso.txText`。状态仍按收到的报文推进，六个报文槽显示下一条。 |
+| `callFirst` | 开 | 关闭后 `onIdleBatch`/`onTargetGaveUp` 不自动应答定向报文，交给人工选择；`directedTakeover` 也关闭。 |
+| `skipTx1` | 关 | `AutoAction.AnswerCq(skipTx1=true)`；`SessionViewModel` 对应答 CQ 的目标改用 `startCallerQso`（Tx2 报告），跳过 Tx1 网格。 |
+
+保留的本机扩展：
+
+- 自动选台（CQ 候选、跟踪名单、已通联过滤、不做 DX 分级）；
+- 定向队列 / 忙时换台（`directedTakeover`）；
+- 无回应上限、发射监管、对方转呼别人；
+- 自动发起 QSO（论文明确禁止无人值守；本机用「发送总开关 + 安全阀」约束，尚未在 UI 上强制人工发起）。
+
 ---
 
 ## 3. 不变式（改造中始终成立）

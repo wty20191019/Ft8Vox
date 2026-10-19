@@ -66,6 +66,9 @@ private object Keys {
     val autoNoReplyLimit = intPreferencesKey("auto_no_reply_limit")
     val autoFollowCq = booleanPreferencesKey("auto_follow_cq")
     val autoCallFollow = booleanPreferencesKey("auto_call_follow")
+    val autoSeq = booleanPreferencesKey("auto_seq")
+    val autoCallFirst = booleanPreferencesKey("auto_call_first")
+    val autoSkipTx1 = booleanPreferencesKey("auto_skip_tx1")
     //
     // ---- 以下为**旧键（静默保留，便于回滚）**：不再读取、不再写入 ----
     // 旧「自动程序」档位 / 排序 / 重发 / 保护限制字段。
@@ -191,6 +194,9 @@ private fun Preferences.toAppSettings(): AppSettings {
                 ?: defaults.auto.noReplyLimit).coerceIn(0, 30),
             autoAddCqToFollow = this[Keys.autoFollowCq] ?: defaults.auto.autoAddCqToFollow,
             autoCallFollow = this[Keys.autoCallFollow] ?: defaults.auto.autoCallFollow,
+            autoSeq = this[Keys.autoSeq] ?: defaults.auto.autoSeq,
+            callFirst = this[Keys.autoCallFirst] ?: defaults.auto.callFirst,
+            skipTx1 = this[Keys.autoSkipTx1] ?: defaults.auto.skipTx1,
         ),
         filterTags = readFilterTags(this, defaults.filterTags),
         callFilter = this[Keys.callFilter] ?: defaults.callFilter,
@@ -246,6 +252,9 @@ private fun AppSettings.writeTo(prefs: MutablePreferences) {
     prefs[Keys.autoNoReplyLimit] = auto.noReplyLimit
     prefs[Keys.autoFollowCq] = auto.autoAddCqToFollow
     prefs[Keys.autoCallFollow] = auto.autoCallFollow
+    prefs[Keys.autoSeq] = auto.autoSeq
+    prefs[Keys.autoCallFirst] = auto.callFirst
+    prefs[Keys.autoSkipTx1] = auto.skipTx1
     prefs[Keys.filterTags] = filterTags.map { it.name }.toSet()
     prefs[Keys.callFilter] = callFilter
     prefs[Keys.ignoredCalls] = ignoredCalls

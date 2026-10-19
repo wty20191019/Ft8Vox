@@ -1563,7 +1563,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.value.myCall.isBlank() -> 0
         !hasHis -> 1
         state == QsoState.ROGER_REPORT || state == QsoState.ROGERS -> 6
-        else -> 3
+        state == QsoState.CALLING -> 1      // 论文 naptypes(0)：1,2；本机未实现 iaptype 1（CQ）
+        state == QsoState.SIGNOFF -> 3      // 论文 naptypes(5)：3,1,2
+        else -> 3                            // REPLYING / REPORT：2,3
     }
 
     private fun applyQsoProgress(
@@ -1682,7 +1684,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private fun runAutoAction(action: AutoAction) {
         when (action) {
             AutoAction.SendCq -> startCqInternal()
-            is AutoAction.AnswerCq -> startAutoTarget(action.target)
+            is AutoAction.AnswerCq -> startAutoTarget(action.target, action.skipTx1)
             is AutoAction.HandleDirected -> startAutoTarget(action.target)
             AutoAction.Listen -> {
                 // 暂无 CQ 台可应答：保持接收、不发
@@ -1726,7 +1728,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * [AutoTargetKind.REPORT]（对方给我报告）、[AutoTargetKind.ROGER]（对方 Roger 我的报告）、
      * [AutoTargetKind.RR73]（对方直接给我 RR73 → 我回 73 收尾）。
      */
-    private fun startAutoTarget(t: AutoTarget) {
+    private fun startAutoTarget(t: AutoTarget, skipTx1: Boolean = false) {
         val st = _status.value
         // 时隙自动对应：正在发射时**保持当前周期**（同 answerInternal，免得翻到接收时隙）；
         // 否则固定到对方时隙的相反周期。
@@ -1747,7 +1749,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
         val nowMs = AudioEngine.utcNowMs()
         val p = when (t.kind) {
-            AutoTargetKind.CQ -> qsoEngine.startResponderQso(t.call, t.grid, nowMs, t.snr)
+            AutoTargetKind.CQ ->
+                if (skipTx1) qsoEngine.startCallerQso(t.call, t.grid, t.snr, nowMs)
+                else qsoEngine.startResponderQso(t.call, t.grid, nowMs, t.snr)
             AutoTargetKind.CALL -> qsoEngine.startCallerQso(t.call, t.grid, t.snr, nowMs)
             AutoTargetKind.REPORT -> qsoEngine.respondToReport(t.call, t.report ?: return, t.snr, nowMs)
             AutoTargetKind.ROGER -> qsoEngine.respondToRoger(t.call, t.report ?: return, t.snr, t.slotUtcMs)
@@ -1910,7 +1914,10 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             st = _status.value
         }
         if (txJob?.isActive == true) return
-        val text = st.manualTxText ?: st.qso.txText ?: return
+        // 论文 Auto Seq 关闭：只播人工排定的 manualTxText，不自动播 qso.txText。
+        val text = st.manualTxText
+            ?: (if (latestSettings.auto.autoSeq) st.qso.txText else null)
+            ?: return
         val slotMs = st.slotMs.toLong()
         if (slotMs <= 0) return
 

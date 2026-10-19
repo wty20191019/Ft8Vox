@@ -592,8 +592,9 @@ class QsoEngine {
         // 「对方开始呼别人」是独立信号，仍只在序号 4（发出 RR73 后）判定：
         // 序号 1~3 时对方重发 CQ 只是没抄到我，属正常重试，靠上面的无回应计数兜底。
         val giveUpByNoReply =
-            (step != QsoStep.NONE && step != QsoStep.CQ && noReplyExceeded) ||
-                (step == QsoStep.RR73 && targetCallingOthers(messages, them))
+            settings.autoSeq &&
+                ((step != QsoStep.NONE && step != QsoStep.CQ && noReplyExceeded) ||
+                    (step == QsoStep.RR73 && targetCallingOthers(messages, them)))
         if (newOrder == 5 || giveUpByNoReply) {
             finish(utcMs, hit?.slotUtcMs ?: 0L)
             gaveUp = giveUpByNoReply
@@ -613,6 +614,8 @@ class QsoEngine {
             // 这里只兜住「开始时不带 SNR」的路径（如人工从半路接手）。
             if (reportSent == null) reportSent = reportFromSnr(hit?.snr ?: 0)
             lastAdvanced = true
+            // Auto Seq 关闭时仍推进状态（UI 的六个报文槽才能显示下一条），
+            // 但 SessionViewModel 的 txTick 不会自动播 qso.txText，等人工点槽发送。
             setOrder(QsoStep.replyTo(newOrder), utcMs, hit?.slotUtcMs ?: 0L)
             return progress()
         }
@@ -624,7 +627,7 @@ class QsoEngine {
         // `noReplyCount` 永远停在 0 → 「无回应次数」形同虚设，对静默伙伴无限重发（实测 20+ 批次不换台）。
         // 改为：只要本批**没有**目标的回复就 +1（含空批）。是否计数由上层 [countNoReply] 控制 ——
         // 对方只可能在我们**不发射**的周期回我，所以我方发射时隙的批不计，免得每周期数两次。
-        if (countNoReply) noReplyCount++
+        if (settings.autoSeq && countNoReply) noReplyCount++
         return progress()
     }
 
@@ -685,11 +688,13 @@ class QsoEngine {
     ): AutoAction {
         checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
         if (protectedStop) return AutoAction.None
+        // 论文 Auto Seq 关闭：不自动选台 / 不应答 / 不发 CQ，只保留手动操作。
+        if (!settings.autoSeq) return AutoAction.None
 
         val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
         val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
-        // 「有人呼叫我方一定应答」：定向报文优先，且不受任何开关 / 筛选 / 已通联影响
-        if (directed.isNotEmpty()) {
+        // 论文 Call 1st：CQ 阶段收到第一个定向回应时自动应答；关闭后交给人工选择。
+        if (settings.callFirst && directed.isNotEmpty()) {
             enqueue(AutoProgramSelector.rank(directed))
             return AutoAction.HandleDirected(queue.removeFirst())
         }
@@ -699,6 +704,7 @@ class QsoEngine {
     /** 一段 QSO 结束（成功）后的决策：先处理队列，否则回到发 CQ（FT8CN `resetToCQ`）。 */
     fun onQsoFinished(utcNowMs: Long = 0L): AutoAction {
         if (protectedStop) return AutoAction.None
+        if (!settings.autoSeq) return AutoAction.None
         checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
         if (queue.isNotEmpty()) return AutoAction.HandleDirected(queue.removeFirst())
         return AutoAction.SendCq
@@ -716,10 +722,11 @@ class QsoEngine {
     ): AutoAction {
         checkSupervision(utcNowMs)?.let { return AutoAction.Stop(it) }
         if (protectedStop) return AutoAction.None
+        if (!settings.autoSeq) return AutoAction.None
         queue.clear()
         val candidates = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
         val directed = candidates.filter { it.kind != AutoTargetKind.CQ }
-        if (directed.isNotEmpty()) {
+        if (settings.callFirst && directed.isNotEmpty()) {
             return AutoAction.HandleDirected(AutoProgramSelector.rank(directed).first())
         }
         return nextAction(candidates.filter { it.kind == AutoTargetKind.CQ })
@@ -741,6 +748,8 @@ class QsoEngine {
         worked: WorkedIndex = WorkedIndex.EMPTY,
     ): AutoTarget? {
         if (protectedStop) return null
+        // Auto Seq / Call 1st 关闭时不做自动换台（论文语义：交给人工）。
+        if (!settings.autoSeq || !settings.callFirst) return null
         val directed = AutoProgramSelector.collect(messages, settings, filter, worked, myCall)
             .filter { it.kind != AutoTargetKind.CQ }
             .filter { !CallMatch.isFrom(it.call, currentTarget) }
@@ -761,7 +770,7 @@ class QsoEngine {
      */
     private fun nextAction(cqs: List<AutoTarget>): AutoAction =
         if (settings.autoCallFollow && cqs.isNotEmpty()) {
-            AutoAction.AnswerCq(AutoProgramSelector.rank(cqs).first())
+            AutoAction.AnswerCq(AutoProgramSelector.rank(cqs).first(), settings.skipTx1)
         } else {
             AutoAction.SendCq
         }
