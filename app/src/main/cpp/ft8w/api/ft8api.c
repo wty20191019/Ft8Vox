@@ -99,6 +99,12 @@ void ft8_decode_config_default(ft8_decode_config_t* cfg)
                                     *   60 文件 / 1298 条语料实测：默认名额（120）下召回与均分
                                     *   几乎持平（81.9% vs 81.5%），耗时却约 ×1.8（段间负载不均）；
                                     *   只有把名额收紧时收益才明显（20 名额 +2.1pp）。 */
+    cfg->block_max_n = 0;           /**< 论文式分组检测默认关闭，保持既有行为 */
+    cfg->block_min_n = 1;           /**< 默认从 N=1 开始 */
+    cfg->block_skip_fast = false;   /**< 诊断开关：跳过瀑布域 N=1 */
+    cfg->block_min_score = 12;      /**< 与 OSD 相同的候选同步分门限 */
+    cfg->block_max_bp_errors = 24;  /**< BP 残错超过此值视为噪声候选，不做分组检测 */
+    cfg->max_block_candidates = 40; /**< 每遍分组检测预算（0=不限） */
 }
 
 void ft8_encode_config_default(ft8_encode_config_t* cfg)
@@ -300,6 +306,9 @@ typedef struct
     int ldpc_iterations;
     int osd_depth;
     int enable_llr_refine; /**< P2.3：BP 失败候选用时域精化 LLR 重解 */
+    const ft8_decode_config_t* cfg; /**< 分组检测参数（block_*） */
+    int* block_budget;              /**< 本遍剩余的分组检测次数，受 block_lock 保护 */
+    ft8_mutex_t* block_lock;
     raw_decode_t* out;
     int count;
 } decode_worker_arg_t;
@@ -460,11 +469,58 @@ static void decode_worker(void* arg)
         ftx_decode_status_t status;
         ftx_message_init(&message);
         memset(&status, 0, sizeof(status));
-        if (!ftx_decode_candidate_ex(w->wf, cand, w->ldpc_iterations, w->osd_depth,
-                                     use_refine ? llr_refine_cb : NULL,
-                                     use_refine ? &rctx : NULL,
-                                     FT8_LLR_REFINE_MIN_ERRORS,
-                                     &message, &status))
+
+        /* 论文式分组检测预算：只对同步分够高的候选尝试，避免噪声候选
+         * 白白吃掉时域相关的开销。预算按「遍」共享，线程间用互斥量保护。 */
+        bool block_allowed = false;
+        if (w->cfg && w->cfg->block_max_n > 0 && cand->score >= w->cfg->block_min_score)
+        {
+            if (w->block_budget && w->block_lock)
+            {
+                ft8_mutex_lock(w->block_lock);
+                if (*w->block_budget > 0)
+                {
+                    --(*w->block_budget);
+                    block_allowed = true;
+                }
+                ft8_mutex_unlock(w->block_lock);
+            }
+            else
+            {
+                block_allowed = true;
+            }
+        }
+
+        bool ok;
+        if (block_allowed)
+        {
+            const float freq0 = (w->mon->min_bin + cand->freq_offset +
+                                 (float)cand->freq_sub / w->wf->freq_osr) /
+                                w->mon->symbol_period;
+            const float dt = (cand->time_offset +
+                              (float)cand->time_sub / w->wf->time_osr) *
+                             w->mon->symbol_period;
+            ok = ftx_decode_candidate_block(w->wf, cand, w->samples, w->num_samples,
+                                            w->sample_rate, freq0, dt,
+                                            w->ldpc_iterations, w->osd_depth,
+                                            w->cfg->block_max_n, w->cfg->block_min_n,
+                                            w->cfg->block_min_score,
+                                            w->cfg->block_max_bp_errors,
+                                            w->cfg->block_skip_fast,
+                                            use_refine ? llr_refine_cb : NULL,
+                                            use_refine ? &rctx : NULL,
+                                            FT8_LLR_REFINE_MIN_ERRORS,
+                                            &message, &status);
+        }
+        else
+        {
+            ok = ftx_decode_candidate_ex(w->wf, cand, w->ldpc_iterations, w->osd_depth,
+                                         use_refine ? llr_refine_cb : NULL,
+                                         use_refine ? &rctx : NULL,
+                                         FT8_LLR_REFINE_MIN_ERRORS,
+                                         &message, &status);
+        }
+        if (!ok)
             continue;
 
         raw_decode_t* r = &w->out[w->count++];
@@ -504,6 +560,12 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
 
     int iters = (cfg->ldpc_iterations > 0) ? cfg->ldpc_iterations : 25;
 
+    /* 论文式分组检测预算：每遍共享，线程间用互斥量保护 */
+    int block_budget = (cfg->max_block_candidates > 0) ? cfg->max_block_candidates : 0;
+    ft8_mutex_t* block_lock = NULL;
+    if (cfg->block_max_n > 0 && block_budget > 0)
+        block_lock = ft8_mutex_create();
+
     int num_threads = cfg->num_threads;
     if (num_threads < 1)
         num_threads = 1;
@@ -539,6 +601,9 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         args[t].ldpc_iterations = iters;
         args[t].osd_depth = cfg->osd_depth;
         args[t].enable_llr_refine = cfg->enable_llr_refine;
+        args[t].cfg = cfg;
+        args[t].block_budget = (block_lock && block_budget > 0) ? &block_budget : NULL;
+        args[t].block_lock = block_lock;
         args[t].out = regions + (size_t)t * num_cand;
         args[t].count = 0;
     }
@@ -669,6 +734,8 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
     free(threads);
     free(args);
     free(regions);
+    if (block_lock)
+        ft8_mutex_free(block_lock);
     return num_hits;
 }
 
@@ -737,6 +804,7 @@ static void emit_hit(const pass_hit_t* h, int pass, ft8_message_result_t* res)
     res->ldpc_errors = h->status.ldpc_errors;
     res->pass = pass;
     res->ap_type = 0;
+    res->block_n = h->status.block_n;
     res->crc = h->status.crc_calculated;
 }
 

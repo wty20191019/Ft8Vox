@@ -5,6 +5,7 @@
 #include "ldpc.h"
 
 #include "ft8_osd.h"
+#include "ft8_spectrum.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -399,6 +400,139 @@ static bool osd_accept_cb(const uint8_t* plain174, void* vctx)
     return true;
 }
 
+/* 对一份 174 位 LLR 跑「BP → CRC →（必要时）OSD」的译码级联。
+ *
+ * 论文把这一步视为与调制/检测无关的统一译码器：N=1、N=2、N=3 的分组检测
+ * 只负责产生不同的 LLR，后面都调用同一个入口。抽出来后，AP 先验、时域精化、
+ * 后续分组检测都可以复用，且不改变原有 N=1 瀑布路径的结果。
+ *
+ * 返回 true 表示 CRC 通过且载荷已写入 message。 */
+static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
+                           int cand_score, int max_iterations, int osd_depth,
+                           uint8_t* plain174, ftx_message_t* message,
+                           ftx_decode_status_t* status)
+{
+    bp_decode((float*)logl, max_iterations, plain174, &status->ldpc_errors);
+
+    if (status->ldpc_errors == 0)
+    {
+        if (finish_candidate(wf, plain174, message, status))
+        {
+            return true;
+        }
+        /* BP 收敛到合法码字但 CRC 不匹配：继续尝试 OSD */
+    }
+
+    if (osd_depth > 0 && status->ldpc_errors <= FT8_OSD_MAX_BP_ERRORS &&
+        cand_score >= FT8_OSD_MIN_SCORE)
+    {
+        osd_accept_ctx_t ctx;
+        ctx.wf = wf;
+        ctx.message = message;
+        ctx.status = status;
+        if (ft8_osd_decode((float*)logl, osd_depth, FT8_OSD_MAX_HARD, osd_accept_cb, &ctx))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* 由 58 个数据符号的 8 音调复数相关，按论文的 N 符号块生成 174 个 LLR。
+ *
+ * 与 WSJT-X `ft8b.f90` 一致：58 个数据符号被中间的 7 符号 Costas 分成
+ * **两段各 29 符号**（符号 0..28 与 29..57），N=2/3 的块不能跨段，
+ * 否则会把同步间隙两侧的符号强行相干累加。每段内按 N 分块，尾部不足
+ * N 个符号时按 N=1 处理。
+ *
+ * 序列按「比特三元组」枚举，再经 Gray 映射到实际音调；块内先把 N 个复相关
+ * 相加再取模，因此是**块内相干、块间非相干**检测。最后每比特取
+ * max(相关|bit=1) - max(相关|bit=0)，与单符号 max4 是同一套 max-log 软判决。 */
+static void ft8_block_likelihood_half(const float* corr_re, const float* corr_im,
+                                      int k_start, int count, int n_syms,
+                                      float* log174, int bit_base)
+{
+    if (n_syms < 1)
+        n_syms = 1;
+    if (n_syms > 3)
+        n_syms = 3;
+
+    const int n_bits = 3 * n_syms;
+    const int n_seq = 1 << n_bits;
+    int k = 0;
+
+    while (k + n_syms <= count)
+    {
+        float max_one[9];
+        float max_zero[9];
+        for (int i = 0; i < n_bits; ++i)
+        {
+            max_one[i] = -1.0f;
+            max_zero[i] = -1.0f;
+        }
+
+        for (int seq = 0; seq < n_seq; ++seq)
+        {
+            float sr = 0.0f;
+            float si = 0.0f;
+            for (int s = 0; s < n_syms; ++s)
+            {
+                const int triple = (seq >> (3 * (n_syms - 1 - s))) & 0x07;
+                const int tone = kFT8_Gray_map[triple];
+                const int idx = (k_start + k + s) * FT8_SP_NTONE + tone;
+                sr += corr_re[idx];
+                si += corr_im[idx];
+            }
+
+            const float mag = sqrtf(sr * sr + si * si);
+            unsigned int mask = 1u << (n_bits - 1);
+            for (int i = 0; i < n_bits; ++i, mask >>= 1)
+            {
+                if (seq & mask)
+                {
+                    if (mag > max_one[i])
+                        max_one[i] = mag;
+                }
+                else
+                {
+                    if (mag > max_zero[i])
+                        max_zero[i] = mag;
+                }
+            }
+        }
+
+        for (int i = 0; i < n_bits; ++i)
+            log174[bit_base + 3 * k + i] = max_one[i] - max_zero[i];
+        k += n_syms;
+    }
+
+    /* 段内尾部不足 N 个符号：按 N=1 处理 */
+    while (k < count)
+    {
+        float s2[FT8_SP_NTONE];
+        for (int j = 0; j < FT8_SP_NTONE; ++j)
+        {
+            const int tone = kFT8_Gray_map[j];
+            const int idx = (k_start + k) * FT8_SP_NTONE + tone;
+            s2[j] = sqrtf(corr_re[idx] * corr_re[idx] + corr_im[idx] * corr_im[idx]);
+        }
+        float* ll = log174 + bit_base + 3 * k;
+        ll[0] = max4(s2[4], s2[5], s2[6], s2[7]) - max4(s2[0], s2[1], s2[2], s2[3]);
+        ll[1] = max4(s2[2], s2[3], s2[6], s2[7]) - max4(s2[0], s2[1], s2[4], s2[5]);
+        ll[2] = max4(s2[1], s2[3], s2[5], s2[7]) - max4(s2[0], s2[2], s2[4], s2[6]);
+        ++k;
+    }
+}
+
+static void ft8_block_likelihood(const float* corr_re, const float* corr_im,
+                                 int n_syms, float* log174)
+{
+    /* 两段各 29 符号：第一段 87 bit，第二段 87 bit */
+    ft8_block_likelihood_half(corr_re, corr_im, 0, 29, n_syms, log174, 0);
+    ft8_block_likelihood_half(corr_re, corr_im, 29, 29, n_syms, log174, 87);
+}
+
 bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                              int max_iterations, int osd_depth,
                              ftx_refine_llr_fn refine, void* refine_ctx,
@@ -418,29 +552,10 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
     ftx_normalize_logl(log174);
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
-    bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
-
-    if (status->ldpc_errors == 0)
+    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                       plain174, message, status))
     {
-        if (finish_candidate(wf, plain174, message, status))
-        {
-            return true;
-        }
-        // BP 收敛到某合法码字但 CRC 不匹配：继续尝试后续步骤
-    }
-
-    // OSD 兜底（与旧路径完全一致，先跑，保证已成功结果不变）
-    if (osd_depth > 0 && status->ldpc_errors <= FT8_OSD_MAX_BP_ERRORS &&
-        cand->score >= FT8_OSD_MIN_SCORE)
-    {
-        osd_accept_ctx_t ctx;
-        ctx.wf = wf;
-        ctx.message = message;
-        ctx.status = status;
-        if (ft8_osd_decode(log174, osd_depth, FT8_OSD_MAX_HARD, osd_accept_cb, &ctx))
-        {
-            return true;
-        }
+        return true;
     }
 
     // P2.3（加性）：BP/OSD 均未成功时，用时域精化 LLR 再试 BP + OSD。
@@ -453,22 +568,103 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
         if (refine(refine_ctx, cand, refined) == 0)
         {
             ftx_normalize_logl(refined);
-            bp_decode(refined, max_iterations, plain174, &status->ldpc_errors);
-            if (status->ldpc_errors == 0 && finish_candidate(wf, plain174, message, status))
+            if (try_decode_llr(wf, refined, cand->score, max_iterations, osd_depth,
+                               plain174, message, status))
             {
                 return true;
             }
-            if (osd_depth > 0 && status->ldpc_errors <= FT8_OSD_MAX_BP_ERRORS &&
-                cand->score >= FT8_OSD_MIN_SCORE)
+        }
+    }
+
+    return false;
+}
+
+bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                const float* samples, int num_samples, int sample_rate,
+                                float freq0, float dt,
+                                int max_iterations, int osd_depth,
+                                int block_max_n, int block_min_n,
+                                int block_min_score, int block_max_bp_errors,
+                                bool skip_fast,
+                                ftx_refine_llr_fn refine, void* refine_ctx,
+                                int refine_min_errors,
+                                ftx_message_t* message, ftx_decode_status_t* status)
+{
+    if (!wf || !cand || !message || !status)
+        return false;
+
+    status->block_n = 0;
+
+    /* 第一级：沿用现有瀑布域 N=1（快、结果稳定），先不带 refine。
+     * skip_fast 仅供调参/诊断：直接以时域分组检测的 N=1 作为第一级。 */
+    float log174[FTX_LDPC_N];
+    uint8_t plain174[FTX_LDPC_N];
+    int fast_errors = 0;
+    if (!skip_fast)
+    {
+        if (wf->protocol == FTX_PROTOCOL_FT4)
+        {
+            ft4_extract_likelihood(wf, cand, log174);
+        }
+        else
+        {
+            ft8_extract_likelihood(wf, cand, log174);
+        }
+        ftx_normalize_logl(log174);
+
+        if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                           plain174, message, status))
+        {
+            return true;
+        }
+        fast_errors = status->ldpc_errors;
+    }
+
+    /* 第二级：论文式 N=1/2/3 分组检测（时域复数相关）。
+     * N=1 也在这里保留一份时域版本：瀑布域失败后，更精细的对齐有时能把
+     * 同一信号救回来；N=2/3 则利用块内相干积累提高灵敏度。 */
+    if (wf->protocol == FTX_PROTOCOL_FT8 && samples && num_samples > 0 && sample_rate > 0 &&
+        block_max_n >= 1 && cand->score >= block_min_score &&
+        fast_errors <= block_max_bp_errors)
+    {
+        float corr_re[FT8_SP_ND * FT8_SP_NTONE];
+        float corr_im[FT8_SP_ND * FT8_SP_NTONE];
+        if (ft8_spectrum_correlate(samples, num_samples, sample_rate,
+                                   freq0, dt, corr_re, corr_im) == 0)
+        {
+            const int nmax = (block_max_n > 3) ? 3 : block_max_n;
+            int nmin = (block_min_n < 1) ? 1 : block_min_n;
+            if (nmin > 3)
+                nmin = 3;
+            for (int n_syms = nmin; n_syms <= nmax; ++n_syms)
             {
-                osd_accept_ctx_t ctx2;
-                ctx2.wf = wf;
-                ctx2.message = message;
-                ctx2.status = status;
-                if (ft8_osd_decode(refined, osd_depth, FT8_OSD_MAX_HARD, osd_accept_cb, &ctx2))
+                ft8_block_likelihood(corr_re, corr_im, n_syms, log174);
+                ftx_normalize_logl(log174);
+                if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                                   plain174, message, status))
                 {
+                    status->block_n = n_syms;
                     return true;
                 }
+            }
+        }
+    }
+
+    status->ldpc_errors = fast_errors;
+
+    // P2.3（加性）：分组检测也失败后，用时域精化 LLR 再试 BP + OSD。
+    if (refine && wf->protocol == FTX_PROTOCOL_FT8 &&
+        status->ldpc_errors <= refine_min_errors &&
+        cand->score >= FT8_OSD_MIN_SCORE)
+    {
+        float refined[FTX_LDPC_N];
+        if (refine(refine_ctx, cand, refined) == 0)
+        {
+            ftx_normalize_logl(refined);
+            if (try_decode_llr(wf, refined, cand->score, max_iterations, osd_depth,
+                               plain174, message, status))
+            {
+                return true;
             }
         }
     }

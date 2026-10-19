@@ -65,6 +65,7 @@ typedef struct
     float freq;
     float time;
     int ldpc_errors;         ///< Number of LDPC errors during decoding
+    int block_n;             ///< 成功的分组检测块长 N（1/2/3）；0 = 瀑布域 N=1 直接成功
     uint16_t crc_extracted;  ///< CRC value recovered from the message
     uint16_t crc_calculated; ///< CRC value calculated over the payload
     // int unpack_status;       ///< Return value of the unpack routine
@@ -113,6 +114,22 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* power, const ftx_candidate_t
                              ftx_refine_llr_fn refine, void* refine_ctx,
                              int refine_min_errors,
                              ftx_message_t* message, ftx_decode_status_t* status);
+
+/// 论文式 N=1/2/3 分组检测 + BP/OSD 译码（FT8）。
+/// 先走瀑布域 N=1；失败后在时域复数相关上依次尝试 N=1..block_max_n，
+/// 每次生成一份 LLR 并复用同一 BP+OSD 级联。samples 为当前遍的时域残差。
+bool ftx_decode_candidate_block(const ftx_waterfall_t* power, const ftx_candidate_t* cand,
+                                const float* samples, int num_samples, int sample_rate,
+                                float freq0, float dt,
+                                int max_iterations, int osd_depth,
+                                int block_max_n, int block_min_n,
+                                int block_min_score, int block_max_bp_errors,
+                                bool skip_fast,
+                                ftx_refine_llr_fn refine, void* refine_ctx,
+                                int refine_min_errors,
+                                ftx_message_t* message, ftx_decode_status_t* status);
+
+/// 带 AP 先验的版本在后续阶段接入。
 
 /// 估计候选信号的“原始信噪比指标”（未做绝对标定），思路参考 JTDX：
 /// 对 79 个符号逐个比较“解码音调功率”与“其余 7 个音调的平均功率”，

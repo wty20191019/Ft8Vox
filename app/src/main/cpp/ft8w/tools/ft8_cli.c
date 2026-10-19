@@ -142,6 +142,21 @@ static bool parse_option(int argc, char** argv, int* i, options_t* o)
         o->dec.enable_llr_refine = true;
         return true;
     }
+    if (strcmp(a, "--block") == 0)
+        return next_int(argc, argv, i, &o->dec.block_max_n);
+    if (strcmp(a, "--block-min-n") == 0)
+        return next_int(argc, argv, i, &o->dec.block_min_n);
+    if (strcmp(a, "--block-skip-fast") == 0)
+    {
+        o->dec.block_skip_fast = true;
+        return true;
+    }
+    if (strcmp(a, "--block-min-score") == 0)
+        return next_int(argc, argv, i, &o->dec.block_min_score);
+    if (strcmp(a, "--block-max-errors") == 0)
+        return next_int(argc, argv, i, &o->dec.block_max_bp_errors);
+    if (strcmp(a, "--block-candidates") == 0)
+        return next_int(argc, argv, i, &o->dec.max_block_candidates);
     return false;
 }
 
@@ -274,8 +289,13 @@ static int cmd_decode(int argc, char** argv)
 
     for (int i = 0; i < count && i < 256; ++i)
     {
-        printf("%+4.0f %+5.1f %4.0f ~  %s\n",
+        printf("%+4.0f %+5.1f %4.0f ~  %s",
                results[i].snr, results[i].dt, results[i].freq, results[i].text);
+        if (results[i].block_n > 0)
+            printf("  [N=%d]", results[i].block_n);
+        if (results[i].ap_type > 0)
+            printf("  [AP=%d]", results[i].ap_type);
+        printf("\n");
     }
     fprintf(stderr, "[decode] %d 条, %.1f ms (threads=%d, osr=%dx%d, score>=%d)\n",
             count, t1 - t0, o.dec.num_threads, o.dec.time_osr, o.dec.freq_osr,

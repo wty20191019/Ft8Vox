@@ -458,17 +458,31 @@ static float sp_max4(float a, float b, float c, float d)
     return m;
 }
 
-int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
-                     float freq0, float dt, float* log174)
+/* 单音 Goertzel 的复数结果（越界样本按 0）。X = s1 - e^{-jw} s2。 */
+static void sp_tone_cpx(const float* x, int num_samples, long base, int n,
+                        double freq, int sample_rate, double* out_re, double* out_im)
 {
-    if (!samples || !log174 || num_samples <= 0 || sample_rate <= 0 || freq0 < 0.0f)
-        return -1;
+    const double w = 2.0 * M_PI * freq / (double)sample_rate;
+    const double coeff = 2.0 * cos(w);
+    double s1 = 0.0, s2 = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const long pos = base + i;
+        const double v = (pos >= 0 && pos < num_samples) ? (double)x[pos] : 0.0;
+        const double s0 = v + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    *out_re = s1 - cos(w) * s2;
+    *out_im = sin(w) * s2;
+}
 
-    const int nsps = (int)(sample_rate * FT8_SYMBOL_PERIOD + 0.5f);
-    if (nsps < FT8_SP_TONES)
-        return -1;
-
-    /* Costas 同步位置：3 组 × 7 符号（音调已知） */
+/* Costas-only 对齐：在粗定位附近搜索时间/频率，使 21 个同步音调总功率最大。 */
+static int sp_align_costas(const float* samples, int num_samples, int sample_rate,
+                           int nsps, float freq0, float dt,
+                           double* out_freq, long* out_n0)
+{
+    /* 3 组 × 7 符号（音调已知） */
     int cpos[FT8_NUM_SYNC * FT8_LENGTH_SYNC];
     int ctone[FT8_NUM_SYNC * FT8_LENGTH_SYNC];
     int nc = 0;
@@ -483,11 +497,35 @@ int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
     long n0 = (long)lround((double)dt * sample_rate);
     double freq = (double)freq0;
 
-    /* 频率精化：±2 Hz，步长 0.25 Hz，最大化 Costas 音调总功率 */
+    /* 1) 粗时间对齐：±半符号（±80 ms），步长 32 样本（约 2.7 ms）。
+     * 瀑布候选的时间量化是 1/time_osr 符号（默认 80 ms），必须先把真实
+     * 符号起点找回来；否则后续频偏估计和相干累加都会失准。 */
+    {
+        const int half = nsps / 2;
+        const int coarse_step = 32;
+        long coarse_best = 0;
+        double coarse_pw = -1.0;
+        for (int sh = -half; sh <= half; sh += coarse_step)
+        {
+            double pw = 0.0;
+            for (int c = 0; c < nc; ++c)
+                pw += sp_tone_power(samples, num_samples, n0 + sh + (long)cpos[c] * nsps, nsps,
+                                    freq + (double)ctone[c] * FT8_SP_TONE_SPACING, sample_rate);
+            if (pw > coarse_pw)
+            {
+                coarse_pw = pw;
+                coarse_best = sh;
+            }
+        }
+        n0 += coarse_best;
+    }
+
+    /* 2) 频率精化：±3.5 Hz（覆盖瀑布一个 3.125 Hz 频格的量化误差），
+     * 步长 0.25 Hz，最大化 Costas 音调总功率。 */
     {
         double best_pw = -1.0;
         double best_df = 0.0;
-        for (int q = -8; q <= 8; ++q)
+        for (int q = -14; q <= 14; ++q)
         {
             const double df = q * 0.25;
             double pw = 0.0;
@@ -504,12 +542,12 @@ int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
         freq = (double)freq0 + best_df;
     }
 
-    /* 时间精化：±(nsps/8) 样本，步长 4，最大化 Costas 音调总功率 */
+    /* 3) 细时间对齐：在粗搜最优附近 ±32 样本内收敛到样本级。 */
     {
-        const int half = nsps / 8;
+        const int coarse_step = 32;
         long best_sh = 0;
         double best_pw = -1.0;
-        for (int sh = -half; sh <= half; sh += 4)
+        for (int sh = -coarse_step; sh <= coarse_step; ++sh)
         {
             double pw = 0.0;
             for (int c = 0; c < nc; ++c)
@@ -524,29 +562,64 @@ int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
         n0 += best_sh;
     }
 
-    /* 对 58 个数据符号做 8 音调功率 → 功率 dB → Gray/max4 → 3 LLR */
-    float* buf = (float*)malloc((size_t)nsps * sizeof(float));
-    if (!buf)
+    *out_freq = freq;
+    *out_n0 = n0;
+    return 0;
+}
+
+int ft8_spectrum_correlate(const float* samples, int num_samples, int sample_rate,
+                           float freq0, float dt, float* corr_re, float* corr_im)
+{
+    if (!samples || !corr_re || !corr_im || num_samples <= 0 || sample_rate <= 0 || freq0 < 0.0f)
         return -1;
 
-    for (int k = 0; k < FT8_ND; ++k)
+    const int nsps = (int)(sample_rate * FT8_SYMBOL_PERIOD + 0.5f);
+    if (nsps < FT8_SP_NTONE)
+        return -1;
+
+    double freq = 0.0;
+    long n0 = 0;
+    if (sp_align_costas(samples, num_samples, sample_rate, nsps, freq0, dt, &freq, &n0) != 0)
+        return -1;
+
+    for (int k = 0; k < FT8_SP_ND; ++k)
     {
         const int sym = k + ((k < 29) ? 7 : 14);
         const long base = n0 + (long)sym * nsps;
-        for (int i = 0; i < nsps; ++i)
+        for (int tone = 0; tone < FT8_SP_NTONE; ++tone)
         {
-            const long pos = base + i;
-            buf[i] = (pos >= 0 && pos < num_samples) ? samples[pos] : 0.0f;
+            double re = 0.0, im = 0.0;
+            sp_tone_cpx(samples, num_samples, base, nsps,
+                        freq + (double)tone * FT8_SP_TONE_SPACING, sample_rate, &re, &im);
+            corr_re[k * FT8_SP_NTONE + tone] = (float)re;
+            corr_im[k * FT8_SP_NTONE + tone] = (float)im;
         }
+    }
+    return 0;
+}
 
-        float p8[FT8_SP_TONES];
-        tone_powers(buf, nsps, freq, sample_rate, p8);
+int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
+                     float freq0, float dt, float* log174)
+{
+    if (!samples || !log174 || num_samples <= 0 || sample_rate <= 0 || freq0 < 0.0f)
+        return -1;
 
-        /* 功率 → 功率 dB（与瀑布 WF_ELEM_MAG 同量纲） */
-        float s2[8];
-        for (int j = 0; j < 8; ++j)
+    float corr_re[FT8_SP_ND * FT8_SP_NTONE];
+    float corr_im[FT8_SP_ND * FT8_SP_NTONE];
+    if (ft8_spectrum_correlate(samples, num_samples, sample_rate, freq0, dt,
+                               corr_re, corr_im) != 0)
+        return -1;
+
+    /* 单符号 8 音调功率 → 功率 dB → Gray/max4 → 3 LLR */
+    for (int k = 0; k < FT8_SP_ND; ++k)
+    {
+        float s2[FT8_SP_NTONE];
+        for (int j = 0; j < FT8_SP_NTONE; ++j)
         {
-            const float p = p8[kFT8_Gray_map[j]];
+            const int tone = kFT8_Gray_map[j];
+            const float re = corr_re[k * FT8_SP_NTONE + tone];
+            const float im = corr_im[k * FT8_SP_NTONE + tone];
+            const float p = re * re + im * im;
             s2[j] = 10.0f * log10f((p > 1e-30f) ? p : 1e-30f);
         }
 
@@ -555,7 +628,5 @@ int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
         ll[1] = sp_max4(s2[2], s2[3], s2[6], s2[7]) - sp_max4(s2[0], s2[1], s2[4], s2[5]);
         ll[2] = sp_max4(s2[1], s2[3], s2[5], s2[7]) - sp_max4(s2[0], s2[2], s2[4], s2[6]);
     }
-
-    free(buf);
     return 0;
 }

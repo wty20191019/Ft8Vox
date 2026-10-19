@@ -30,6 +30,11 @@ extern "C"
 /** 噪声底频点数（NFFT/2，12kHz 下分辨率 3.125 Hz）。 */
 #define FT8_SP_BASE_NBIN 1920
 
+/** FT8 数据符号数（去掉 3 段 Costas 后的 58 个符号）。 */
+#define FT8_SP_ND 58
+/** 每个 FT8 符号的音调数。 */
+#define FT8_SP_NTONE 8
+
 /**
  * 计算整时隙频谱噪声底 `sbase`（dB，逐 3.125Hz 频点）。
  * 对应 WSJT-X `get_spectrum_baseline()` + `baseline()`：把「没有信号」的
@@ -80,6 +85,25 @@ float ft8_spectrum_snr(const float* samples, int num_samples, int sample_rate,
  */
 int ft8_spectrum_llr(const float* samples, int num_samples, int sample_rate,
                      float freq0, float dt, float* log174);
+
+/**
+ * 论文式分组检测的底层输入：对 58 个数据符号、8 个音调做 1 符号窗复数 DFT。
+ *
+ * 与 `ft8_spectrum_llr` 共用同一套 Costas 对齐（频偏 ±2 Hz / 0.25 Hz 步进，
+ * 时移 ±1/8 符号 / 4 样本步进），但保留**复数**相关值，供 N=1/2/3 分组检测
+ * 做块内相干累加（论文 §6：先算单符号复相关，再组合成 M^N 个块相关）。
+ *
+ * @param samples     单声道浮点音频（通常为本遍残差）
+ * @param num_samples 样本数
+ * @param sample_rate 采样率 (Hz)
+ * @param freq0       音调 0 的粗频率 (Hz)
+ * @param dt          消息起点的粗偏移 (s)
+ * @param corr_re     输出实部，长度至少 FT8_SP_ND * FT8_SP_NTONE
+ * @param corr_im     输出虚部，长度至少 FT8_SP_ND * FT8_SP_NTONE
+ * @return 0 成功；-1 参数无效或内存不足
+ */
+int ft8_spectrum_correlate(const float* samples, int num_samples, int sample_rate,
+                           float freq0, float dt, float* corr_re, float* corr_im);
 
 #ifdef __cplusplus
 }

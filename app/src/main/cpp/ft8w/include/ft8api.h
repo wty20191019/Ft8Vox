@@ -102,6 +102,15 @@ typedef struct
                                 *     max_candidates 个再按段分发解码；每个 SIC 趟都重做。
                                 *     名额越紧、频段越拥挤收益越大（20 名额 +2.1pp），代价是
                                 *     名额向拥挤段聚集、段内单线程时耗时约 ×1.8。 */
+
+    /* --- 论文式分组检测（N=1/2/3，追加于末尾） --- */
+    int   block_max_n;          /**< 时域分组检测的最大块长 N：0=关闭（默认），
+                                 *   1/2/3=在瀑布域 N=1 失败后，依次尝试 N=1..该值。 */
+    int   block_min_n;          /**< 时域分组检测的起始块长 N，默认 1（诊断可设 2/3） */
+    bool  block_skip_fast;      /**< 诊断/调参：跳过瀑布域 N=1，直接走时域分组检测。 */
+    int   block_min_score;      /**< 触发分组检测的 Costas 同步分下限，默认 12 */
+    int   block_max_bp_errors;  /**< 触发分组检测的 BP 残余错误上限，默认 24 */
+    int   max_block_candidates; /**< 每遍最多对多少个候选做分组检测，默认 40；0=不限 */
 } ft8_decode_config_t;
 
 /** 用默认值填充解码配置。 */
@@ -122,6 +131,7 @@ typedef struct
     int      ldpc_errors;           /**< LDPC 残余错误数，0 表示通过 */
     int      pass;                  /**< 第几遍解出（0 基） */
     int      ap_type;               /**< AP 类型，0 表示未使用 AP */
+    int      block_n;               /**< 分组检测成功的块长 N；0=瀑布域 N=1 直接成功 */
     uint16_t crc;                   /**< CRC-14 值（可用于去重/哈希） */
 } ft8_message_result_t;
 
