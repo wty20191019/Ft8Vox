@@ -157,6 +157,22 @@ static bool parse_option(int argc, char** argv, int* i, options_t* o)
         return next_int(argc, argv, i, &o->dec.block_max_bp_errors);
     if (strcmp(a, "--block-candidates") == 0)
         return next_int(argc, argv, i, &o->dec.max_block_candidates);
+    if (strcmp(a, "--ap-mode") == 0)
+        return next_int(argc, argv, i, &o->dec.ap_mode);
+    if (strcmp(a, "--my-call") == 0)
+    {
+        if (*i + 1 >= argc)
+            return false;
+        o->dec.my_call = argv[++(*i)];
+        return true;
+    }
+    if (strcmp(a, "--his-call") == 0)
+    {
+        if (*i + 1 >= argc)
+            return false;
+        o->dec.his_call = argv[++(*i)];
+        return true;
+    }
     return false;
 }
 

@@ -104,6 +104,14 @@ object AudioEngine {
         engine?.setDecodeParams(params.clamped())
     }
 
+    /**
+     * 更新 AP 解码上下文（本台呼号 / 当前目标呼号与网格）。
+     * 只在有目标 QSO 时启用 AP；目标为空时自动退回仅本台呼号的 AP 或关闭。
+     */
+    fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?) {
+        engine?.setDecodeContext(myCall, hisCall, hisGrid)
+    }
+
     /** 释放引擎（停止采集与播放、关闭解码线程）。可重复调用。 */
     fun release() {
         val e = engine ?: return
@@ -204,6 +212,21 @@ object AudioEngine {
     ) {
         @Volatile
         private var decodeParams: DecodeParams = decodeParams
+
+        @Volatile
+        private var decodeMyCall: String? = null
+
+        @Volatile
+        private var decodeHisCall: String? = null
+
+        @Volatile
+        private var decodeHisGrid: String? = null
+
+        fun setDecodeContext(myCall: String?, hisCall: String?, hisGrid: String?) {
+            decodeMyCall = myCall?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+            decodeHisCall = hisCall?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+            decodeHisGrid = hisGrid?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+        }
 
         @Volatile
         private var slotOffsetMs: Int = 0
@@ -684,7 +707,8 @@ object AudioEngine {
             decoder.execute {
                 val t0 = System.currentTimeMillis()
                 val messages: List<Ft8Message> = try {
-                    Ft8Native.decode(snapshot, cfg).take(maxDecoded)
+                    Ft8Native.decode(snapshot, cfg, decodeMyCall, decodeHisCall, decodeHisGrid)
+                        .take(maxDecoded)
                 } catch (e: Exception) {
                     Log.w(TAG, "时隙解码异常", e)
                     emptyList()
@@ -733,6 +757,11 @@ object AudioEngine {
         private fun buildDecodeConfig(): Ft8DecodeConfig {
             val p = decodeParams
             val cores = Runtime.getRuntime().availableProcessors()
+            val apMode = when {
+                decodeMyCall.isNullOrEmpty() -> 0
+                decodeHisCall.isNullOrEmpty() -> 1
+                else -> 3
+            }
             return Ft8DecodeConfig(
                 fMinHz = decodeConfig.fMinHz,
                 fMaxHz = decodeConfig.fMaxHz,
@@ -743,12 +772,18 @@ object AudioEngine {
                 minSyncScore = p.minScore,
                 ldpcIterations = p.ldpcIterations,
                 decodeDepth = p.passes,
+                apMode = apMode,
                 enableSubtract = p.passes > 1,
                 numThreads = decodeThreadsFor(cores),
                 returnDuplicates = false,
                 osdDepth = 2,
                 numBands = decodeBandsFor(cores),
                 globalCandidates = p.globalCandidates,
+                blockMaxN = if (p.blockDetection) 3 else 0,
+                blockMinN = 1,
+                blockMinScore = 10,
+                blockMaxBpErrors = 48,
+                maxBlockCandidates = 40,
             )
         }
 

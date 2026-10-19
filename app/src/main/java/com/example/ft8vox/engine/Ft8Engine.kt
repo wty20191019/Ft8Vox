@@ -162,6 +162,11 @@ object Ft8Engine {
             osdDepth = 2,
             numBands = decodeBandsFor(cores),
             globalCandidates = p.globalCandidates,
+            blockMaxN = if (p.blockDetection) 3 else 0,
+            blockMinN = 1,
+            blockMinScore = 10,
+            blockMaxBpErrors = 48,
+            maxBlockCandidates = 40,
         )
     }
 

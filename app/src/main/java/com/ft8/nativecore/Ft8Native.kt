@@ -17,6 +17,7 @@ data class Ft8Message(
     val pass: Int,
     val apType: Int,
     val crc: Int,
+    val blockN: Int = 0,
 )
 
 /** 编码配置（对应 ft8_encode_config_t）。 */
@@ -53,6 +54,18 @@ data class Ft8DecodeConfig(
     var numBands: Int = 1,
     /** 候选上限按「按段均分」分配（false，默认）还是按「全频谱全局择优」分配（true）。 */
     var globalCandidates: Boolean = false,
+    /** 论文式 N=1/2/3 分组检测最大块长：0=关闭，1..3=启用。 */
+    var blockMaxN: Int = 0,
+    /** 分组检测起始块长（诊断用，默认 1）。 */
+    var blockMinN: Int = 1,
+    /** 诊断：跳过瀑布域 N=1，直接走时域分组检测。 */
+    var blockSkipFast: Boolean = false,
+    /** 触发分组检测的 Costas 同步分下限。 */
+    var blockMinScore: Int = 10,
+    /** 触发分组检测的 BP 残余错误上限。 */
+    var blockMaxBpErrors: Int = 48,
+    /** 每遍最多对多少个候选做分组检测（0=不限）。 */
+    var maxBlockCandidates: Int = 40,
 ) {
     fun toFloatArray(): FloatArray = floatArrayOf(
         fMinHz, fMaxHz, sampleRate.toFloat(), timeOsr.toFloat(), freqOsr.toFloat(),
@@ -60,7 +73,9 @@ data class Ft8DecodeConfig(
         decodeDepth.toFloat(), apMode.toFloat(), if (enableSubtract) 1f else 0f,
         numThreads.toFloat(), if (returnDuplicates) 1f else 0f,
         osdDepth.toFloat(), if (enableLlrRefine) 1f else 0f,
-        numBands.toFloat(), if (globalCandidates) 1f else 0f
+        numBands.toFloat(), if (globalCandidates) 1f else 0f,
+        blockMaxN.toFloat(), blockMinN.toFloat(), if (blockSkipFast) 1f else 0f,
+        blockMinScore.toFloat(), blockMaxBpErrors.toFloat(), maxBlockCandidates.toFloat()
     )
 }
 
@@ -147,6 +162,7 @@ object Ft8Native {
             pass = p.getOrElse(6) { "0" }.toIntOrNull() ?: 0,
             apType = p.getOrElse(7) { "0" }.toIntOrNull() ?: 0,
             crc = p.getOrElse(8) { "0" }.toIntOrNull() ?: 0,
+            blockN = p.getOrElse(9) { "0" }.toIntOrNull() ?: 0,
         )
     }
 }

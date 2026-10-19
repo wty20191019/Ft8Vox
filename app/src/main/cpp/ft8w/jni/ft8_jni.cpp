@@ -60,6 +60,12 @@ enum
     DC_ENABLE_LLR_REFINE,
     DC_NUM_BANDS,
     DC_GLOBAL_CANDIDATES,
+    DC_BLOCK_MAX_N,
+    DC_BLOCK_MIN_N,
+    DC_BLOCK_SKIP_FAST,
+    DC_BLOCK_MIN_SCORE,
+    DC_BLOCK_MAX_BP_ERRORS,
+    DC_MAX_BLOCK_CANDIDATES,
     DC_COUNT
 };
 
@@ -136,6 +142,12 @@ static void read_decode_cfg(JNIEnv* env, jfloatArray arr, ft8_decode_config_t* c
     if (n > DC_ENABLE_LLR_REFINE) cfg->enable_llr_refine = buf[DC_ENABLE_LLR_REFINE] != 0.0f;
     if (n > DC_NUM_BANDS) cfg->num_bands = (int)buf[DC_NUM_BANDS];
     if (n > DC_GLOBAL_CANDIDATES) cfg->global_candidates = buf[DC_GLOBAL_CANDIDATES] != 0.0f;
+    if (n > DC_BLOCK_MAX_N) cfg->block_max_n = (int)buf[DC_BLOCK_MAX_N];
+    if (n > DC_BLOCK_MIN_N) cfg->block_min_n = (int)buf[DC_BLOCK_MIN_N];
+    if (n > DC_BLOCK_SKIP_FAST) cfg->block_skip_fast = buf[DC_BLOCK_SKIP_FAST] != 0.0f;
+    if (n > DC_BLOCK_MIN_SCORE) cfg->block_min_score = (int)buf[DC_BLOCK_MIN_SCORE];
+    if (n > DC_BLOCK_MAX_BP_ERRORS) cfg->block_max_bp_errors = (int)buf[DC_BLOCK_MAX_BP_ERRORS];
+    if (n > DC_MAX_BLOCK_CANDIDATES) cfg->max_block_candidates = (int)buf[DC_MAX_BLOCK_CANDIDATES];
 }
 
 static void read_encode_cfg(JNIEnv* env, jfloatArray arr, ft8_encode_config_t* cfg)
@@ -176,9 +188,9 @@ static jobjectArray make_result_array(JNIEnv* env, const ft8_message_result_t* r
     {
         const ft8_message_result_t* r = &results[i];
         char line[256];
-        snprintf(line, sizeof(line), "%s|%.1f|%.2f|%.1f|%d|%d|%d|%d|%u",
+        snprintf(line, sizeof(line), "%s|%.1f|%.2f|%.1f|%d|%d|%d|%d|%u|%d",
                  r->text, r->snr, r->dt, r->freq, r->score,
-                 r->ldpc_errors, r->pass, r->ap_type, (unsigned)r->crc);
+                 r->ldpc_errors, r->pass, r->ap_type, (unsigned)r->crc, r->block_n);
         jstring s = env->NewStringUTF(line);
         env->SetObjectArrayElement(arr, i, s);
         env->DeleteLocalRef(s);
@@ -238,6 +250,12 @@ Java_com_ft8_nativecore_Ft8Native_decodeConfigDefault(JNIEnv* env, jclass)
     buf[DC_ENABLE_LLR_REFINE] = cfg.enable_llr_refine ? 1.0f : 0.0f;
     buf[DC_NUM_BANDS] = (float)cfg.num_bands;
     buf[DC_GLOBAL_CANDIDATES] = cfg.global_candidates ? 1.0f : 0.0f;
+    buf[DC_BLOCK_MAX_N] = (float)cfg.block_max_n;
+    buf[DC_BLOCK_MIN_N] = (float)cfg.block_min_n;
+    buf[DC_BLOCK_SKIP_FAST] = cfg.block_skip_fast ? 1.0f : 0.0f;
+    buf[DC_BLOCK_MIN_SCORE] = (float)cfg.block_min_score;
+    buf[DC_BLOCK_MAX_BP_ERRORS] = (float)cfg.block_max_bp_errors;
+    buf[DC_MAX_BLOCK_CANDIDATES] = (float)cfg.max_block_candidates;
 
     jfloatArray arr = env->NewFloatArray(DC_COUNT);
     if (arr)

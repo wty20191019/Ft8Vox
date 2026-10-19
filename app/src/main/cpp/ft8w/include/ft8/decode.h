@@ -9,6 +9,8 @@
 
 /* 前置声明：分组检测的 DDC 上下文（定义见 api/ft8_block.h） */
 typedef struct ft8_ddc ft8_ddc_t;
+/* 前置声明：AP 提示（定义见 api/ft8_ap.h） */
+typedef struct ft8_ap_hints ft8_ap_hints_t;
 
 #ifdef __cplusplus
 extern "C"
@@ -69,6 +71,7 @@ typedef struct
     float time;
     int ldpc_errors;         ///< Number of LDPC errors during decoding
     int block_n;             ///< 成功的分组检测块长 N（1/2/3）；0 = 瀑布域 N=1 直接成功
+    int ap_type;             ///< 成功的 AP 类型（2/3/4/5/6）；0 = 未使用 AP
     uint16_t crc_extracted;  ///< CRC value recovered from the message
     uint16_t crc_calculated; ///< CRC value calculated over the payload
     // int unpack_status;       ///< Return value of the unpack routine
@@ -124,6 +127,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* power, const ftx_candidate_t
 bool ftx_decode_candidate_block(const ftx_waterfall_t* power, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
                                 float freq0, float dt, const ft8_ddc_t* ddc,
+                                const ft8_ap_hints_t* ap,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,

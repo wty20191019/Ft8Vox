@@ -16,6 +16,7 @@
 #include "ft8_subtract.h"
 #include "ft8_spectrum.h"
 #include "ft8_block.h"
+#include "ft8_ap.h"
 
 #include <ft8/constants.h>
 #include <ft8/crc.h>
@@ -309,6 +310,7 @@ typedef struct
     int enable_llr_refine; /**< P2.3：BP 失败候选用时域精化 LLR 重解 */
     const ft8_decode_config_t* cfg; /**< 分组检测参数（block_*） */
     const ft8_ddc_t* ddc;           /**< 本段/遍共享的 200 Hz DDC 上下文，可为 NULL */
+    const ft8_ap_hints_t* ap;       /**< 本段/遍共享的 AP 提示，可为 NULL */
     int* block_budget;              /**< 本遍剩余的分组检测次数，受 block_lock 保护 */
     ft8_mutex_t* block_lock;
     raw_decode_t* out;
@@ -503,7 +505,7 @@ static void decode_worker(void* arg)
                               (float)cand->time_sub / w->wf->time_osr) *
                              w->mon->symbol_period;
             ok = ftx_decode_candidate_block(w->wf, cand, w->samples, w->num_samples,
-                                            w->sample_rate, freq0, dt, w->ddc,
+                                            w->sample_rate, freq0, dt, w->ddc, w->ap,
                                             w->ldpc_iterations, w->osd_depth,
                                             w->cfg->block_max_n, w->cfg->block_min_n,
                                             w->cfg->block_min_score,
@@ -605,6 +607,14 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         }
     }
 
+    /* AP 提示只依赖呼号，整遍构建一次；没有本台呼号或 ap_mode=0 时关闭。 */
+    ft8_ap_hints_t ap_hints;
+    bool have_ap = false;
+    if (cfg->ap_mode > 0 && cfg->my_call && cfg->my_call[0] && cfg->block_max_n > 0)
+    {
+        have_ap = ft8_ap_build(&ap_hints, cfg->my_call, cfg->his_call, cfg->ap_mode) > 0;
+    }
+
     for (int t = 0; t < num_threads; ++t)
     {
         args[t].mon = mon;
@@ -620,6 +630,7 @@ static int decode_candidate_set(const monitor_t* mon, const float* samples, int 
         args[t].enable_llr_refine = cfg->enable_llr_refine;
         args[t].cfg = cfg;
         args[t].ddc = ddc;
+        args[t].ap = have_ap ? &ap_hints : NULL;
         args[t].block_budget = (block_lock && block_budget > 0) ? &block_budget : NULL;
         args[t].block_lock = block_lock;
         args[t].out = regions + (size_t)t * num_cand;
@@ -823,7 +834,7 @@ static void emit_hit(const pass_hit_t* h, int pass, ft8_message_result_t* res)
     res->score = h->score;
     res->ldpc_errors = h->status.ldpc_errors;
     res->pass = pass;
-    res->ap_type = 0;
+    res->ap_type = h->status.ap_type;
     res->block_n = h->status.block_n;
     res->crc = h->status.crc_calculated;
 }

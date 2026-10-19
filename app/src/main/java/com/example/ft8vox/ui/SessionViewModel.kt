@@ -421,6 +421,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             restartForProtocol(s.protocol)
         }
         qsoEngine.configure(s.myCall, s.myGrid, s.auto.noReplyLimit, s.auto)
+        AudioEngine.setDecodeContext(
+            s.myCall,
+            _status.value.qso.theirCall,
+            _status.value.qso.theirGrid,
+        )
         applyDecodeParams(s)
         applyAudio(s)
         applySlotOffset(s)
@@ -893,6 +898,11 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _status.update { it.copy(status = "初始化失败: ${e.message}") }
             return
         }
+        AudioEngine.setDecodeContext(
+            latestSettings.myCall,
+            _status.value.qso.theirCall,
+            _status.value.qso.theirGrid,
+        )
         engineGen++   // 新引擎：作废所有还在路上的发射协程（见 transmit 的 genAtPlan）
 
         wfInfo = AudioEngine.waterfallInfo()
@@ -1537,6 +1547,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         // 失败时只解除「目标时隙固定」（保留当前周期，避免下一段跳时隙）。
         if (p.state == QsoState.FAILED) pinnedTxParity = null
         _status.update { it.copy(qso = p, status = "QSO：${p.description}") }
+        // AP 解码上下文：目标 QSO 进行中时用双方呼号；结束后清掉对方呼号，
+        // 避免把上一段 QSO 的 AP 继续套到新解码上。
+        AudioEngine.setDecodeContext(
+            _status.value.myCall,
+            if (finished) null else p.theirCall,
+            p.theirGrid,
+        )
         qsoEngine.consumeCompleted()?.let { entry: QsoLogEntry ->
             // 会话内去重（取代旧的 90s 时间窗）：同一呼号一段会话只落一条。
             // 只影响**写日志**，不影响「有人呼叫我方一定应答」。

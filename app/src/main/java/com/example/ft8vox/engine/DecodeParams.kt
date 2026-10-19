@@ -43,6 +43,11 @@ data class DecodeParams(
      * 属策略开关（设置页「候选全局择优」），不是「快」预设的数值项。
      */
     val globalCandidates: Boolean = false,
+    /**
+     * 论文式 N=1/2/3 分组检测（WSJT-X ft8_downsample + ft8b）。
+     * 默认开启：主机语料 1298 条实测召回 81.5% → 85.0%，耗时约 +15%。
+     */
+    val blockDetection: Boolean = true,
 ) {
     /** 各字段的安全范围（与 native `sanitize_decode_params` 对应）。 */
     companion object {
@@ -61,6 +66,7 @@ data class DecodeParams(
             maxDecoded: Int,
             passes: Int = 2,
             globalCandidates: Boolean = false,
+            blockDetection: Boolean = true,
         ): DecodeParams = DecodeParams(
             minScore = minScore.coerceIn(MIN_SCORE_RANGE),
             maxCandidates = maxCandidates.coerceIn(MAX_CANDIDATES_RANGE),
@@ -68,12 +74,13 @@ data class DecodeParams(
             maxDecoded = maxDecoded.coerceIn(MAX_DECODED_RANGE),
             passes = passes.coerceIn(PASSES_RANGE),
             globalCandidates = globalCandidates,
+            blockDetection = blockDetection,
         )
     }
 
     /** 钳制到安全范围（布尔开关无需钳制，原样传递）。 */
     fun clamped(): DecodeParams =
-        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes, globalCandidates)
+        of(minScore, maxCandidates, ldpcIterations, maxDecoded, passes, globalCandidates, blockDetection)
 }
 
 /**

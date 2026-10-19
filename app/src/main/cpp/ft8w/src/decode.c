@@ -7,6 +7,7 @@
 #include "ft8_osd.h"
 #include "ft8_spectrum.h"
 #include "ft8_block.h"
+#include "ft8_ap.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -429,17 +430,18 @@ static bool osd_accept_cb(const uint8_t* plain174, void* vctx)
  *
  * 返回 true 表示 CRC 通过且载荷已写入 message。 */
 static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
+                           const uint8_t* apmask, const float* hard_ref,
                            int cand_score, int max_iterations, int osd_depth,
                            uint8_t* plain174, ftx_message_t* message,
                            ftx_decode_status_t* status)
 {
-    bp_decode((float*)logl, max_iterations, plain174, &status->ldpc_errors);
+    bp_decode_ap((float*)logl, max_iterations, plain174, &status->ldpc_errors, apmask);
 
     if (status->ldpc_errors == 0)
     {
         if (finish_candidate(wf, plain174, message, status))
         {
-            if (count_hard_errors(logl, plain174) <= FT8_MAX_HARD_ERRORS)
+            if (count_hard_errors(hard_ref ? hard_ref : logl, plain174) <= FT8_MAX_HARD_ERRORS)
                 return true;
             /* 硬判决错误过多：视为假解码，继续尝试 OSD */
         }
@@ -451,7 +453,7 @@ static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
     {
         osd_accept_ctx_t ctx;
         ctx.wf = wf;
-        ctx.logl = logl;
+        ctx.logl = hard_ref ? hard_ref : logl;
         ctx.message = message;
         ctx.status = status;
         if (ft8_osd_decode((float*)logl, osd_depth, FT8_OSD_MAX_HARD, osd_accept_cb, &ctx))
@@ -576,7 +578,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
     ftx_normalize_logl(log174);
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
-    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+    if (try_decode_llr(wf, log174, NULL, log174, cand->score, max_iterations, osd_depth,
                        plain174, message, status))
     {
         return true;
@@ -592,7 +594,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
         if (refine(refine_ctx, cand, refined) == 0)
         {
             ftx_normalize_logl(refined);
-            if (try_decode_llr(wf, refined, cand->score, max_iterations, osd_depth,
+            if (try_decode_llr(wf, refined, NULL, refined, cand->score, max_iterations, osd_depth,
                                plain174, message, status))
             {
                 return true;
@@ -606,6 +608,7 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
 bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
                                 const float* samples, int num_samples, int sample_rate,
                                 float freq0, float dt, const ft8_ddc_t* ddc,
+                                const ft8_ap_hints_t* ap,
                                 int max_iterations, int osd_depth,
                                 int block_max_n, int block_min_n,
                                 int block_min_score, int block_max_bp_errors,
@@ -636,7 +639,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
         }
         ftx_normalize_logl(log174);
 
-        if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+        if (try_decode_llr(wf, log174, NULL, log174, cand->score, max_iterations, osd_depth,
                            plain174, message, status))
         {
             return true;
@@ -665,12 +668,52 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                 {
                     ft8_block_llr(bctx, n_syms, log174);
                     ft8_block_normalize(log174);
-                    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                    if (try_decode_llr(wf, log174, NULL, log174, cand->score, max_iterations, osd_depth,
                                        plain174, message, status))
                     {
                         status->block_n = n_syms;
                         ft8_block_free(bctx);
                         return true;
+                    }
+                }
+
+                /* AP 先验：参考 ft8b.f90 的第 6 遍以后，放在常规 N=1/2/3 全部失败之后。
+                 * 用 N=1 的 LLR 作为信道基准；全 77bit 的 AP 由硬判决错误门限兜底。 */
+                if (ap && ap->count > 0 && cand->score >= block_min_score)
+                {
+                    float channel[FTX_LDPC_N];
+                    ft8_block_llr(bctx, 1, channel);
+                    ft8_block_normalize(channel);
+
+                    for (int hi = 0; hi < ap->count; ++hi)
+                    {
+                        for (int n_syms = 1; n_syms <= 2; ++n_syms)
+                        {
+                            float ap_llr[FTX_LDPC_N];
+                            if (n_syms == 1)
+                            {
+                                memcpy(ap_llr, channel, sizeof(ap_llr));
+                            }
+                            else
+                            {
+                                ft8_block_llr(bctx, n_syms, ap_llr);
+                                ft8_block_normalize(ap_llr);
+                            }
+
+                            uint8_t apmask[FTX_LDPC_N];
+                            ft8_ap_apply(&ap->hints[hi], ap_llr, apmask);
+                            /* 与 WSJT-X decode174_91 一致：AP 后的 nharderrors
+                             * 用 AP 修改后的 LLR 统计（已知位不再计为错误）。 */
+                            if (try_decode_llr(wf, ap_llr, apmask, ap_llr, cand->score,
+                                               max_iterations, osd_depth,
+                                               plain174, message, status))
+                            {
+                                status->ap_type = ap->hints[hi].type;
+                                status->block_n = n_syms;
+                                ft8_block_free(bctx);
+                                return true;
+                            }
+                        }
                     }
                 }
                 ft8_block_free(bctx);
@@ -687,7 +730,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                 {
                     ft8_block_likelihood(corr_re, corr_im, n_syms, log174);
                     ftx_normalize_logl(log174);
-                    if (try_decode_llr(wf, log174, cand->score, max_iterations, osd_depth,
+                    if (try_decode_llr(wf, log174, NULL, log174, cand->score, max_iterations, osd_depth,
                                        plain174, message, status))
                     {
                         status->block_n = n_syms;
@@ -709,7 +752,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
         if (refine(refine_ctx, cand, refined) == 0)
         {
             ftx_normalize_logl(refined);
-            if (try_decode_llr(wf, refined, cand->score, max_iterations, osd_depth,
+            if (try_decode_llr(wf, refined, NULL, refined, cand->score, max_iterations, osd_depth,
                                plain174, message, status))
             {
                 return true;
