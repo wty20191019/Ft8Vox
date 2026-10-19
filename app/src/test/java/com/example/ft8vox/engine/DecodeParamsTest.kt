@@ -33,6 +33,18 @@ class DecodeParamsTest {
     }
 
     @Test
+    fun blockDetectionDefaultsOnAndPassesThrough() {
+        // 论文式 N=1/2/3 分组检测默认开；显式关闭时原样透传（含 clamped()）
+        assertTrue(DecodeParams().blockDetection)
+        val off = DecodeParams.of(
+            minScore = 10, maxCandidates = 120, ldpcIterations = 20, maxDecoded = 100,
+            passes = 2, blockDetection = false,
+        )
+        assertFalse(off.blockDetection)
+        assertFalse(off.clamped().blockDetection)
+    }
+
+    @Test
     fun ofClampsEveryField() {
         val p = DecodeParams.of(
             minScore = -100,

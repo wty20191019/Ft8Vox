@@ -563,6 +563,7 @@ QSO 自动系统只有**一个**状态机（`qso/QsoEngine.kt`），会话此刻
 | 候选全局择优 | 关                       | —          | 关（默认）＝名额「按段均分」（总名额 ÷ 段数，4 段 → 每段 30），各段负载天然均衡、耗时更稳，也是加这个开关之前的行为；开＝名额全频谱全局择优（各段先取宽松池 → 跨段去重 → 按同步得分排序取前 N，每个减谱趟都重做），名额越紧收益越大（语料实测 20 名额 +2.1pp、默认 120 名额仅 +0.4pp）但耗时约 ×1.8。即时生效。 |
 | 单时隙上限   | 100                      | 5–100      | 单时隙最多输出报文条数（合并去重后的**全频谱总条数**）；即时生效。                                                                                                                                                                                                                                             |
 | 减谱重解趟数 | 2                        | 1–4        | 多趟减谱重解（SIC）趟数；1＝关，2＝默认；即时生效。                                                                                                                                                                                                                                                                  |
+| 分组检测     | 开                       | —          | 论文式 N=1/2/3 分组检测（WSJT-X `ft8_downsample + sync8d + ft8b`）：200 Hz 复基带、块内相干累加，常规 N=1 失败后依次尝试 N=2/3。默认开；AP 只在有目标 QSO 时自动启用。实测召回 81.5% → 85.0%，耗时约 +15%。 |
 | 频率下限     | 100 Hz                   | 100–2000   | 解码搜索与瀑布显示的下边界；需重开接收生效。                                                                                                                                                                                                                                                                         |
 | 频率上限     | 3000 Hz                  | 1000–5000  | 上边界；需重开接收生效。                                                                                                                                                                                                                                                                                             |
 | 同频发射     | 开                       | —          | 开＝红线跟到目标频率；关＝异频发射（split）。                                                                                                                                                                                                                                                                        |
@@ -694,6 +695,20 @@ Kotlin 与 native（`libft8.so`）之间的接口约定。
 | `maxDecoded`       | 100   | 5..100  | 仅本地限流（ft8_w 无对应字段）                                                   |
 | `passes`           | 2     | 1..4    | `decode_depth`；`>1` 时 `enable_subtract = true`                           |
 | `globalCandidates` | false | —      | `global_candidates`（候选名额分配口径：false＝按段均分，true＝全频谱全局择优） |
+| `blockDetection`   | true  | —      | `block_max_n`：true → 3（N=1/2/3），false → 0（关闭）；见下 |
+
+- **论文式分组检测（默认开）**：常规瀑布 N=1 失败后，用 200 Hz 复基带
+  （WSJT-X `ft8_downsample` 结构，192000 点长 FFT 每段/遍只算一次）重新对齐，
+  依次尝试 N=1/2/3。58 个数据符号按中间 Costas 分成两段各 29 符号，块内复数
+  相加后取模。LLR 按 WSJT-X `normalizebmet` 归一化（除以标准差再乘 2.83），
+  再走同一套 BP + OSD。`block_min_score=10`、`block_max_bp_errors=48`、
+  每遍最多 40 个候选。
+- **AP 先验解码**：有本台呼号时自动构建 AP 提示；有目标 QSO 时同时使用双方
+  呼号（iaptype 3，61 bit），否则只固定本台呼号（iaptype 2，32 bit）。
+  AP 只作用于 77 bit 载荷，CRC/校验位仍来自接收信号；另用 WSJT-X 的
+  `nharderrors ≤ 36` 门限抑制假解码。合成信号实测：常规门限约 −20 dB，
+  AP（全 77 bit，iaptype 4）约 −22 dB。AP 目前只覆盖标准呼号类型 1/2；
+  非标准呼号（`PJ4/K1ABC` 等）暂不启用 AP。
 
 - 这些参数只影响搜索与 LDPC 迭代、不改变 STFT 结构，故可在接收过程中热更新。
 - `fMin`/`fMax`/`timeOsr`/`freqOsr` 不同：改动需重建引擎（重启接收）。
@@ -934,6 +949,29 @@ ft8_cli bench D:\Desktop\ft8_w\test --bands 4 --threads 4 --candidates 120 --ite
 ```
 
 > ⚠️ 三个 CLI 默认值与 App **不同**，对比时务必显式给：`--subtract`（CLI 默认关，App 在 `passes > 1` 时开）、`--depth`（CLI 默认 0 → native 按 **3** 遍 SIC，App 默认 2 遍）、`--iters`（CLI 默认 25，App 默认 20）。漏给 `--subtract` 会把召回率从约 82% 掉到约 74%，足以掩盖任何开关差异。`--global-candidates` 反过来与 App 一致（两边都默认关），要测开着的行为必须显式给 `1`。
+
+**论文式分组检测 + AP（2026-10，同一语料）**：
+
+```powershell
+# 瀑布 N=1 + 200 Hz 复基带 N=1/2/3（App 默认口径）
+ft8_cli bench D:\Desktop\ft8_w\test --bands 4 --threads 4 --candidates 120 --iters 20 --depth 2 --subtract `
+  --block 3 --block-min-n 1 --block-candidates 40 --block-max-errors 48 --block-min-score 10
+
+# 再加 AP（合成信号 A/B 测：常规约 -20 dB，AP 全 77bit 约 -22 dB）
+ft8_cli bench D:\Desktop\ft8_w\test --bands 4 --threads 4 --candidates 120 --iters 20 --depth 2 --subtract `
+  --block 3 --block-min-n 1 --block-candidates 40 --block-max-errors 48 --block-min-score 10 `
+  --ap-mode 3 --my-call K1ABC --his-call K9AN
+```
+
+| 配置 | 召回 | 多余 | 耗时 |
+| --- | --- | --- | --- |
+| 原实现（瀑布 N=1） | 81.5%（1058） | 40 | 145 ms |
+| + N=1/2/3 分组检测 | **85.0%（1103）** | 44 | 166 ms |
+| + AP（错误呼号压力测试） | 85.0%（1103） | 44 | 179 ms |
+
+- 分组检测的增益主要来自 **N=2/3 把 N=1 解不出的弱信号救回来**；N=1 单独走时域路径为 78.4%，N=2/3 单独为 74.3% / 71.5%，三者是互补关系。
+- AP 在真实语料里只对「当前目标 QSO」有意义；用每文件第一条定向报文做 A/B，正常命中 57/60，AP 命中 59/60（+2 条），且错误呼号下没有新增假解码。
+- 耗时增加约 15%（主机）；200 Hz DDC 的 192000 点长 FFT 每个段/遍只算一次，每候选只做 3200 点 IFFT。
 
 **基线（2026-10，主机 24 核，4 段 × 4 线程，2 遍 SIC，LDPC 20）**：
 

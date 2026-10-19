@@ -1035,6 +1035,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
         }
+        AudioEngine.setDecodeContext(_status.value.myCall, p.theirCall, p.theirGrid)
         tryRetargetNow(p.txText, manual = false)
     }
 
@@ -1092,6 +1093,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _status.update {
             it.copy(qso = p, txArmed = true, manualTxText = null, status = "QSO：${p.description}")
         }
+        AudioEngine.setDecodeContext(_status.value.myCall, p.theirCall, p.theirGrid)
         tryRetargetNow(p.txText, manual = false)
     }
 
@@ -1272,6 +1274,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
+        AudioEngine.setDecodeContext(_status.value.myCall, null, null)
     }
 
     /**

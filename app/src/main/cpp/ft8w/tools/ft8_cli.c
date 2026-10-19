@@ -21,6 +21,13 @@
  *                   候选上限的分配口径（仅 --bands>1 时有效）：
  *                   1=全局择优（默认），0=按段均分
  *   --repeat N      基准重复次数（默认 1）
+ *   --block N       论文式分组检测最大 N（0=关，1..3；默认 0）
+ *   --block-min-n N 分组检测起始 N（默认 1；诊断可设 2/3）
+ *   --block-skip-fast 跳过瀑布域 N=1，直接走 200 Hz 分组检测
+ *   --block-min-score N / --block-max-errors N / --block-candidates N
+ *                   分组检测的同步分下限 / BP 残错上限 / 每遍候选预算
+ *   --ap-mode N     AP 位掩码（1=MyCall，2=MyCall+DxCall，4=+RRR/73/RR73）
+ *   --my-call CALL / --his-call CALL  AP 上下文
  */
 #include "ft8api.h"
 #include "common/wave.h"
