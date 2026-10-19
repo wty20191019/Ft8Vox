@@ -505,6 +505,60 @@ int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, int power_metric, floa
     return 0;
 }
 
+/* WSJT-X pass 4：N=1 逐比特归一化。 */
+static void block_norm1_half(const ft8_block_ctx_t* ctx, int half, int power_metric,
+                             float* norm174)
+{
+    const int base = (half == 0) ? 7 : 43;
+    const int bit_base = half * 87;
+
+    for (int k = 0; k < 29; ++k)
+    {
+        const int sym = base + k;
+        float s2[FT8_BLOCK_NTONE];
+        for (int j = 0; j < FT8_BLOCK_NTONE; ++j)
+        {
+            const int tone = kFT8_Gray_map[j];
+            const int idx = sym * FT8_BLOCK_NTONE + tone;
+            const float p = block_abs2(ctx->cs_re[idx], ctx->cs_im[idx]);
+            s2[j] = power_metric ? p : sqrtf(p);
+        }
+
+        float* out = norm174 + bit_base + 3 * k;
+        for (int bit = 0; bit < 3; ++bit)
+        {
+            float one, zero;
+            if (bit == 0)
+            {
+                one = fmaxf(fmaxf(s2[4], s2[5]), fmaxf(s2[6], s2[7]));
+                zero = fmaxf(fmaxf(s2[0], s2[1]), fmaxf(s2[2], s2[3]));
+            }
+            else if (bit == 1)
+            {
+                one = fmaxf(fmaxf(s2[2], s2[3]), fmaxf(s2[6], s2[7]));
+                zero = fmaxf(fmaxf(s2[0], s2[1]), fmaxf(s2[4], s2[5]));
+            }
+            else
+            {
+                one = fmaxf(fmaxf(s2[1], s2[3]), fmaxf(s2[5], s2[7]));
+                zero = fmaxf(fmaxf(s2[0], s2[2]), fmaxf(s2[4], s2[6]));
+            }
+            const float den = fmaxf(one, zero);
+            out[bit] = (den > 1e-12f) ? ((one - zero) / den) : 0.0f;
+        }
+    }
+}
+
+int ft8_block_norm1(const ft8_block_ctx_t* ctx, int power_metric, float* norm174)
+{
+    if (!ctx || !norm174)
+        return -1;
+    memset(norm174, 0, FTX_LDPC_N * sizeof(float));
+    block_norm1_half(ctx, 0, power_metric, norm174);
+    block_norm1_half(ctx, 1, power_metric, norm174);
+    return 0;
+}
+
 void ft8_block_normalize(float* log174)
 {
     if (!log174)

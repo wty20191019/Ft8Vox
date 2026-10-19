@@ -75,6 +75,12 @@ void ft8_block_free(ft8_block_ctx_t* ctx);
 int ft8_block_llr(const ft8_block_ctx_t* ctx, int n_syms, int power_metric, float* log174);
 
 /**
+ * WSJT-X pass 4：N=1 的“逐比特归一化” LLR。
+ * 每比特用 bm / max(max_one, max_zero) 代替 bm，再做标准差归一化。
+ */
+int ft8_block_norm1(const ft8_block_ctx_t* ctx, int power_metric, float* norm174);
+
+/**
  * 按 WSJT-X `normalizebmet()` 的口径归一化：除以标准差，再乘 2.83。
  * 目标 LLR 标准差约 2.83（方差约 8），与参考解码器一致。
  */
