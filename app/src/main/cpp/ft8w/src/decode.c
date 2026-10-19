@@ -332,24 +332,24 @@ static void ftx_normalize_logl(float* log174)
     }
 }
 
-// ---- OSD 兜底译码门限（已�?test/ 全量 1298 条扫参调定，固化于此�?----
-// 仅当 BP 残余校验错误数不超过此值时才尝�?OSD。噪声候选的残余错误通常
-// 远高于此；取 12 可在保持全部 OSD 召回增益的同时最小化 extra�?
+// ---- OSD 兜底译码门限（已用 test/ 全量 1298 条扫参调定，固化于此） ----
+// 仅当 BP 残余校验错误数不超过此值时才尝试 OSD。噪声候选的残余错误通常
+// 远高于此；取 12 可在保持全部 OSD 召回增益的同时最小化 extra。
 #define FT8_OSD_MAX_BP_ERRORS 12
-// OSD 码字与硬判决的汉明距离门限（�? 表示不限制）。用于抑�?CRC-14 虚假通过�?
-// 40 兼顾召回�?extra；放宽到不限制只增加虚假解码，不放宽召回�?
+// OSD 码字与硬判决的汉明距离门限（≤0 表示不限制）。用于抑制 CRC-14 虚假通过。
+// 40 兼顾召回与 extra；放宽到不限制只增加虚假解码，不放宽召回。
 #define FT8_OSD_MAX_HARD 40
-// 候�?Costas 同步分下限（低于此值不触发 OSD）。用于过滤噪声候选�?
+// 候选 Costas 同步分下限（低于此值不触发 OSD）。用于过滤噪声候选。
 #define FT8_OSD_MIN_SCORE 12
-// 码字�?*输入 LLR** 的硬判决错误上限（WSJT-X ft8b.f90: nharderrors > 36 丢弃）�?
-// 这是 CRC-14 之外的第二道假解码抑制，尤其�?OSD/AP/分组检测的多候选有效�?
+// 码字与**输入 LLR** 的硬判决错误上限（WSJT-X ft8b.f90: nharderrors > 36 丢弃）。
+// 这是 CRC-14 之外的第二道假解码抑制，尤其对 OSD/AP/分组检测的多候选有效。
 #define FT8_MAX_HARD_ERRORS 36
-// 诊断用：status->block_n = 9 表示命中“逐比特取 N=1/2/3 最�?|metric|”的混合 LLR�?
+// 诊断用：status->block_n = 9 表示命中“逐比特取 N=1/2/3 最大 |metric|”的混合 LLR。
 #define FT8_BLOCK_MIXED 9
-// 诊断用：status->block_n = 8 表示命中 WSJT-X pass 4（N=1 逐比特归一化）�?
+// 诊断用：status->block_n = 8 表示命中 WSJT-X pass 4（N=1 逐比特归一化）。
 #define FT8_BLOCK_NORM1 8
 
-/* 码字与输�?LLR 符号不一致的比特数�?*/
+/* 码字与输入 LLR 符号不一致的比特数。 */
 static int count_hard_errors(const float* logl, const uint8_t* plain174)
 {
     int n = 0;
@@ -362,7 +362,7 @@ static int count_hard_errors(const float* logl, const uint8_t* plain174)
     return n;
 }
 
-// �?174 比特码字完成 CRC 校验与载荷提取。成功返�?true 并填�?message�?
+// 由 174 比特码字完成 CRC 校验与载荷提取。成功返回 true 并填好 message。
 static bool finish_candidate(const ftx_waterfall_t* wf, const uint8_t* plain174,
                              ftx_message_t* message, ftx_decode_status_t* status)
 {
@@ -405,7 +405,7 @@ static bool finish_candidate(const ftx_waterfall_t* wf, const uint8_t* plain174,
     return true;
 }
 
-// OSD 接受回调上下�?
+// OSD 接受回调上下文
 typedef struct
 {
     const ftx_waterfall_t* wf;
@@ -419,20 +419,20 @@ static bool osd_accept_cb(const uint8_t* plain174, void* vctx)
     osd_accept_ctx_t* c = (osd_accept_ctx_t*)vctx;
     if (!finish_candidate(c->wf, plain174, c->message, c->status))
         return false;
-    /* WSJT-X ft8b.f90：码字与输入 LLR 的硬判决错误 > 36 视为假解�?*/
+    /* WSJT-X ft8b.f90：码字与输入 LLR 的硬判决错误 > 36 视为假解码 */
     if (count_hard_errors(c->logl, plain174) > FT8_MAX_HARD_ERRORS)
         return false;
-    c->status->ldpc_errors = 0; // OSD 生成的码字按构造满足校�?
+    c->status->ldpc_errors = 0; // OSD 生成的码字按构造满足校验
     return true;
 }
 
-/* 对一�?174 �?LLR 跑「BP �?CRC →（必要时）OSD」的译码级联�?
+/* 对一份 174 位 LLR 跑「BP → CRC →（必要时）OSD」的译码级联。
  *
- * 论文把这一步视为与调制/检测无关的统一译码器：N=1、N=2、N=3 的分组检�?
- * 只负责产生不同的 LLR，后面都调用同一个入口。抽出来后，AP 先验、时域精化�?
- * 后续分组检测都可以复用，且不改变原�?N=1 瀑布路径的结果�?
+ * 论文把这一步视为与调制/检测无关的统一译码器：N=1、N=2、N=3 的分组检测
+ * 只负责产生不同的 LLR，后面都调用同一个入口。抽出来后，AP 先验、时域精化、
+ * 后续分组检测都可以复用，且不改变原有 N=1 瀑布路径的结果。
  *
- * 返回 true 表示 CRC 通过且载荷已写入 message�?*/
+ * 返回 true 表示 CRC 通过且载荷已写入 message。 */
 static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
                            const uint8_t* apmask, const float* hard_ref,
                            int cand_score, int max_iterations, int osd_depth,
@@ -469,16 +469,16 @@ static bool try_decode_llr(const ftx_waterfall_t* wf, const float* logl,
     return false;
 }
 
-/* �?58 个数据符号的 8 音调复数相关，按论文�?N 符号块生�?174 �?LLR�?
+/* 由 58 个数据符号的 8 音调复数相关，按论文的 N 符号块生成 174 个 LLR。
  *
- * �?WSJT-X `ft8b.f90` 一致：58 个数据符号被中间�?7 符号 Costas 分成
- * **两段�?29 符号**（符�?0..28 �?29..57），N=2/3 的块不能跨段�?
- * 否则会把同步间隙两侧的符号强行相干累加。每段内�?N 分块，尾部不�?
- * N 个符号时�?N=1 处理�?
+ * 与 WSJT-X `ft8b.f90` 一致：58 个数据符号被中间的 7 符号 Costas 分成
+ * **两段各 29 符号**（符号 0..28 与 29..57），N=2/3 的块不能跨段，
+ * 否则会把同步间隙两侧的符号强行相干累加。每段内按 N 分块，尾部不足
+ * N 个符号时按 N=1 处理。
  *
  * 序列按「比特三元组」枚举，再经 Gray 映射到实际音调；块内先把 N 个复相关
- * 相加再取模，因此�?*块内相干、块间非相干**检测。最后每比特�?
- * max(相关|bit=1) - max(相关|bit=0)，与单符�?max4 是同一�?max-log 软判决�?*/
+ * 相加再取模，因此是**块内相干、块间非相干**检测。最后每比特取
+ * max(相关|bit=1) - max(相关|bit=0)，与单符号 max4 是同一套 max-log 软判决。 */
 static void ft8_block_likelihood_half(const float* corr_re, const float* corr_im,
                                       int k_start, int count, int n_syms,
                                       float* log174, int bit_base)
@@ -537,7 +537,7 @@ static void ft8_block_likelihood_half(const float* corr_re, const float* corr_im
         k += n_syms;
     }
 
-    /* 段内尾部不足 N 个符号：�?N=1 处理 */
+    /* 段内尾部不足 N 个符号：按 N=1 处理 */
     while (k < count)
     {
         float s2[FT8_SP_NTONE];
@@ -558,7 +558,7 @@ static void ft8_block_likelihood_half(const float* corr_re, const float* corr_im
 static void ft8_block_likelihood(const float* corr_re, const float* corr_im,
                                  int n_syms, float* log174)
 {
-    /* 两段�?29 符号：第一�?87 bit，第二段 87 bit */
+    /* 两段各 29 符号：第一段 87 bit，第二段 87 bit */
     ft8_block_likelihood_half(corr_re, corr_im, 0, 29, n_syms, log174, 0);
     ft8_block_likelihood_half(corr_re, corr_im, 29, 29, n_syms, log174, 87);
 }
@@ -588,8 +588,8 @@ bool ftx_decode_candidate_ex(const ftx_waterfall_t* wf, const ftx_candidate_t* c
         return true;
     }
 
-    // P2.3（加性）：BP/OSD 均未成功时，用时域精�?LLR 再试 BP + OSD�?
-    // 放在最后，不影响上面瀑布域路径的任何既有结果，故召回只增不减�?
+    // P2.3（加性）：BP/OSD 均未成功时，用时域精化 LLR 再试 BP + OSD。
+    // 放在最后，不影响上面瀑布域路径的任何既有结果，故召回只增不减。
     if (refine && wf->protocol == FTX_PROTOCOL_FT8 &&
         status->ldpc_errors <= refine_min_errors &&
         cand->score >= FT8_OSD_MIN_SCORE)
@@ -626,8 +626,8 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
 
     status->block_n = 0;
 
-    /* 第一级：沿用现有瀑布�?N=1（快、结果稳定），先不带 refine�?
-     * skip_fast 仅供调参/诊断：直接以时域分组检测的 N=1 作为第一级�?*/
+    /* 第一级：沿用现有瀑布域 N=1（快、结果稳定），先不带 refine。
+     * skip_fast 仅供调参/诊断：直接以时域分组检测的 N=1 作为第一级。 */
     float log174[FTX_LDPC_N];
     uint8_t plain174[FTX_LDPC_N];
     int fast_errors = 0;
@@ -651,9 +651,9 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
         fast_errors = status->ldpc_errors;
     }
 
-    /* 第二级：论文�?N=1/2/3 分组检测�?
-     * 优先�?200 Hz 复基带（WSJT-X ft8_downsample + sync8d + ft8b 结构）；
-     * 没有 DDC 上下文时退回旧�?12 kHz 逐符�?Goertzel 路径（测�?兼容用）�?*/
+    /* 第二级：论文式 N=1/2/3 分组检测。
+     * 优先走 200 Hz 复基带（WSJT-X ft8_downsample + sync8d + ft8b 结构）；
+     * 没有 DDC 上下文时退回旧的 12 kHz 逐符号 Goertzel 路径（测试/兼容用）。 */
     if (wf->protocol == FTX_PROTOCOL_FT8 && samples && num_samples > 0 && sample_rate > 0 &&
         block_max_n >= 1 && cand->score >= block_min_score &&
         fast_errors <= block_max_bp_errors)
@@ -686,7 +686,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                     }
                 }
 
-                /* WSJT-X ft8b.f90 �?pass 4：N=1 逐比特归一化（bm / max(one, zero)）�?*/
+                /* WSJT-X ft8b.f90 的 pass 4：N=1 逐比特归一化（bm / max(one, zero)）。 */
                 {
                     float norm1[FTX_LDPC_N];
                     if (ft8_block_norm1(bctx, power_metric, norm1) == 0)
@@ -703,8 +703,8 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                     }
                 }
 
-                /* WSJT-X ft8b.f90 �?pass 5：逐比特取 N=1/2/3 �?|metric| 最大的那个�?
-                 * 三种块长的“最可靠”比特可能不同，混合后常能补回单一块长漏掉的码字�?*/
+                /* WSJT-X ft8b.f90 的 pass 5：逐比特取 N=1/2/3 中 |metric| 最大的那个。
+                 * 三种块长的“最可靠”比特可能不同，混合后常能补回单一块长漏掉的码字。 */
                 if (nmax >= 2)
                 {
                     float mixed[FTX_LDPC_N];
@@ -738,8 +738,8 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
                     }
                 }
 
-                /* AP 先验：参�?ft8b.f90 的第 6 遍以后，放在常规 N=1/2/3 全部失败之后�?
-                 * �?N=1 �?LLR 作为信道基准；全 77bit �?AP 由硬判决错误门限兜底�?*/
+                /* AP 先验：参考 ft8b.f90 的第 6 遍以后，放在常规 N=1/2/3 全部失败之后。
+                 * 用 N=1 的 LLR 作为信道基准；全 77bit 的 AP 由硬判决错误门限兜底。 */
                 if (ap && ap->count > 0 && cand->score >= block_min_score)
                 {
                     float channel[FTX_LDPC_N];
@@ -748,9 +748,9 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
 
                     for (int hi = 0; hi < ap->count; ++hi)
                     {
-                        /* iaptype 4/5/6 固定全部 77 bit，假解码风险高于 2/3�?
-                         * 保护主要来自上层“只�?QSO 收尾阶段启用”的状态门控；
-                         * 这里不再额外抬高同步分，否则弱信号收尾会被漏掉�?*/
+                        /* iaptype 4/5/6 固定全部 77 bit，假解码风险高于 2/3。
+                         * 保护主要来自上层“只在 QSO 收尾阶段启用”的状态门控；
+                         * 这里不再额外抬高同步分，否则弱信号收尾会被漏掉。 */
                         if (cand->score < block_min_score)
                             continue;
 
@@ -769,8 +769,8 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
 
                             uint8_t apmask[FTX_LDPC_N];
                             ft8_ap_apply(&ap->hints[hi], ap_llr, apmask);
-                            /* �?WSJT-X decode174_91 一致：AP 后的 nharderrors
-                             * �?AP 修改后的 LLR 统计（已知位不再计为错误）�?*/
+                            /* 与 WSJT-X decode174_91 一致：AP 后的 nharderrors
+                             * 用 AP 修改后的 LLR 统计（已知位不再计为错误）。 */
                             if (try_decode_llr(wf, ap_llr, apmask, ap_llr, cand->score,
                                                max_iterations, osd_depth,
                                                plain174, message, status))
@@ -810,7 +810,7 @@ bool ftx_decode_candidate_block(const ftx_waterfall_t* wf, const ftx_candidate_t
 
     status->ldpc_errors = fast_errors;
 
-    // P2.3（加性）：分组检测也失败后，用时域精�?LLR 再试 BP + OSD�?
+    // P2.3（加性）：分组检测也失败后，用时域精化 LLR 再试 BP + OSD。
     if (refine && wf->protocol == FTX_PROTOCOL_FT8 &&
         status->ldpc_errors <= refine_min_errors &&
         cand->score >= FT8_OSD_MIN_SCORE)
@@ -843,8 +843,8 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     return ftx_decode_candidate_osd(wf, cand, max_iterations, 0, message, status);
 }
 
-// 将瀑布中量化存储的值还原为线性功率�?
-// 存储约定�?monitor.c: value = 2*db + 240，即 db = value*0.5 - 120（功�?dB）�?
+// 将瀑布中量化存储的值还原为线性功率。
+// 存储约定见 monitor.c: value = 2*db + 240，即 db = value*0.5 - 120（功率 dB）。
 static float wf_elem_power(WF_ELEM_T v)
 {
     return powf(10.0f, ((float)v * 0.5f - 120.0f) * 0.1f);
@@ -855,7 +855,7 @@ float ftx_compute_snr(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, co
     if (!wf || !cand || !payload)
         return 0.0f;
 
-    // �?77bit 载荷重建 79 个发端音调（同步段为 Costas，数据段�?Gray 映射�?
+    // 由 77bit 载荷重建 79 个发端音调（同步段为 Costas，数据段经 Gray 映射）
     uint8_t tones[FT8_NN];
     ft8_encode(payload, tones);
 
